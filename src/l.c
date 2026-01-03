@@ -54,7 +54,7 @@ static void print_usage(void) {
     printf("  --list          Flat list output (no tree structure)\n");
     printf("  --no-icons      Hide file/folder/git icons\n");
     printf("  -g              Show only git-modified/untracked files (implies -at)\n");
-    printf("  --filter PATTERN  Show only files/folders matching pattern\n");
+    printf("  -f, --filter PATTERN  Show only files/folders matching pattern\n");
     printf("\n");
     printf("Sorting:\n");
     printf("  -S              Sort by size (largest first)\n");
@@ -120,11 +120,13 @@ static void parse_args(int argc, char **argv, Config *cfg,
                 cfg->list_mode = 1;
             } else if (strcmp(arg, "--no-icons") == 0) {
                 cfg->no_icons = 1;
-            } else if (strcmp(arg, "--filter") == 0) {
-                if (i + 1 >= argc) die("--filter requires an argument");
+            } else if (strcmp(arg, "--filter") == 0 || strcmp(arg, "-f") == 0) {
+                if (i + 1 >= argc) die("-f/--filter requires an argument");
                 cfg->grep_pattern = argv[++i];
             } else if (strncmp(arg, "--filter=", 9) == 0) {
                 cfg->grep_pattern = arg + 9;
+            } else if (strncmp(arg, "-f", 2) == 0 && arg[2] != '\0') {
+                cfg->grep_pattern = arg + 2;
             } else if (arg[1] != '-') {
                 for (int j = 1; arg[j]; j++) {
                     if (!apply_short_flag(arg[j], cfg)) {

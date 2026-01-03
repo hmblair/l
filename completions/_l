@@ -21,6 +21,7 @@ _l() {
         '--list[Flat list output (no tree structure)]' \
         '--no-icons[Hide file/folder/git icons]' \
         '-g[Show only git-modified/untracked files (implies -at)]' \
+        '(-f --filter)'{-f,--filter}'[Show only files/folders matching pattern]:pattern:' \
         '-S[Sort by size (largest first)]' \
         '-T[Sort by modification time (newest first)]' \
         '-N[Sort by name (alphabetical)]' \
