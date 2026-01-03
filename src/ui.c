@@ -1244,7 +1244,10 @@ static void print_entry(const FileEntry *fe, int depth, int has_visible_children
     if (fe->symlink_target) {
         char abbrev[PATH_MAX];
         abbreviate_home(fe->symlink_target, abbrev, sizeof(abbrev), ctx->cfg);
-        printf(" %s %s%s%s", ctx->icons->symlink, color, abbrev, RST(ctx->cfg));
+        const char *target_base = strrchr(fe->symlink_target, '/');
+        target_base = target_base ? target_base + 1 : fe->symlink_target;
+        const char *target_style = (target_base[0] == '.') ? CLR(ctx->cfg, STYLE_ITALIC) : "";
+        printf(" %s %s%s%s%s", ctx->icons->symlink, color, target_style, abbrev, RST(ctx->cfg));
     }
 
     printf("\n");
