@@ -1,0 +1,33 @@
+#compdef l
+
+_l_files() {
+    # If -a is on the command line, complete hidden files too
+    # Match -a alone or combined flags like -at, -asl, etc.
+    if [[ ${words[(I)-*a*]} -gt 0 ]]; then
+        setopt localoptions GLOB_DOTS
+    fi
+    _files
+}
+
+_l() {
+    _arguments -s \
+        '-a[Show hidden files]' \
+        '(-l --long)'{-l,--long}'[Long format (size, lines, time)]' \
+        '(-s --short)'{-s,--short}'[Short format (no size, lines, time)]' \
+        '(-t --tree)'{-t,--tree}'[Show full tree]' \
+        '(-d --depth)'{-d,--depth}'[Limit tree depth]:depth:' \
+        '(-p --path)'{-p,--path}'[Show ancestry from ~ (or /) to target]' \
+        '--expand-all[Expand all directories (ignore NO_EXPAND list)]' \
+        '--list[Flat list output (no tree structure)]' \
+        '--no-icons[Hide file/folder/git icons]' \
+        '-g[Show only git-modified/untracked files (implies -at)]' \
+        '-S[Sort by size (largest first)]' \
+        '-T[Sort by modification time (newest first)]' \
+        '-N[Sort by name (alphabetical)]' \
+        '-r[Reverse sort order]' \
+        '(-h --help)'{-h,--help}'[Show help message]' \
+        '--daemon[Manage the size caching daemon]' \
+        '*:file or directory:_l_files'
+}
+
+_l "$@"
