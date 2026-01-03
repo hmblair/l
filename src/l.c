@@ -83,9 +83,51 @@ static int apply_short_flag(char flag, Config *cfg) {
     }
 }
 
+/*
+ * Match an option that takes a required argument.
+ * Handles: -x VAL, -xVAL, --xxx VAL, --xxx=VAL
+ * Returns the argument value, or NULL if no match.
+ * Updates *i if a separate argument was consumed.
+ */
+static const char *match_opt_with_arg(const char *arg, int *i, int argc, char **argv,
+                                      char short_opt, const char *long_opt) {
+    size_t long_len = long_opt ? strlen(long_opt) : 0;
+
+    /* -x VAL */
+    if (short_opt && arg[0] == '-' && arg[1] == short_opt && arg[2] == '\0') {
+        if (*i + 1 >= argc) {
+            char msg[64];
+            snprintf(msg, sizeof(msg), "-%c/--%s requires an argument", short_opt, long_opt);
+            die(msg);
+        }
+        return argv[++(*i)];
+    }
+    /* -xVAL */
+    if (short_opt && arg[0] == '-' && arg[1] == short_opt && arg[2] != '\0') {
+        return arg + 2;
+    }
+    /* --xxx VAL */
+    if (long_opt && strcmp(arg + 2, long_opt) == 0) {
+        if (*i + 1 >= argc) {
+            char msg[64];
+            snprintf(msg, sizeof(msg), "--%s requires an argument", long_opt);
+            die(msg);
+        }
+        return argv[++(*i)];
+    }
+    /* --xxx=VAL */
+    if (long_opt && strncmp(arg + 2, long_opt, long_len) == 0 && arg[2 + long_len] == '=') {
+        return arg + 2 + long_len + 1;
+    }
+    return NULL;
+}
+
+#define MATCH_LONG(opt) (strcmp(arg, "--" opt) == 0)
+
 static void parse_args(int argc, char **argv, Config *cfg,
                        char ***dirs, int *dir_count) {
     static char *default_dirs[] = {"."};
+    const char *val;
 
     *dirs = NULL;
     *dir_count = 0;
@@ -93,57 +135,53 @@ static void parse_args(int argc, char **argv, Config *cfg,
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
 
-        if (arg[0] == '-' && arg[1] != '\0') {
-            if (strcmp(arg, "--help") == 0) {
-                print_usage();
-                exit(0);
-            } else if (strcmp(arg, "--short") == 0) {
-                cfg->long_format = 0;
-                cfg->long_format_explicit = 1;
-            } else if (strcmp(arg, "--long") == 0) {
-                cfg->long_format = 1;
-                cfg->long_format_explicit = 1;
-            } else if (strcmp(arg, "--tree") == 0) {
-                cfg->max_depth = L_MAX_DEPTH;
-            } else if (strcmp(arg, "--path") == 0) {
-                cfg->show_ancestry = 1;
-            } else if (strcmp(arg, "-d") == 0 || strcmp(arg, "--depth") == 0) {
-                if (i + 1 >= argc) die("-d/--depth requires an argument");
-                cfg->max_depth = parse_depth(argv[++i], "-d/--depth");
-            } else if (strncmp(arg, "-d", 2) == 0 && arg[2] != '\0') {
-                cfg->max_depth = parse_depth(arg + 2, "-d");
-            } else if (strncmp(arg, "--depth=", 8) == 0) {
-                cfg->max_depth = parse_depth(arg + 8, "--depth");
-            } else if (strcmp(arg, "--expand-all") == 0) {
-                cfg->expand_all = 1;
-            } else if (strcmp(arg, "--list") == 0) {
-                cfg->list_mode = 1;
-            } else if (strcmp(arg, "--no-icons") == 0) {
-                cfg->no_icons = 1;
-            } else if (strcmp(arg, "--filter") == 0 || strcmp(arg, "-f") == 0) {
-                if (i + 1 >= argc) die("-f/--filter requires an argument");
-                cfg->grep_pattern = argv[++i];
-            } else if (strncmp(arg, "--filter=", 9) == 0) {
-                cfg->grep_pattern = arg + 9;
-            } else if (strncmp(arg, "-f", 2) == 0 && arg[2] != '\0') {
-                cfg->grep_pattern = arg + 2;
-            } else if (arg[1] != '-') {
-                for (int j = 1; arg[j]; j++) {
-                    if (!apply_short_flag(arg[j], cfg)) {
-                        fprintf(stderr, "%sError:%s Unknown option: -%c\n",
-                                CLR(cfg, COLOR_RED), RST(cfg), arg[j]);
-                        exit(1);
-                    }
-                }
-            } else {
+        if (arg[0] != '-' || arg[1] == '\0') {
+            /* Positional argument */
+            (*dir_count)++;
+            *dirs = xrealloc(*dirs, *dir_count * sizeof(char *));
+            (*dirs)[*dir_count - 1] = (char *)arg;
+            continue;
+        }
+
+        /* Long options */
+        if (arg[1] == '-') {
+            if (MATCH_LONG("help"))            { print_usage(); exit(0); }
+            else if (MATCH_LONG("short"))      { cfg->long_format = 0; cfg->long_format_explicit = 1; }
+            else if (MATCH_LONG("long"))       { cfg->long_format = 1; cfg->long_format_explicit = 1; }
+            else if (MATCH_LONG("tree"))       { cfg->max_depth = L_MAX_DEPTH; }
+            else if (MATCH_LONG("path"))       { cfg->show_ancestry = 1; }
+            else if (MATCH_LONG("expand-all")) { cfg->expand_all = 1; }
+            else if (MATCH_LONG("list"))       { cfg->list_mode = 1; }
+            else if (MATCH_LONG("no-icons"))   { cfg->no_icons = 1; }
+            /* Options with arguments */
+            else if ((val = match_opt_with_arg(arg, &i, argc, argv, 'd', "depth"))) {
+                cfg->max_depth = parse_depth(val, "--depth");
+            }
+            else if ((val = match_opt_with_arg(arg, &i, argc, argv, 'f', "filter"))) {
+                cfg->grep_pattern = val;
+            }
+            else {
                 fprintf(stderr, "%sError:%s Unknown option: %s\n",
                         CLR(cfg, COLOR_RED), RST(cfg), arg);
                 exit(1);
             }
+            continue;
+        }
+
+        /* Short options: -x or -xVAL or -xyz (combined flags) */
+        if ((val = match_opt_with_arg(arg, &i, argc, argv, 'd', "depth"))) {
+            cfg->max_depth = parse_depth(val, "-d");
+        } else if ((val = match_opt_with_arg(arg, &i, argc, argv, 'f', "filter"))) {
+            cfg->grep_pattern = val;
         } else {
-            (*dir_count)++;
-            *dirs = xrealloc(*dirs, *dir_count * sizeof(char *));
-            (*dirs)[*dir_count - 1] = (char *)arg;
+            /* Combined short flags like -alt */
+            for (int j = 1; arg[j]; j++) {
+                if (!apply_short_flag(arg[j], cfg)) {
+                    fprintf(stderr, "%sError:%s Unknown option: -%c\n",
+                            CLR(cfg, COLOR_RED), RST(cfg), arg[j]);
+                    exit(1);
+                }
+            }
         }
     }
 
@@ -152,6 +190,8 @@ static void parse_args(int argc, char **argv, Config *cfg,
         *dir_count = 1;
     }
 }
+
+#undef MATCH_LONG
 
 /* ============================================================================
  * Main
