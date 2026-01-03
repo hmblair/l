@@ -66,18 +66,42 @@ static void print_usage(void) {
     printf("  --daemon        Manage the size caching daemon\n");
 }
 
+/* Track which options have been set to detect conflicts/duplicates */
+typedef struct {
+    const char *depth;   /* -t, -d, --tree, --depth, -g */
+    const char *format;  /* -s, -l, --short, --long */
+    const char *sort;    /* -S, -T, -N */
+    const char *filter;  /* -f, --filter */
+} OptionSet;
+
+static void check_conflict(const char **slot, const char *opt, const Config *cfg) {
+    if (*slot) {
+        fprintf(stderr, "%sError:%s %s conflicts with %s\n",
+                CLR(cfg, COLOR_RED), RST(cfg), opt, *slot);
+        exit(1);
+    }
+    *slot = opt;
+}
+
 /* Returns: 1 = applied, 0 = unknown, -1 = requires argument */
-static int apply_short_flag(char flag, Config *cfg) {
+static int apply_short_flag(char flag, Config *cfg, OptionSet *set) {
     switch (flag) {
         case 'a': cfg->show_hidden = 1; return 1;
-        case 's': cfg->long_format = 0; cfg->long_format_explicit = 1; return 1;
-        case 'l': cfg->long_format = 1; cfg->long_format_explicit = 1; return 1;
-        case 't': cfg->max_depth = L_MAX_DEPTH; return 1;
+        case 's': check_conflict(&set->format, "-s", cfg);
+                  cfg->long_format = 0; cfg->long_format_explicit = 1; return 1;
+        case 'l': check_conflict(&set->format, "-l", cfg);
+                  cfg->long_format = 1; cfg->long_format_explicit = 1; return 1;
+        case 't': check_conflict(&set->depth, "-t", cfg);
+                  cfg->max_depth = L_MAX_DEPTH; return 1;
         case 'p': cfg->show_ancestry = 1; return 1;
-        case 'g': cfg->git_only = 1; cfg->show_hidden = 1; cfg->max_depth = L_MAX_DEPTH; return 1;
-        case 'S': cfg->sort_by = SORT_SIZE; return 1;
-        case 'T': cfg->sort_by = SORT_TIME; return 1;
-        case 'N': cfg->sort_by = SORT_NAME; return 1;
+        case 'g': check_conflict(&set->depth, "-g", cfg);
+                  cfg->git_only = 1; cfg->show_hidden = 1; cfg->max_depth = L_MAX_DEPTH; return 1;
+        case 'S': check_conflict(&set->sort, "-S", cfg);
+                  cfg->sort_by = SORT_SIZE; return 1;
+        case 'T': check_conflict(&set->sort, "-T", cfg);
+                  cfg->sort_by = SORT_TIME; return 1;
+        case 'N': check_conflict(&set->sort, "-N", cfg);
+                  cfg->sort_by = SORT_NAME; return 1;
         case 'r': cfg->sort_reverse = 1; return 1;
         case 'h': print_usage(); exit(0);
         case 'd': case 'f': return -1;  /* requires argument */
@@ -129,6 +153,7 @@ static const char *match_opt_with_arg(const char *arg, int *i, int argc, char **
 static void parse_args(int argc, char **argv, Config *cfg,
                        char ***dirs, int *dir_count) {
     static char *default_dirs[] = {"."};
+    OptionSet set = {0};
     const char *val;
 
     *dirs = NULL;
@@ -148,18 +173,23 @@ static void parse_args(int argc, char **argv, Config *cfg,
         /* Long options */
         if (arg[1] == '-') {
             if (MATCH_LONG("help"))            { print_usage(); exit(0); }
-            else if (MATCH_LONG("short"))      { cfg->long_format = 0; cfg->long_format_explicit = 1; }
-            else if (MATCH_LONG("long"))       { cfg->long_format = 1; cfg->long_format_explicit = 1; }
-            else if (MATCH_LONG("tree"))       { cfg->max_depth = L_MAX_DEPTH; }
+            else if (MATCH_LONG("short"))      { check_conflict(&set.format, "--short", cfg);
+                                                 cfg->long_format = 0; cfg->long_format_explicit = 1; }
+            else if (MATCH_LONG("long"))       { check_conflict(&set.format, "--long", cfg);
+                                                 cfg->long_format = 1; cfg->long_format_explicit = 1; }
+            else if (MATCH_LONG("tree"))       { check_conflict(&set.depth, "--tree", cfg);
+                                                 cfg->max_depth = L_MAX_DEPTH; }
             else if (MATCH_LONG("path"))       { cfg->show_ancestry = 1; }
             else if (MATCH_LONG("expand-all")) { cfg->expand_all = 1; }
             else if (MATCH_LONG("list"))       { cfg->list_mode = 1; }
             else if (MATCH_LONG("no-icons"))   { cfg->no_icons = 1; }
             /* Options with arguments */
             else if ((val = match_opt_with_arg(arg, &i, argc, argv, 'd', "depth"))) {
+                check_conflict(&set.depth, "--depth", cfg);
                 cfg->max_depth = parse_depth(val, "--depth");
             }
             else if ((val = match_opt_with_arg(arg, &i, argc, argv, 'f', "filter"))) {
+                check_conflict(&set.filter, "--filter", cfg);
                 cfg->grep_pattern = val;
             }
             else {
@@ -172,13 +202,15 @@ static void parse_args(int argc, char **argv, Config *cfg,
 
         /* Short options: -x or -xVAL or -xyz (combined flags) */
         if ((val = match_opt_with_arg(arg, &i, argc, argv, 'd', "depth"))) {
+            check_conflict(&set.depth, "-d", cfg);
             cfg->max_depth = parse_depth(val, "-d");
         } else if ((val = match_opt_with_arg(arg, &i, argc, argv, 'f', "filter"))) {
+            check_conflict(&set.filter, "-f", cfg);
             cfg->grep_pattern = val;
         } else {
             /* Combined short flags like -alt */
             for (int j = 1; arg[j]; j++) {
-                int result = apply_short_flag(arg[j], cfg);
+                int result = apply_short_flag(arg[j], cfg, &set);
                 if (result == -1) {
                     fprintf(stderr, "%sError:%s -%c cannot be combined with other flags\n",
                             CLR(cfg, COLOR_RED), RST(cfg), arg[j]);
