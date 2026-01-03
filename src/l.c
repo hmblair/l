@@ -54,6 +54,7 @@ static void print_usage(void) {
     printf("  --list          Flat list output (no tree structure)\n");
     printf("  --no-icons      Hide file/folder/git icons\n");
     printf("  -g              Show only git-modified/untracked files (implies -at)\n");
+    printf("  --filter PATTERN  Show only files/folders matching pattern\n");
     printf("\n");
     printf("Sorting:\n");
     printf("  -S              Sort by size (largest first)\n");
@@ -119,6 +120,11 @@ static void parse_args(int argc, char **argv, Config *cfg,
                 cfg->list_mode = 1;
             } else if (strcmp(arg, "--no-icons") == 0) {
                 cfg->no_icons = 1;
+            } else if (strcmp(arg, "--filter") == 0) {
+                if (i + 1 >= argc) die("--filter requires an argument");
+                cfg->grep_pattern = argv[++i];
+            } else if (strncmp(arg, "--filter=", 9) == 0) {
+                cfg->grep_pattern = arg + 9;
             } else if (arg[1] != '-') {
                 for (int j = 1; arg[j]; j++) {
                     if (!apply_short_flag(arg[j], cfg)) {
@@ -179,7 +185,8 @@ int main(int argc, char **argv) {
         .sort_by = SORT_NONE,
         .cwd = "",
         .home = "",
-        .script_dir = ""
+        .script_dir = "",
+        .grep_pattern = NULL
     };
 
     /* Initialize environment paths */
@@ -255,15 +262,20 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* Pre-compute git status flags for filtering */
+    /* Pre-compute visibility flags for filtering */
     if (cfg.git_only) {
         for (int i = 0; i < dir_count; i++) {
             compute_git_status_flags(trees[i]);
         }
-        /* Recalculate column widths for visible entries only */
-        if (cfg.long_format) {
-            columns_recalculate_visible(cols, trees, dir_count, &icons);
+    }
+    if (cfg.grep_pattern) {
+        for (int i = 0; i < dir_count; i++) {
+            compute_grep_flags(trees[i], cfg.grep_pattern);
         }
+    }
+    /* Recalculate column widths for visible entries only */
+    if ((cfg.git_only || cfg.grep_pattern) && cfg.long_format) {
+        columns_recalculate_visible(cols, trees, dir_count, &icons, &cfg);
     }
 
     /* Print all trees (using consistent column widths) */

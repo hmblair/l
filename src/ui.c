@@ -6,6 +6,7 @@
 #include "cache.h"
 #include <dirent.h>
 #include <ctype.h>
+#include <fnmatch.h>
 #include <time.h>
 
 /* ============================================================================
@@ -201,19 +202,31 @@ static void columns_reset_widths(Column *cols) {
     }
 }
 
-static void columns_update_visible_recursive(Column *cols, const TreeNode *node, const Icons *icons) {
-    if (node->has_git_status) {
+static int is_filtering_active(const Config *cfg) {
+    return cfg->git_only || cfg->grep_pattern;
+}
+
+static int node_is_visible(const TreeNode *node, const Config *cfg) {
+    if (cfg->git_only && !node->has_git_status) return 0;
+    if (cfg->grep_pattern && !node->matches_grep) return 0;
+    return 1;
+}
+
+static void columns_update_visible_recursive(Column *cols, const TreeNode *node,
+                                             const Icons *icons, const Config *cfg) {
+    if (node_is_visible(node, cfg)) {
         columns_update_widths(cols, &node->entry, icons);
     }
     for (size_t i = 0; i < node->child_count; i++) {
-        columns_update_visible_recursive(cols, &node->children[i], icons);
+        columns_update_visible_recursive(cols, &node->children[i], icons, cfg);
     }
 }
 
-void columns_recalculate_visible(Column *cols, TreeNode **trees, int tree_count, const Icons *icons) {
+void columns_recalculate_visible(Column *cols, TreeNode **trees, int tree_count,
+                                 const Icons *icons, const Config *cfg) {
     columns_reset_widths(cols);
     for (int i = 0; i < tree_count; i++) {
-        columns_update_visible_recursive(cols, trees[i], icons);
+        columns_update_visible_recursive(cols, trees[i], icons, cfg);
     }
 }
 
@@ -1129,6 +1142,17 @@ int compute_git_status_flags(TreeNode *node) {
     return result;
 }
 
+int compute_grep_flags(TreeNode *node, const char *pattern) {
+    int result = (fnmatch(pattern, node->entry.name, FNM_CASEFOLD) == 0);
+    for (size_t i = 0; i < node->child_count; i++) {
+        if (compute_grep_flags(&node->children[i], pattern)) {
+            result = 1;
+        }
+    }
+    node->matches_grep = result;
+    return result;
+}
+
 /* ============================================================================
  * Tree Printing
  * ============================================================================ */
@@ -1264,14 +1288,16 @@ static void print_entry(const FileEntry *fe, int depth, int has_visible_children
 static void print_tree_children(const TreeNode *parent, int depth, PrintContext *ctx);
 
 void print_tree_node(const TreeNode *node, int depth, PrintContext *ctx) {
+    int filtering = is_filtering_active(ctx->cfg);
+
     if (ctx->cfg->list_mode && node->entry.type == FTYPE_DIR) {
         size_t visible_count = 0;
         size_t *visible_indices = NULL;
 
-        if (ctx->cfg->git_only) {
+        if (filtering) {
             visible_indices = xmalloc(node->child_count * sizeof(size_t));
             for (size_t i = 0; i < node->child_count; i++) {
-                if (node->children[i].has_git_status) {
+                if (node_is_visible(&node->children[i], ctx->cfg)) {
                     visible_indices[visible_count++] = i;
                 }
             }
@@ -1280,16 +1306,16 @@ void print_tree_node(const TreeNode *node, int depth, PrintContext *ctx) {
         }
 
         for (size_t vi = 0; vi < visible_count; vi++) {
-            size_t i = ctx->cfg->git_only ? visible_indices[vi] : vi;
+            size_t i = filtering ? visible_indices[vi] : vi;
             const TreeNode *child = &node->children[i];
             int is_last = (vi == visible_count - 1);
             if (depth > 0) ctx->continuation[depth - 1] = !is_last;
 
             int has_visible_children = 0;
             if (child->child_count > 0) {
-                if (ctx->cfg->git_only) {
+                if (filtering) {
                     for (size_t j = 0; j < child->child_count; j++) {
-                        if (child->children[j].has_git_status) {
+                        if (node_is_visible(&child->children[j], ctx->cfg)) {
                             has_visible_children = 1;
                             break;
                         }
@@ -1311,9 +1337,9 @@ void print_tree_node(const TreeNode *node, int depth, PrintContext *ctx) {
 
     int has_visible_children = 0;
     if (node->child_count > 0) {
-        if (ctx->cfg->git_only) {
+        if (filtering) {
             for (size_t i = 0; i < node->child_count; i++) {
-                if (node->children[i].has_git_status) {
+                if (node_is_visible(&node->children[i], ctx->cfg)) {
                     has_visible_children = 1;
                     break;
                 }
@@ -1331,13 +1357,14 @@ void print_tree_node(const TreeNode *node, int depth, PrintContext *ctx) {
 }
 
 static void print_tree_children(const TreeNode *parent, int depth, PrintContext *ctx) {
+    int filtering = is_filtering_active(ctx->cfg);
     size_t visible_count = 0;
     size_t *visible_indices = NULL;
 
-    if (ctx->cfg->git_only) {
+    if (filtering) {
         visible_indices = xmalloc(parent->child_count * sizeof(size_t));
         for (size_t i = 0; i < parent->child_count; i++) {
-            if (parent->children[i].has_git_status) {
+            if (node_is_visible(&parent->children[i], ctx->cfg)) {
                 visible_indices[visible_count++] = i;
             }
         }
@@ -1346,7 +1373,7 @@ static void print_tree_children(const TreeNode *parent, int depth, PrintContext 
     }
 
     for (size_t vi = 0; vi < visible_count; vi++) {
-        size_t i = ctx->cfg->git_only ? visible_indices[vi] : vi;
+        size_t i = filtering ? visible_indices[vi] : vi;
         const TreeNode *child = &parent->children[i];
         int is_last = (vi == visible_count - 1);
 
@@ -1354,9 +1381,9 @@ static void print_tree_children(const TreeNode *parent, int depth, PrintContext 
 
         int has_visible_children = 0;
         if (child->child_count > 0) {
-            if (ctx->cfg->git_only) {
+            if (filtering) {
                 for (size_t j = 0; j < child->child_count; j++) {
-                    if (child->children[j].has_git_status) {
+                    if (node_is_visible(&child->children[j], ctx->cfg)) {
                         has_visible_children = 1;
                         break;
                     }

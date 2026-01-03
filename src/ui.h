@@ -52,6 +52,7 @@ typedef struct {
     char cwd[PATH_MAX];
     char home[PATH_MAX];
     char script_dir[PATH_MAX];
+    const char *grep_pattern;
 } Config;
 
 /* Extension icon mapping */
@@ -117,6 +118,7 @@ typedef struct TreeNode {
     struct TreeNode *children;
     size_t child_count;
     int has_git_status;
+    int matches_grep;
 } TreeNode;
 
 /* Column formatter function type */
@@ -203,7 +205,9 @@ TreeNode *build_tree(const char *path, Column *cols, GitCache *git,
 TreeNode *build_ancestry_tree(const char *path, Column *cols, GitCache *git,
                               const Config *cfg, const Icons *icons);
 int compute_git_status_flags(TreeNode *node);
-void columns_recalculate_visible(Column *cols, TreeNode **trees, int tree_count, const Icons *icons);
+int compute_grep_flags(TreeNode *node, const char *pattern);
+void columns_recalculate_visible(Column *cols, TreeNode **trees, int tree_count,
+                                 const Icons *icons, const Config *cfg);
 void print_tree_node(const TreeNode *node, int depth, PrintContext *ctx);
 
 /* ============================================================================
