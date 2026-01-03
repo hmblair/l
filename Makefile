@@ -1,9 +1,12 @@
 # Makefile for l directory listing tool
 
 PREFIX ?= $(HOME)/.local
-BINDIR = $(PREFIX)/bin
+DESTBINDIR = $(PREFIX)/bin
 CONFIGDIR = $(HOME)/.config/l
 SITE_FUNCTIONS = /usr/local/share/zsh/site-functions
+
+# Local build output
+BINDIR = bin
 
 CC = cc
 CFLAGS = -O2 -Wall -Wextra -std=c99
@@ -50,12 +53,15 @@ UI_OBJS = $(SRCDIR)/ui.o
 DAEMON_OBJS = $(SRCDIR)/daemon.o
 
 # Main targets
-all: l l-cached
+all: $(BINDIR)/l $(BINDIR)/l-cached
 
-l: $(SRCDIR)/l.o $(COMMON_OBJS) $(CACHE_CLIENT_OBJS) $(GIT_OBJS) $(UI_OBJS) $(DAEMON_OBJS)
+$(BINDIR):
+	mkdir -p $(BINDIR)
+
+$(BINDIR)/l: $(SRCDIR)/l.o $(COMMON_OBJS) $(CACHE_CLIENT_OBJS) $(GIT_OBJS) $(UI_OBJS) $(DAEMON_OBJS) | $(BINDIR)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
-l-cached: $(SRCDIR)/ld.o $(COMMON_OBJS) $(CACHE_DAEMON_OBJS)
+$(BINDIR)/l-cached: $(SRCDIR)/ld.o $(COMMON_OBJS) $(CACHE_DAEMON_OBJS) | $(BINDIR)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
 # Object files
@@ -84,12 +90,12 @@ $(SRCDIR)/ld.o: $(SRCDIR)/ld.c $(SRCDIR)/common.h $(SRCDIR)/cache.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 install: all
-	@mkdir -p $(BINDIR)
+	@mkdir -p $(DESTBINDIR)
 	@mkdir -p $(CONFIGDIR)
-	install -m 755 l $(BINDIR)/l
-	install -m 755 l-cached $(BINDIR)/l-cached
+	install -m 755 $(BINDIR)/l $(DESTBINDIR)/l
+	install -m 755 $(BINDIR)/l-cached $(DESTBINDIR)/l-cached
 	install -m 644 icons.toml $(CONFIGDIR)/icons.toml
-	@echo "Installed l and l-cached to $(BINDIR)"
+	@echo "Installed l and l-cached to $(DESTBINDIR)"
 	@echo "Installed icons.toml to $(CONFIGDIR)"
 	@if [ -w "$(SITE_FUNCTIONS)" ] || [ -w "$$(dirname $(SITE_FUNCTIONS))" ]; then \
 		mkdir -p $(SITE_FUNCTIONS); \
@@ -100,13 +106,13 @@ install: all
 	fi
 
 uninstall:
-	rm -f $(BINDIR)/l $(BINDIR)/l-cached
+	rm -f $(DESTBINDIR)/l $(DESTBINDIR)/l-cached
 	rm -f $(CONFIGDIR)/icons.toml
 	rmdir $(CONFIGDIR) 2>/dev/null || true
 	rm -f $(SITE_FUNCTIONS)/_l
 	@echo "Uninstalled l"
 
 clean:
-	rm -f $(SRCDIR)/*.o l l-cached
+	rm -f $(SRCDIR)/*.o $(BINDIR)/l $(BINDIR)/l-cached
 
 .PHONY: all install uninstall clean
