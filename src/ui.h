@@ -102,6 +102,8 @@ typedef struct FileEntry {
     int line_count;
     int is_ignored;
     char git_status[3];
+    int diff_added;
+    int diff_removed;
     FileType type;
 } FileEntry;
 
@@ -144,6 +146,8 @@ typedef struct {
     const Config *cfg;
     Column *columns;
     int *continuation;
+    int diff_add_width;   /* Width of insertions column (0 = hidden) */
+    int diff_del_width;   /* Width of deletions column (0 = hidden) */
 } PrintContext;
 
 /* Helper macros */
@@ -208,6 +212,8 @@ int compute_git_status_flags(TreeNode *node);
 int compute_grep_flags(TreeNode *node, const char *pattern);
 void columns_recalculate_visible(Column *cols, TreeNode **trees, int tree_count,
                                  const Icons *icons, const Config *cfg);
+void compute_diff_widths(TreeNode **trees, int tree_count, int *add_width, int *del_width,
+                         const Config *cfg);
 void print_tree_node(const TreeNode *node, int depth, PrintContext *ctx);
 
 /* ============================================================================

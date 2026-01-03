@@ -59,6 +59,8 @@ void git_cache_add(GitCache *cache, const char *path, const char *status) {
     node->path = xstrdup(path);
     strncpy(node->status, status, 2);
     node->status[2] = '\0';
+    node->lines_added = 0;
+    node->lines_removed = 0;
     node->next = cache->buckets[h];
     cache->buckets[h] = node;
 
@@ -77,6 +79,26 @@ const char *git_cache_get(GitCache *cache, const char *path) {
         node = node->next;
     }
     return NULL;
+}
+
+GitStatusNode *git_cache_get_node(GitCache *cache, const char *path) {
+    unsigned int h = hash_string(path);
+    GitStatusNode *node = cache->buckets[h];
+    while (node) {
+        if (strcmp(node->path, path) == 0) {
+            return node;
+        }
+        node = node->next;
+    }
+    return NULL;
+}
+
+void git_cache_set_diff(GitCache *cache, const char *path, int added, int removed) {
+    GitStatusNode *node = git_cache_get_node(cache, path);
+    if (node) {
+        node->lines_added = added;
+        node->lines_removed = removed;
+    }
 }
 
 GitSummary git_get_dir_summary(GitCache *cache, const char *dir_path) {
@@ -456,3 +478,29 @@ void git_populate_repo(GitCache *cache, const char *repo_path) {
 }
 
 #endif /* HAVE_LIBGIT2 */
+
+/* Shared implementation for diff stats - uses git command for simplicity */
+void git_populate_diff_stats(GitCache *cache, const char *repo_path) {
+    char cmd[L_SHELL_CMD_BUF_SIZE];
+    char line[PATH_MAX + 64];
+
+    /* repo_path comes from git_find_root so it's already validated/safe */
+    snprintf(cmd, sizeof(cmd),
+             "git -C '%s' diff --numstat 2>/dev/null", repo_path);
+
+    FILE *fp = popen(cmd, "r");
+    if (!fp) return;
+
+    while (fgets(line, sizeof(line), fp)) {
+        int added, removed;
+        char path[PATH_MAX];
+
+        /* Format: "added\tremoved\tpath" or "-\t-\tpath" for binary */
+        if (sscanf(line, "%d\t%d\t%[^\n]", &added, &removed, path) == 3) {
+            char full_path[PATH_MAX];
+            path_join(full_path, sizeof(full_path), repo_path, path);
+            git_cache_set_diff(cache, full_path, added, removed);
+        }
+    }
+    pclose(fp);
+}

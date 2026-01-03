@@ -359,6 +359,12 @@ int main(int argc, char **argv) {
         columns_recalculate_visible(cols, trees, dir_count, &icons, &cfg);
     }
 
+    /* Compute diff column widths (only in long format) */
+    int diff_add_width = 0, diff_del_width = 0;
+    if (cfg.long_format) {
+        compute_diff_widths(trees, dir_count, &diff_add_width, &diff_del_width, &cfg);
+    }
+
     /* Print all trees (using consistent column widths) */
     for (int i = 0; i < dir_count; i++) {
         /* In git-only mode, show message if no changes and in sync with upstream */
@@ -388,7 +394,9 @@ int main(int argc, char **argv) {
             .icons = &icons,
             .cfg = &cfg,
             .columns = cfg.long_format ? cols : NULL,
-            .continuation = continuation
+            .continuation = continuation,
+            .diff_add_width = diff_add_width,
+            .diff_del_width = diff_del_width
         };
         print_tree_node(trees[i], 0, &ctx);
     }

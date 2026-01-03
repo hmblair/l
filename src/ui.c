@@ -230,6 +230,40 @@ void columns_recalculate_visible(Column *cols, TreeNode **trees, int tree_count,
     }
 }
 
+static int count_digits(int n) {
+    if (n == 0) return 1;
+    int count = 0;
+    if (n < 0) { count = 1; n = -n; }  /* for minus sign */
+    while (n > 0) { count++; n /= 10; }
+    return count;
+}
+
+static void compute_diff_widths_recursive(const TreeNode *node, int *add_width, int *del_width,
+                                          const Config *cfg) {
+    if (node_is_visible(node, cfg)) {
+        if (node->entry.diff_added > 0) {
+            int w = count_digits(node->entry.diff_added);
+            if (w > *add_width) *add_width = w;
+        }
+        if (node->entry.diff_removed > 0) {
+            int w = count_digits(node->entry.diff_removed);
+            if (w > *del_width) *del_width = w;
+        }
+    }
+    for (size_t i = 0; i < node->child_count; i++) {
+        compute_diff_widths_recursive(&node->children[i], add_width, del_width, cfg);
+    }
+}
+
+void compute_diff_widths(TreeNode **trees, int tree_count, int *add_width, int *del_width,
+                         const Config *cfg) {
+    *add_width = 0;
+    *del_width = 0;
+    for (int i = 0; i < tree_count; i++) {
+        compute_diff_widths_recursive(trees[i], add_width, del_width, cfg);
+    }
+}
+
 const char *get_count_icon(const FileEntry *fe, const Icons *icons) {
     if (fe->file_count >= 0) {
         return icons->count_files;
@@ -839,6 +873,7 @@ static void build_tree_children(TreeNode *parent, int depth, Column *cols,
     #pragma omp parallel for schedule(dynamic)
     for (size_t i = 0; i < git_repo_count; i++) {
         git_populate_repo(git, git_repos[i]);
+        git_populate_diff_stats(git, git_repos[i]);
     }
     free(git_repos);
 
@@ -855,11 +890,14 @@ static void build_tree_children(TreeNode *parent, int depth, Column *cols,
     for (size_t i = 0; i < list.count; i++) {
         TreeNode *child = &parent->children[i];
 
-        const char *git_status = git_cache_get(git, child->entry.path);
-        if (git_status) {
-            strncpy(child->entry.git_status, git_status, sizeof(child->entry.git_status) - 1);
+        GitStatusNode *git_node = git_cache_get_node(git, child->entry.path);
+        if (git_node) {
+            strncpy(child->entry.git_status, git_node->status, sizeof(child->entry.git_status) - 1);
             child->entry.git_status[sizeof(child->entry.git_status) - 1] = '\0';
+            child->entry.diff_added = git_node->lines_added;
+            child->entry.diff_removed = git_node->lines_removed;
         }
+        const char *git_status = git_node ? git_node->status : NULL;
         child->entry.is_ignored = (git_status && strcmp(git_status, "!!") == 0) ||
                                    strcmp(child->entry.name, ".git") == 0 ||
                                    is_submodule[i];
@@ -908,6 +946,7 @@ TreeNode *build_tree(const char *path, Column *cols,
     int in_git_repo = git_find_root(abs_path, git_root, sizeof(git_root));
     if (in_git_repo) {
         git_populate_repo(git, git_root);
+        git_populate_diff_stats(git, git_root);
     }
 
     struct stat st;
@@ -1198,6 +1237,28 @@ static void print_entry(const FileEntry *fe, int depth, int has_visible_children
                 }
             }
             printf("  ");
+        }
+        /* Diff columns (only shown when there are diffs) */
+        if (ctx->diff_add_width > 0) {
+            if (fe->diff_added > 0) {
+                printf("%s%*d%s ", CLR(ctx->cfg, COLOR_GREEN),
+                       ctx->diff_add_width, fe->diff_added, RST(ctx->cfg));
+            } else {
+                printf("%s%*s%s ", CLR(ctx->cfg, COLOR_GREY),
+                       ctx->diff_add_width, "-", RST(ctx->cfg));
+            }
+        }
+        if (ctx->diff_del_width > 0) {
+            if (fe->diff_removed > 0) {
+                printf("%s%*d%s ", CLR(ctx->cfg, COLOR_RED),
+                       ctx->diff_del_width, fe->diff_removed, RST(ctx->cfg));
+            } else {
+                printf("%s%*s%s ", CLR(ctx->cfg, COLOR_GREY),
+                       ctx->diff_del_width, "-", RST(ctx->cfg));
+            }
+        }
+        if (ctx->diff_add_width > 0 || ctx->diff_del_width > 0) {
+            printf(" ");
         }
     }
 
