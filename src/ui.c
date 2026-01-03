@@ -329,12 +329,23 @@ void icons_load(Icons *icons, const char *script_dir) {
             continue;
 
         if (in_extensions) {
-            if (icons->ext_count < L_MAX_EXT_ICONS) {
-                strncpy(icons->ext_icons[icons->ext_count].ext, key, L_MAX_EXT_LEN - 1);
-                icons->ext_icons[icons->ext_count].ext[L_MAX_EXT_LEN - 1] = '\0';
-                strncpy(icons->ext_icons[icons->ext_count].icon, value, L_MAX_ICON_LEN - 1);
-                icons->ext_icons[icons->ext_count].icon[L_MAX_ICON_LEN - 1] = '\0';
-                icons->ext_count++;
+            /* Parse comma-separated extensions (e.g., "jpg,png,gif") */
+            char *ext_list = key;
+            char *ext;
+            while ((ext = strsep(&ext_list, ",")) != NULL) {
+                /* Skip leading whitespace */
+                while (*ext && isspace(*ext)) ext++;
+                /* Trim trailing whitespace */
+                char *end = ext + strlen(ext) - 1;
+                while (end > ext && isspace(*end)) *end-- = '\0';
+
+                if (*ext && icons->ext_count < L_MAX_EXT_ICONS) {
+                    strncpy(icons->ext_icons[icons->ext_count].ext, ext, L_MAX_EXT_LEN - 1);
+                    icons->ext_icons[icons->ext_count].ext[L_MAX_EXT_LEN - 1] = '\0';
+                    strncpy(icons->ext_icons[icons->ext_count].icon, value, L_MAX_ICON_LEN - 1);
+                    icons->ext_icons[icons->ext_count].icon[L_MAX_ICON_LEN - 1] = '\0';
+                    icons->ext_count++;
+                }
             }
         } else {
             icons_set(icons, key, value);
