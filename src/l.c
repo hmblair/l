@@ -63,6 +63,7 @@ static void print_usage(void) {
     printf("  -r              Reverse sort order\n");
     printf("\n");
     printf("  -h, --help      Show this help message\n");
+    printf("  --version       Show version information\n");
     printf("  --daemon        Manage the size caching daemon\n");
 }
 
@@ -236,9 +237,17 @@ static void parse_args(int argc, char **argv, Config *cfg,
  * Main
  * ============================================================================ */
 
+#ifndef VERSION
+#define VERSION "unknown"
+#endif
+
 int main(int argc, char **argv) {
-    /* Check for --daemon early (before other initialization) */
+    /* Check for --version/--daemon early (before other initialization) */
     for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--version") == 0) {
+            printf("l %s\n", VERSION);
+            return 0;
+        }
         if (strcmp(argv[i], "--daemon") == 0) {
             daemon_run(argv[0]);
             return 0;

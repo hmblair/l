@@ -27,6 +27,7 @@ _l() {
         '-N[Sort by name (alphabetical)]' \
         '-r[Reverse sort order]' \
         '(-h --help)'{-h,--help}'[Show help message]' \
+        '--version[Show version information]' \
         '--daemon[Manage the size caching daemon]' \
         '*:file or directory:_l_files'
 }

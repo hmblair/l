@@ -1,5 +1,7 @@
 # Makefile for l directory listing tool
 
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "unknown")
+
 PREFIX ?= $(HOME)/.local
 DESTBINDIR = $(PREFIX)/bin
 CONFIGDIR = $(HOME)/.config/l
@@ -9,7 +11,7 @@ SITE_FUNCTIONS = /usr/local/share/zsh/site-functions
 BINDIR = bin
 
 CC = cc
-CFLAGS = -O2 -Wall -Wextra -std=c99
+CFLAGS = -O2 -Wall -Wextra -std=c99 -DVERSION=\"$(VERSION)\"
 LIBS = -lsqlite3 -lpthread
 
 # OpenMP support (use homebrew clang on macOS)
