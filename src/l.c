@@ -268,10 +268,27 @@ int main(int argc, char **argv) {
 
     /* Print all trees (using consistent column widths) */
     for (int i = 0; i < dir_count; i++) {
-        /* In git-only mode, show message if no changes */
+        /* In git-only mode, show message if no changes and in sync with upstream */
         if (cfg.git_only && !trees[i]->has_git_status) {
-            printf("%sNo changes%s\n", COLOR_GREEN, COLOR_RESET);
-            continue;
+            int in_sync = 1;
+            if (path_is_git_root(trees[i]->entry.path)) {
+                char *branch = git_get_branch(trees[i]->entry.path);
+                if (branch) {
+                    char local_hash[64], remote_hash[64];
+                    char local_ref[128], remote_ref[128];
+                    snprintf(local_ref, sizeof(local_ref), "refs/heads/%s", branch);
+                    snprintf(remote_ref, sizeof(remote_ref), "refs/remotes/origin/%s", branch);
+                    git_read_ref(trees[i]->entry.path, local_ref, local_hash, sizeof(local_hash));
+                    if (git_read_ref(trees[i]->entry.path, remote_ref, remote_hash, sizeof(remote_hash))) {
+                        in_sync = (strcmp(local_hash, remote_hash) == 0);
+                    }
+                    free(branch);
+                }
+            }
+            if (in_sync) {
+                printf("%sUp to date.%s\n", COLOR_GREEN, COLOR_RESET);
+                continue;
+            }
         }
         PrintContext ctx = {
             .git = &gits[i],
