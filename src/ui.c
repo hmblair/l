@@ -1250,10 +1250,10 @@ static void print_entry(const FileEntry *fe, int depth, int has_visible_children
         }
         if (ctx->diff_del_width > 0) {
             if (fe->diff_removed > 0) {
-                printf("%s%*d%s ", CLR(ctx->cfg, COLOR_RED),
+                printf("%s%-*d%s ", CLR(ctx->cfg, COLOR_RED),
                        ctx->diff_del_width, fe->diff_removed, RST(ctx->cfg));
             } else {
-                printf("%s%*s%s ", CLR(ctx->cfg, COLOR_GREY),
+                printf("%s%-*s%s ", CLR(ctx->cfg, COLOR_GREY),
                        ctx->diff_del_width, "-", RST(ctx->cfg));
             }
         }
