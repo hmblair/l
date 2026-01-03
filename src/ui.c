@@ -848,9 +848,6 @@ static void build_tree_children(TreeNode *parent, int depth, Column *cols,
             !should_skip_dir(child->entry.name, child->entry.is_ignored, cfg)) {
 
             int child_in_git_repo = in_git_repo || is_git_repo_root[i];
-            if (cfg->git_only && !child_in_git_repo) {
-                continue;
-            }
 
             build_tree_children(child, depth + 1, cols, git, cfg, icons, child_in_git_repo);
 
