@@ -268,6 +268,11 @@ int main(int argc, char **argv) {
 
     /* Print all trees (using consistent column widths) */
     for (int i = 0; i < dir_count; i++) {
+        /* In git-only mode, show message if no changes */
+        if (cfg.git_only && !trees[i]->has_git_status) {
+            printf("%sNo changes%s\n", COLOR_GREEN, COLOR_RESET);
+            continue;
+        }
         PrintContext ctx = {
             .git = &gits[i],
             .icons = &icons,
