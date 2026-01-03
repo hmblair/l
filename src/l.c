@@ -66,6 +66,7 @@ static void print_usage(void) {
     printf("  --daemon        Manage the size caching daemon\n");
 }
 
+/* Returns: 1 = applied, 0 = unknown, -1 = requires argument */
 static int apply_short_flag(char flag, Config *cfg) {
     switch (flag) {
         case 'a': cfg->show_hidden = 1; return 1;
@@ -79,6 +80,7 @@ static int apply_short_flag(char flag, Config *cfg) {
         case 'N': cfg->sort_by = SORT_NAME; return 1;
         case 'r': cfg->sort_reverse = 1; return 1;
         case 'h': print_usage(); exit(0);
+        case 'd': case 'f': return -1;  /* requires argument */
         default: return 0;
     }
 }
@@ -176,7 +178,12 @@ static void parse_args(int argc, char **argv, Config *cfg,
         } else {
             /* Combined short flags like -alt */
             for (int j = 1; arg[j]; j++) {
-                if (!apply_short_flag(arg[j], cfg)) {
+                int result = apply_short_flag(arg[j], cfg);
+                if (result == -1) {
+                    fprintf(stderr, "%sError:%s -%c cannot be combined with other flags\n",
+                            CLR(cfg, COLOR_RED), RST(cfg), arg[j]);
+                    exit(1);
+                } else if (result == 0) {
                     fprintf(stderr, "%sError:%s Unknown option: -%c\n",
                             CLR(cfg, COLOR_RED), RST(cfg), arg[j]);
                     exit(1);
