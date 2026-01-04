@@ -642,6 +642,75 @@ static int get_image_megapixels(const char *path) {
         int h = header[22] | (header[23] << 8) | (header[24] << 16) | (header[25] << 24);
         height = h < 0 ? -h : h;  /* Height can be negative (top-down DIB) */
     }
+    /* HEIC/HEIF: ftyp box with heic/mif1 brand, dimensions in ispe box */
+    else if (n >= 12 && memcmp(header + 4, "ftyp", 4) == 0) {
+        /* Check for HEIC-compatible brands */
+        int is_heic = (memcmp(header + 8, "heic", 4) == 0 ||
+                       memcmp(header + 8, "mif1", 4) == 0 ||
+                       memcmp(header + 8, "msf1", 4) == 0 ||
+                       memcmp(header + 8, "heix", 4) == 0);
+        if (is_heic) {
+            /* Navigate box structure to find ispe box */
+            fseek(f, 0, SEEK_SET);
+            unsigned char box[8];
+            while (fread(box, 1, 8, f) == 8) {
+                uint32_t size = (box[0] << 24) | (box[1] << 16) | (box[2] << 8) | box[3];
+                if (size < 8) break;
+
+                /* meta box contains iprp which contains ipco which contains ispe */
+                if (memcmp(box + 4, "meta", 4) == 0) {
+                    /* meta is a full box, skip 4-byte version/flags */
+                    long meta_end = ftell(f) - 8 + size;
+                    fseek(f, 4, SEEK_CUR);
+
+                    /* Search within meta for iprp */
+                    while (ftell(f) < meta_end && fread(box, 1, 8, f) == 8) {
+                        uint32_t inner_size = (box[0] << 24) | (box[1] << 16) | (box[2] << 8) | box[3];
+                        if (inner_size < 8) break;
+
+                        if (memcmp(box + 4, "iprp", 4) == 0) {
+                            long iprp_end = ftell(f) - 8 + inner_size;
+
+                            /* Search within iprp for ipco */
+                            while (ftell(f) < iprp_end && fread(box, 1, 8, f) == 8) {
+                                uint32_t ipco_size = (box[0] << 24) | (box[1] << 16) | (box[2] << 8) | box[3];
+                                if (ipco_size < 8) break;
+
+                                if (memcmp(box + 4, "ipco", 4) == 0) {
+                                    long ipco_end = ftell(f) - 8 + ipco_size;
+
+                                    /* Search within ipco for ispe */
+                                    while (ftell(f) < ipco_end && fread(box, 1, 8, f) == 8) {
+                                        uint32_t ispe_size = (box[0] << 24) | (box[1] << 16) | (box[2] << 8) | box[3];
+                                        if (ispe_size < 8) break;
+
+                                        if (memcmp(box + 4, "ispe", 4) == 0) {
+                                            /* ispe: 4-byte version/flags, 4-byte width, 4-byte height */
+                                            unsigned char ispe_data[12];
+                                            if (fread(ispe_data, 1, 12, f) == 12) {
+                                                width = (ispe_data[4] << 24) | (ispe_data[5] << 16) |
+                                                        (ispe_data[6] << 8) | ispe_data[7];
+                                                height = (ispe_data[8] << 24) | (ispe_data[9] << 16) |
+                                                         (ispe_data[10] << 8) | ispe_data[11];
+                                            }
+                                            break;
+                                        }
+                                        fseek(f, ispe_size - 8, SEEK_CUR);
+                                    }
+                                    break;
+                                }
+                                fseek(f, ipco_size - 8, SEEK_CUR);
+                            }
+                            break;
+                        }
+                        fseek(f, inner_size - 8, SEEK_CUR);
+                    }
+                    break;
+                }
+                fseek(f, size - 8, SEEK_CUR);
+            }
+        }
+    }
 
     fclose(f);
 
