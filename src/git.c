@@ -157,6 +157,28 @@ int git_count_deleted_direct(GitCache *cache, const char *dir_path) {
     return count;
 }
 
+int git_deleted_lines_direct(GitCache *cache, const char *dir_path) {
+    if (!cache) return 0;
+
+    int lines = 0;
+    size_t dir_len = strlen(dir_path);
+
+    for (int i = 0; i < L_HASH_SIZE; i++) {
+        GitStatusNode *node = cache->buckets[i];
+        while (node) {
+            /* Check if deleted and directly in this directory (not nested) */
+            if (node->status[1] == 'D' &&
+                strncmp(node->path, dir_path, dir_len) == 0 &&
+                node->path[dir_len] == '/' &&
+                strchr(node->path + dir_len + 1, '/') == NULL) {
+                lines += node->lines_removed;
+            }
+            node = node->next;
+        }
+    }
+    return lines;
+}
+
 /* ============================================================================
  * Git Branch Functions
  * ============================================================================ */

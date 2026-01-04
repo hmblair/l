@@ -913,6 +913,9 @@ static void build_tree_children(TreeNode *parent, int depth, Column *cols,
 
             build_tree_children(child, depth + 1, cols, git, cfg, icons, child_in_git_repo);
 
+            /* Set deleted lines for directory (from deleted files directly in it) */
+            child->entry.diff_removed = git_deleted_lines_direct(git, child->entry.path);
+
             if (cfg->long_format && cfg->show_hidden && child->child_count > 0) {
                 off_t total_size = 0;
                 long total_count = 0;

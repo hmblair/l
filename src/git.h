@@ -80,6 +80,9 @@ GitSummary git_get_dir_summary(GitCache *cache, const char *dir_path);
 /* Count deleted files directly in a directory (not recursive) */
 int git_count_deleted_direct(GitCache *cache, const char *dir_path);
 
+/* Sum deleted lines directly in a directory (not recursive) */
+int git_deleted_lines_direct(GitCache *cache, const char *dir_path);
+
 /* ============================================================================
  * Git Branch Functions
  * ============================================================================ */
