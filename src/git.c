@@ -356,7 +356,31 @@ int git_find_root(const char *path, char *root, size_t root_len) {
     return workdir != NULL;
 }
 
-void git_populate_repo(GitCache *cache, const char *repo_path) {
+/* Shell-based diff stats (faster than libgit2's patch-based approach) */
+static void git_populate_diff_stats_shell(GitCache *cache, const char *repo_path) {
+    char cmd[L_SHELL_CMD_BUF_SIZE];
+    char line[PATH_MAX + 64];
+
+    snprintf(cmd, sizeof(cmd),
+             "git -C '%s' diff --numstat 2>/dev/null", repo_path);
+
+    FILE *fp = popen(cmd, "r");
+    if (!fp) return;
+
+    while (fgets(line, sizeof(line), fp)) {
+        int added, removed;
+        char path[PATH_MAX];
+
+        if (sscanf(line, "%d\t%d\t%[^\n]", &added, &removed, path) == 3) {
+            char full_path[PATH_MAX];
+            path_join(full_path, sizeof(full_path), repo_path, path);
+            git_cache_set_diff(cache, full_path, added, removed);
+        }
+    }
+    pclose(fp);
+}
+
+void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_stats) {
     git_repository *repo = NULL;
     git_status_list *status_list = NULL;
     git_status_options opts = {0};
@@ -428,6 +452,11 @@ void git_populate_repo(GitCache *cache, const char *repo_path) {
 
     git_status_list_free(status_list);
     git_repository_free(repo);
+
+    /* Use shell for diff stats (faster than libgit2's patch iteration) */
+    if (include_diff_stats) {
+        git_populate_diff_stats_shell(cache, repo_path);
+    }
 }
 
 #else
@@ -439,6 +468,10 @@ static void git_parse_status_output(FILE *fp, GitCache *cache, const char *repo_
     while (fgets(line, sizeof(line), fp)) {
         size_t len = strlen(line);
         if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
+
+        /* Stop at separator (used when combining with diff --numstat) */
+        if (strcmp(line, "---") == 0) break;
+
         if (len < 4) continue;  /* Need at least "XY path" */
 
         char status[3] = {line[0], line[1], '\0'};
@@ -479,20 +512,43 @@ int git_find_root(const char *path, char *root, size_t root_len) {
     return found;
 }
 
-void git_populate_repo(GitCache *cache, const char *repo_path) {
+void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_stats) {
     char *escaped = shell_escape(repo_path);
     if (!escaped) return;  /* Path too long or malformed */
 
     char cmd[L_SHELL_CMD_BUF_SIZE];
 
-    /* Get all status in one call:
-     * -uall: show individual untracked files (not just directories)
-     * --ignored=matching: show ignored directories (not their contents) */
-    snprintf(cmd, sizeof(cmd),
-             "git -C '%s' status --porcelain -uall --ignored=matching 2>/dev/null", escaped);
+    /* Combine status and diff in one subprocess when diff stats needed:
+     * Use --- separator to distinguish the two outputs */
+    if (include_diff_stats) {
+        snprintf(cmd, sizeof(cmd),
+                 "git -C '%s' status --porcelain -uall --ignored=matching 2>/dev/null && "
+                 "echo '---' && "
+                 "git -C '%s' diff --numstat 2>/dev/null", escaped, escaped);
+    } else {
+        snprintf(cmd, sizeof(cmd),
+                 "git -C '%s' status --porcelain -uall --ignored=matching 2>/dev/null", escaped);
+    }
+
     FILE *fp = popen(cmd, "r");
     if (fp) {
+        /* Parse status output until separator */
         git_parse_status_output(fp, cache, repo_path);
+
+        /* If we included diff stats, parse them after the separator */
+        if (include_diff_stats) {
+            char line[PATH_MAX + 64];
+            while (fgets(line, sizeof(line), fp)) {
+                int added, removed;
+                char path[PATH_MAX];
+
+                if (sscanf(line, "%d\t%d\t%[^\n]", &added, &removed, path) == 3) {
+                    char full_path[PATH_MAX];
+                    path_join(full_path, sizeof(full_path), repo_path, path);
+                    git_cache_set_diff(cache, full_path, added, removed);
+                }
+            }
+        }
         pclose(fp);
     }
 
@@ -500,29 +556,3 @@ void git_populate_repo(GitCache *cache, const char *repo_path) {
 }
 
 #endif /* HAVE_LIBGIT2 */
-
-/* Shared implementation for diff stats - uses git command for simplicity */
-void git_populate_diff_stats(GitCache *cache, const char *repo_path) {
-    char cmd[L_SHELL_CMD_BUF_SIZE];
-    char line[PATH_MAX + 64];
-
-    /* repo_path comes from git_find_root so it's already validated/safe */
-    snprintf(cmd, sizeof(cmd),
-             "git -C '%s' diff --numstat 2>/dev/null", repo_path);
-
-    FILE *fp = popen(cmd, "r");
-    if (!fp) return;
-
-    while (fgets(line, sizeof(line), fp)) {
-        int added, removed;
-        char path[PATH_MAX];
-
-        /* Format: "added\tremoved\tpath" or "-\t-\tpath" for binary */
-        if (sscanf(line, "%d\t%d\t%[^\n]", &added, &removed, path) == 3) {
-            char full_path[PATH_MAX];
-            path_join(full_path, sizeof(full_path), repo_path, path);
-            git_cache_set_diff(cache, full_path, added, removed);
-        }
-    }
-    pclose(fp);
-}

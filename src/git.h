@@ -68,11 +68,9 @@ GitStatusNode *git_cache_get_node(GitCache *cache, const char *path);
  * Returns 1 if found, 0 otherwise */
 int git_find_root(const char *path, char *root, size_t root_len);
 
-/* Populate cache with all file statuses from a repository */
-void git_populate_repo(GitCache *cache, const char *repo_path);
-
-/* Populate diff stats (lines added/removed) for cached entries */
-void git_populate_diff_stats(GitCache *cache, const char *repo_path);
+/* Populate cache with all file statuses from a repository.
+ * If include_diff_stats is true, also populate lines added/removed. */
+void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_stats);
 
 /* Get aggregated git status for all files under a directory */
 GitSummary git_get_dir_summary(GitCache *cache, const char *dir_path);

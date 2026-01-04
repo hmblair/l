@@ -872,8 +872,7 @@ static void build_tree_children(TreeNode *parent, int depth, Column *cols,
     /* Populate git repos (excluding submodules) */
     #pragma omp parallel for schedule(dynamic)
     for (size_t i = 0; i < git_repo_count; i++) {
-        git_populate_repo(git, git_repos[i]);
-        git_populate_diff_stats(git, git_repos[i]);
+        git_populate_repo(git, git_repos[i], cfg->long_format);
     }
     free(git_repos);
 
@@ -948,8 +947,7 @@ TreeNode *build_tree(const char *path, Column *cols,
     char git_root[PATH_MAX];
     int in_git_repo = git_find_root(abs_path, git_root, sizeof(git_root));
     if (in_git_repo) {
-        git_populate_repo(git, git_root);
-        git_populate_diff_stats(git, git_root);
+        git_populate_repo(git, git_root, cfg->long_format);
     }
 
     struct stat st;
