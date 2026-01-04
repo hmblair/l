@@ -173,6 +173,15 @@ static void parse_args(int argc, char **argv, Config *cfg,
 
         /* Long options */
         if (arg[1] == '-') {
+            /* End of options marker */
+            if (arg[2] == '\0') {
+                for (i++; i < argc; i++) {
+                    (*dir_count)++;
+                    *dirs = xrealloc(*dirs, *dir_count * sizeof(char *));
+                    (*dirs)[*dir_count - 1] = argv[i];
+                }
+                break;
+            }
             if (MATCH_LONG("help"))            { print_usage(); exit(0); }
             else if (MATCH_LONG("short"))      { check_conflict(&set.format, "--short", cfg);
                                                  cfg->long_format = 0; cfg->long_format_explicit = 1; }
