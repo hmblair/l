@@ -153,6 +153,14 @@ static void col_format_lines(const FileEntry *fe, const Icons *icons, char *buf,
         } else {
             snprintf(buf, len, "%ld", fe->file_count);
         }
+    } else if (fe->is_image && fe->line_count >= 0) {
+        /* line_count holds megapixels * 10 */
+        double mp = fe->line_count / 10.0;
+        if (mp >= 10.0) {
+            snprintf(buf, len, "%.0fM", mp);
+        } else {
+            snprintf(buf, len, "%.1fM", mp);
+        }
     } else if (fe->line_count == L_LINE_COUNT_EXCEEDED) {
         snprintf(buf, len, ">1M");
     } else if (fe->line_count >= 1000000) {
@@ -267,6 +275,8 @@ void compute_diff_widths(TreeNode **trees, int tree_count, int *add_width, int *
 const char *get_count_icon(const FileEntry *fe, const Icons *icons) {
     if (fe->file_count >= 0) {
         return icons->count_files;
+    } else if (fe->is_image && fe->line_count >= 0) {
+        return icons->count_pixels;
     } else if (fe->line_count >= 0 || fe->line_count == L_LINE_COUNT_EXCEEDED) {
         return icons->count_lines;
     }
@@ -305,6 +315,7 @@ static const struct { const char *key; size_t offset; } icon_keys[] = {
     { "readonly",       offsetof(Icons, readonly) },
     { "count_files",    offsetof(Icons, count_files) },
     { "count_lines",    offsetof(Icons, count_lines) },
+    { "count_pixels",   offsetof(Icons, count_pixels) },
     { NULL, 0 }
 };
 
@@ -577,6 +588,70 @@ static int has_binary_extension(const char *path) {
     return 0;
 }
 
+/* Get image dimensions from file header. Returns megapixels * 10, or -1 on failure. */
+static int get_image_megapixels(const char *path) {
+    const char *dot = strrchr(path, '/');
+    dot = dot ? strrchr(dot, '.') : strrchr(path, '.');
+    if (!dot) return -1;
+    dot++;
+
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+
+    unsigned char header[32];
+    size_t n = fread(header, 1, sizeof(header), f);
+    if (n < 24) { fclose(f); return -1; }
+
+    int width = 0, height = 0;
+
+    /* PNG: 89 50 4E 47 0D 0A 1A 0A, width at 16, height at 20 (big-endian) */
+    if (header[0] == 0x89 && header[1] == 'P' && header[2] == 'N' && header[3] == 'G') {
+        width = (header[16] << 24) | (header[17] << 16) | (header[18] << 8) | header[19];
+        height = (header[20] << 24) | (header[21] << 16) | (header[22] << 8) | header[23];
+    }
+    /* GIF: 47 49 46, width at 6, height at 8 (little-endian) */
+    else if (header[0] == 'G' && header[1] == 'I' && header[2] == 'F') {
+        width = header[6] | (header[7] << 8);
+        height = header[8] | (header[9] << 8);
+    }
+    /* JPEG: FF D8 FF, need to find SOF marker */
+    else if (header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF) {
+        fseek(f, 2, SEEK_SET);
+        unsigned char buf[10];
+        while (fread(buf, 1, 2, f) == 2) {
+            if (buf[0] != 0xFF) break;
+            int marker = buf[1];
+            /* SOF0, SOF1, SOF2 markers contain dimensions */
+            if (marker == 0xC0 || marker == 0xC1 || marker == 0xC2) {
+                if (fread(buf, 1, 7, f) == 7) {
+                    height = (buf[3] << 8) | buf[4];
+                    width = (buf[5] << 8) | buf[6];
+                }
+                break;
+            }
+            /* Skip other segments */
+            if (fread(buf, 1, 2, f) != 2) break;
+            int len = (buf[0] << 8) | buf[1];
+            if (len < 2) break;
+            fseek(f, len - 2, SEEK_CUR);
+        }
+    }
+    /* BMP: 42 4D, width at 18, height at 22 (little-endian, signed for height) */
+    else if (header[0] == 'B' && header[1] == 'M' && n >= 26) {
+        width = header[18] | (header[19] << 8) | (header[20] << 16) | (header[21] << 24);
+        int h = header[22] | (header[23] << 8) | (header[24] << 16) | (header[25] << 24);
+        height = h < 0 ? -h : h;  /* Height can be negative (top-down DIB) */
+    }
+
+    fclose(f);
+
+    if (width <= 0 || height <= 0) return -1;
+
+    /* Return megapixels * 10 for one decimal place precision */
+    double mp = (double)width * height / 1000000.0;
+    return (int)(mp * 10 + 0.5);
+}
+
 static int is_binary_file(FILE *f) {
     unsigned char buf[L_BINARY_CHECK_SIZE];
     size_t n = fread(buf, 1, sizeof(buf), f);
@@ -748,7 +823,13 @@ int read_directory(const char *dir_path, FileList *list, const Config *cfg) {
                 fe->file_count = stats.file_count;
             } else if (fe->type == FTYPE_FILE || fe->type == FTYPE_EXEC ||
                        fe->type == FTYPE_SYMLINK || fe->type == FTYPE_SYMLINK_EXEC) {
-                fe->line_count = count_file_lines(fe->path);
+                int mp = get_image_megapixels(fe->path);
+                if (mp >= 0) {
+                    fe->line_count = mp;
+                    fe->is_image = 1;
+                } else {
+                    fe->line_count = count_file_lines(fe->path);
+                }
             }
         }
     }
@@ -969,7 +1050,13 @@ TreeNode *build_tree(const char *path, Column *cols,
 
     if (cfg->long_format && (type == FTYPE_FILE || type == FTYPE_EXEC ||
                              type == FTYPE_SYMLINK || type == FTYPE_SYMLINK_EXEC)) {
-        root->entry.line_count = count_file_lines(abs_path);
+        int mp = get_image_megapixels(abs_path);
+        if (mp >= 0) {
+            root->entry.line_count = mp;
+            root->entry.is_image = 1;
+        } else {
+            root->entry.line_count = count_file_lines(abs_path);
+        }
     }
 
     root->entry.size = st.st_size;

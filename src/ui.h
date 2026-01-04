@@ -86,6 +86,7 @@ typedef struct Icons {
     char readonly[L_MAX_ICON_LEN];
     char count_files[L_MAX_ICON_LEN];
     char count_lines[L_MAX_ICON_LEN];
+    char count_pixels[L_MAX_ICON_LEN];
     ExtIcon ext_icons[L_MAX_EXT_ICONS];
     int ext_count;
 } Icons;
@@ -99,7 +100,8 @@ typedef struct FileEntry {
     off_t size;
     long file_count;
     time_t mtime;
-    int line_count;
+    int line_count;      /* For images: megapixels * 10 (e.g., 125 = 12.5MP) */
+    int is_image;        /* 1 if line_count holds megapixels */
     int is_ignored;
     char git_status[3];
     int diff_added;
