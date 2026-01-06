@@ -179,6 +179,30 @@ int git_deleted_lines_direct(GitCache *cache, const char *dir_path) {
     return lines;
 }
 
+int git_path_in_ignored(GitCache *cache, const char *path, const char *git_root) {
+    if (!cache || !path || !git_root) return 0;
+
+    size_t root_len = strlen(git_root);
+    if (strncmp(path, git_root, root_len) != 0) return 0;
+
+    /* Walk up from path to git_root, checking each ancestor */
+    char check_path[PATH_MAX];
+    strncpy(check_path, path, sizeof(check_path) - 1);
+    check_path[sizeof(check_path) - 1] = '\0';
+
+    while (strlen(check_path) > root_len) {
+        const char *status = git_cache_get(cache, check_path);
+        if (status && strcmp(status, "!!") == 0) {
+            return 1;
+        }
+        /* Move up to parent directory */
+        char *last_slash = strrchr(check_path, '/');
+        if (!last_slash || last_slash <= check_path + root_len) break;
+        *last_slash = '\0';
+    }
+    return 0;
+}
+
 /* ============================================================================
  * Git Branch Functions
  * ============================================================================ */

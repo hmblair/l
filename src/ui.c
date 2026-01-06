@@ -977,7 +977,7 @@ static int should_skip_dir(const char *name, int is_ignored, const Config *cfg) 
 
 static void build_tree_children(TreeNode *parent, int depth, Column *cols,
                                  GitCache *git, const Config *cfg, const Icons *icons,
-                                 int in_git_repo) {
+                                 int in_git_repo, int parent_is_ignored) {
     if (depth >= cfg->max_depth) return;
     if (access(parent->entry.path, R_OK) != 0) return;
 
@@ -1047,7 +1047,8 @@ static void build_tree_children(TreeNode *parent, int depth, Column *cols,
             child->entry.diff_removed = git_node->lines_removed;
         }
         const char *git_status = git_node ? git_node->status : NULL;
-        child->entry.is_ignored = (git_status && strcmp(git_status, "!!") == 0) ||
+        child->entry.is_ignored = parent_is_ignored ||
+                                   (git_status && strcmp(git_status, "!!") == 0) ||
                                    strcmp(child->entry.name, ".git") == 0 ||
                                    is_submodule[i];
 
@@ -1060,7 +1061,7 @@ static void build_tree_children(TreeNode *parent, int depth, Column *cols,
 
             int child_in_git_repo = in_git_repo || is_git_repo_root[i];
 
-            build_tree_children(child, depth + 1, cols, git, cfg, icons, child_in_git_repo);
+            build_tree_children(child, depth + 1, cols, git, cfg, icons, child_in_git_repo, child->entry.is_ignored);
 
             /* Set deleted lines for directory (from deleted files directly in it) */
             child->entry.diff_removed = git_deleted_lines_direct(git, child->entry.path);
@@ -1137,14 +1138,15 @@ TreeNode *build_tree(const char *path, Column *cols,
 
     const char *git_status = git_cache_get(git, abs_path);
     root->entry.is_ignored = (git_status && strcmp(git_status, "!!") == 0) ||
-                              strcmp(root->entry.name, ".git") == 0;
+                              strcmp(root->entry.name, ".git") == 0 ||
+                              (in_git_repo && git_path_in_ignored(git, abs_path, git_root));
 
     if (cfg->long_format && cols) {
         columns_update_widths(cols, &root->entry, icons);
     }
 
     if (type == FTYPE_DIR || type == FTYPE_SYMLINK_DIR) {
-        build_tree_children(root, 0, cols, git, cfg, icons, in_git_repo);
+        build_tree_children(root, 0, cols, git, cfg, icons, in_git_repo, root->entry.is_ignored);
 
         if (cfg->long_format && cfg->show_hidden) {
             off_t total_size = 0;

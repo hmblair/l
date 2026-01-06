@@ -81,6 +81,9 @@ int git_count_deleted_direct(GitCache *cache, const char *dir_path);
 /* Sum deleted lines directly in a directory (not recursive) */
 int git_deleted_lines_direct(GitCache *cache, const char *dir_path);
 
+/* Check if a path is inside an ignored directory (walks up ancestors) */
+int git_path_in_ignored(GitCache *cache, const char *path, const char *git_root);
+
 /* ============================================================================
  * Git Branch Functions
  * ============================================================================ */
