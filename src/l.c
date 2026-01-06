@@ -54,7 +54,7 @@ static void print_usage(void) {
     printf("  --list          Flat list output (no tree structure)\n");
     printf("  --no-icons      Hide file/folder/git icons\n");
     printf("  -g              Show only git-modified/untracked files (implies -at)\n");
-    printf("  -f, --filter PATTERN  Show only files/folders matching pattern\n");
+    printf("  -f, --filter PATTERN  Show only files/folders matching pattern (implies -at)\n");
     printf("\n");
     printf("Sorting:\n");
     printf("  -S              Sort by size (largest first)\n");
@@ -95,8 +95,7 @@ static int apply_short_flag(char flag, Config *cfg, OptionSet *set) {
         case 't': check_conflict(&set->depth, "-t", cfg);
                   cfg->max_depth = L_MAX_DEPTH; return 1;
         case 'p': cfg->show_ancestry = 1; return 1;
-        case 'g': check_conflict(&set->depth, "-g", cfg);
-                  cfg->git_only = 1; cfg->show_hidden = 1; cfg->max_depth = L_MAX_DEPTH; return 1;
+        case 'g': cfg->git_only = 1; cfg->show_hidden = 1; cfg->max_depth = L_MAX_DEPTH; return 1;
         case 'S': check_conflict(&set->sort, "-S", cfg);
                   cfg->sort_by = SORT_SIZE; return 1;
         case 'T': check_conflict(&set->sort, "-T", cfg);
@@ -201,6 +200,8 @@ static void parse_args(int argc, char **argv, Config *cfg,
             else if ((val = match_opt_with_arg(arg, &i, argc, argv, 'f', "filter"))) {
                 check_conflict(&set.filter, "--filter", cfg);
                 cfg->grep_pattern = val;
+                cfg->show_hidden = 1;
+                cfg->max_depth = L_MAX_DEPTH;
             }
             else {
                 fprintf(stderr, "%sError:%s Unknown option: %s\n",
@@ -217,6 +218,8 @@ static void parse_args(int argc, char **argv, Config *cfg,
         } else if ((val = match_opt_with_arg(arg, &i, argc, argv, 'f', "filter"))) {
             check_conflict(&set.filter, "-f", cfg);
             cfg->grep_pattern = val;
+            cfg->show_hidden = 1;
+            cfg->max_depth = L_MAX_DEPTH;
         } else {
             /* Combined short flags like -alt */
             for (int j = 1; arg[j]; j++) {
