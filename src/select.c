@@ -300,6 +300,18 @@ static void flatten_all(SelectState *state, TreeNode **trees, int tree_count,
     }
 }
 
+/* Recalculate column widths based on visible (flattened) items only */
+static void recalculate_columns(SelectState *state, Column *cols, const Icons *icons) {
+    /* Reset to minimum widths */
+    for (int i = 0; i < NUM_COLUMNS; i++) {
+        cols[i].width = 1;
+    }
+    /* Update based on visible items */
+    for (int i = 0; i < state->count; i++) {
+        columns_update_widths(cols, &state->items[i].node->entry, icons);
+    }
+}
+
 /* ============================================================================
  * Rendering
  * ============================================================================ */
@@ -480,6 +492,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                     collapsed_toggle(&collapsed, current->node->entry.path);
                     const char *cur_path = current->node->entry.path;
                     flatten_all(&state, trees, tree_count, ctx->cfg, &collapsed);
+                    recalculate_columns(&state, ctx->columns, ctx->icons);
                     /* Find the cursor position again */
                     for (int i = 0; i < state.count; i++) {
                         if (strcmp(state.items[i].node->entry.path, cur_path) == 0) {
@@ -507,6 +520,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                     }
                     const char *cur_path = current->node->entry.path;
                     flatten_all(&state, trees, tree_count, ctx->cfg, &collapsed);
+                    recalculate_columns(&state, ctx->columns, ctx->icons);
                     /* Find the cursor position again */
                     for (int i = 0; i < state.count; i++) {
                         if (strcmp(state.items[i].node->entry.path, cur_path) == 0) {
@@ -535,6 +549,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                     }
                     const char *cur_path = current->node->entry.path;
                     flatten_all(&state, trees, tree_count, ctx->cfg, &collapsed);
+                    recalculate_columns(&state, ctx->columns, ctx->icons);
                     /* Find the cursor position again */
                     for (int i = 0; i < state.count; i++) {
                         if (strcmp(state.items[i].node->entry.path, cur_path) == 0) {
