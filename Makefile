@@ -55,7 +55,7 @@ UI_OBJS = $(SRCDIR)/ui.o
 DAEMON_OBJS = $(SRCDIR)/daemon.o
 
 # Main targets
-all: $(BINDIR)/l $(BINDIR)/l-cached
+all: $(BINDIR)/l $(BINDIR)/l-cached $(BINDIR)/cl
 
 $(BINDIR):
 	mkdir -p $(BINDIR)
@@ -65,6 +65,9 @@ $(BINDIR)/l: $(SRCDIR)/l.o $(COMMON_OBJS) $(CACHE_CLIENT_OBJS) $(GIT_OBJS) $(UI_
 
 $(BINDIR)/l-cached: $(SRCDIR)/ld.o $(COMMON_OBJS) $(CACHE_DAEMON_OBJS) | $(BINDIR)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
+
+$(BINDIR)/cl: $(SRCDIR)/cl | $(BINDIR)
+	ln -sf ../$(SRCDIR)/cl $@
 
 # Object files
 $(SRCDIR)/common.o: $(SRCDIR)/common.c $(SRCDIR)/common.h
@@ -117,6 +120,6 @@ uninstall:
 	@echo "Uninstalled l"
 
 clean:
-	rm -f $(SRCDIR)/*.o $(BINDIR)/l $(BINDIR)/l-cached
+	rm -f $(SRCDIR)/*.o $(BINDIR)/l $(BINDIR)/l-cached $(BINDIR)/cl
 
 .PHONY: all install uninstall clean
