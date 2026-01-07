@@ -210,20 +210,6 @@ static void state_free(SelectState *state) {
  * Tree Flattening
  * ============================================================================ */
 
-static int is_filtering_active(const Config *cfg) {
-    return cfg->git_only || cfg->grep_pattern;
-}
-
-static int node_is_visible(const TreeNode *node, const Config *cfg) {
-    if (cfg->git_only && !node->has_git_status) return 0;
-    if (cfg->grep_pattern && !node->matches_grep) return 0;
-    return 1;
-}
-
-static int is_directory(const TreeNode *node) {
-    return node->entry.type == FTYPE_DIR || node->entry.type == FTYPE_SYMLINK_DIR;
-}
-
 /* Count visible children for a node */
 static int count_visible_children(const TreeNode *node, const Config *cfg,
                                    CollapsedSet *collapsed) {
@@ -348,7 +334,7 @@ static void render_line(SelectState *state, int index, int is_selected,
 
     /* Adjust has_visible_children based on collapsed state */
     int has_visible = item->has_visible_children;
-    if (is_directory(item->node) && collapsed_contains(collapsed, item->node->entry.path)) {
+    if (node_is_directory(item->node) && collapsed_contains(collapsed, item->node->entry.path)) {
         /* Show as having children even when collapsed (so we can expand) */
         has_visible = (item->node->child_count > 0);
     }
@@ -485,7 +471,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
 
             case KEY_LEFT:
                 /* Collapse current directory (or parent if file/already collapsed) */
-                if (is_directory(current->node) &&
+                if (node_is_directory(current->node) &&
                     !collapsed_contains(&collapsed, current->node->entry.path) &&
                     current->node->child_count > 0) {
                     /* Collapse this directory */
@@ -506,7 +492,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
 
             case KEY_RIGHT:
                 /* Expand current directory if collapsed or not loaded */
-                if (is_directory(current->node)) {
+                if (node_is_directory(current->node)) {
                     if (collapsed_contains(&collapsed, current->node->entry.path)) {
                         /* Was manually collapsed - uncollapse */
                         collapsed_toggle(&collapsed, current->node->entry.path);
@@ -533,7 +519,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                 break;
 
             case KEY_OPEN:
-                if (is_directory(current->node)) {
+                if (node_is_directory(current->node)) {
                     /* Toggle expand/collapse for directories */
                     if (current->node->child_count > 0) {
                         /* Has children - toggle collapsed state */

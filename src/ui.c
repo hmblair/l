@@ -210,14 +210,18 @@ static void columns_reset_widths(Column *cols) {
     }
 }
 
-static int is_filtering_active(const Config *cfg) {
+int is_filtering_active(const Config *cfg) {
     return cfg->git_only || cfg->grep_pattern;
 }
 
-static int node_is_visible(const TreeNode *node, const Config *cfg) {
+int node_is_visible(const TreeNode *node, const Config *cfg) {
     if (cfg->git_only && !node->has_git_status) return 0;
     if (cfg->grep_pattern && !node->matches_grep) return 0;
     return 1;
+}
+
+int node_is_directory(const TreeNode *node) {
+    return node->entry.type == FTYPE_DIR || node->entry.type == FTYPE_SYMLINK_DIR;
 }
 
 static void columns_update_visible_recursive(Column *cols, const TreeNode *node,

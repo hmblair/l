@@ -207,6 +207,14 @@ void file_list_free(FileList *list);
 int read_directory(const char *dir_path, FileList *list, const Config *cfg);
 
 /* ============================================================================
+ * Tree Visibility Helpers
+ * ============================================================================ */
+
+int is_filtering_active(const Config *cfg);
+int node_is_visible(const TreeNode *node, const Config *cfg);
+int node_is_directory(const TreeNode *node);
+
+/* ============================================================================
  * Tree Building and Printing
  * ============================================================================ */
 
