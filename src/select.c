@@ -57,6 +57,8 @@ typedef enum {
     KEY_NONE,
     KEY_UP,
     KEY_DOWN,
+    KEY_LEFT,
+    KEY_RIGHT,
     KEY_ENTER,
     KEY_QUIT,
     KEY_OPEN,
@@ -71,6 +73,8 @@ static KeyPress term_read_key(void) {
     if (c == 'q' || c == 'Q') return KEY_QUIT;
     if (c == 'k' || c == 'K') return KEY_UP;
     if (c == 'j' || c == 'J') return KEY_DOWN;
+    if (c == 'h' || c == 'H') return KEY_LEFT;
+    if (c == 'l' || c == 'L') return KEY_RIGHT;
     if (c == 'o' || c == 'O') return KEY_OPEN;
     if (c == 'y' || c == 'Y') return KEY_YANK;
 
@@ -87,6 +91,8 @@ static KeyPress term_read_key(void) {
                 if (read(STDIN_FILENO, &seq[1], 1) == 1) {
                     if (seq[1] == 'A') return KEY_UP;
                     if (seq[1] == 'B') return KEY_DOWN;
+                    if (seq[1] == 'D') return KEY_LEFT;
+                    if (seq[1] == 'C') return KEY_RIGHT;
                 }
             }
         }
@@ -94,6 +100,53 @@ static KeyPress term_read_key(void) {
         return KEY_QUIT;
     }
     return KEY_NONE;
+}
+
+/* ============================================================================
+ * Collapsed Directory Tracking
+ * ============================================================================ */
+
+#define MAX_COLLAPSED 256
+
+typedef struct {
+    char *paths[MAX_COLLAPSED];
+    int count;
+} CollapsedSet;
+
+static void collapsed_init(CollapsedSet *set) {
+    set->count = 0;
+}
+
+static void collapsed_free(CollapsedSet *set) {
+    for (int i = 0; i < set->count; i++) {
+        free(set->paths[i]);
+    }
+    set->count = 0;
+}
+
+static int collapsed_contains(CollapsedSet *set, const char *path) {
+    for (int i = 0; i < set->count; i++) {
+        if (strcmp(set->paths[i], path) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void collapsed_toggle(CollapsedSet *set, const char *path) {
+    /* If already collapsed, remove it (expand) */
+    for (int i = 0; i < set->count; i++) {
+        if (strcmp(set->paths[i], path) == 0) {
+            free(set->paths[i]);
+            set->paths[i] = set->paths[set->count - 1];
+            set->count--;
+            return;
+        }
+    }
+    /* Not found, add it (collapse) */
+    if (set->count < MAX_COLLAPSED) {
+        set->paths[set->count++] = strdup(path);
+    }
 }
 
 /* ============================================================================
@@ -130,6 +183,11 @@ static void state_init(SelectState *state) {
     state->first_render = 1;
 }
 
+static void state_clear(SelectState *state) {
+    state->count = 0;
+    /* Keep capacity and allocated memory for reuse */
+}
+
 static void state_add(SelectState *state, TreeNode *node, int depth,
                       int has_visible_children, int *continuation) {
     if (state->count >= state->capacity) {
@@ -162,8 +220,17 @@ static int node_is_visible(const TreeNode *node, const Config *cfg) {
     return 1;
 }
 
+static int is_directory(const TreeNode *node) {
+    return node->entry.type == FTYPE_DIR || node->entry.type == FTYPE_SYMLINK_DIR;
+}
+
 /* Count visible children for a node */
-static int count_visible_children(const TreeNode *node, const Config *cfg) {
+static int count_visible_children(const TreeNode *node, const Config *cfg,
+                                   CollapsedSet *collapsed) {
+    /* If collapsed, report no visible children */
+    if (collapsed && collapsed_contains(collapsed, node->entry.path)) {
+        return 0;
+    }
     int filtering = is_filtering_active(cfg);
     int count = 0;
     for (size_t i = 0; i < node->child_count; i++) {
@@ -175,23 +242,27 @@ static int count_visible_children(const TreeNode *node, const Config *cfg) {
 }
 
 static void flatten_children(SelectState *state, const TreeNode *parent,
-                             int depth, int *continuation, const Config *cfg);
+                             int depth, int *continuation, const Config *cfg,
+                             CollapsedSet *collapsed);
 
 static void flatten_node(SelectState *state, TreeNode *node, int depth,
-                         int *continuation, const Config *cfg) {
-    int has_visible_children = count_visible_children(node, cfg) > 0;
+                         int *continuation, const Config *cfg,
+                         CollapsedSet *collapsed) {
+    int has_visible_children = count_visible_children(node, cfg, collapsed) > 0;
 
     /* Add this node */
     state_add(state, node, depth, has_visible_children, continuation);
 
-    /* Recurse into children */
-    if (node->child_count > 0) {
-        flatten_children(state, node, depth, continuation, cfg);
+    /* Recurse into children (unless collapsed) */
+    int is_collapsed = collapsed && collapsed_contains(collapsed, node->entry.path);
+    if (node->child_count > 0 && !is_collapsed) {
+        flatten_children(state, node, depth, continuation, cfg, collapsed);
     }
 }
 
 static void flatten_children(SelectState *state, const TreeNode *parent,
-                             int depth, int *continuation, const Config *cfg) {
+                             int depth, int *continuation, const Config *cfg,
+                             CollapsedSet *collapsed) {
     int filtering = is_filtering_active(cfg);
 
     /* Build list of visible children indices */
@@ -213,10 +284,20 @@ static void flatten_children(SelectState *state, const TreeNode *parent,
         /* Set continuation for this depth */
         continuation[depth] = !is_last;
 
-        flatten_node(state, child, depth + 1, continuation, cfg);
+        flatten_node(state, child, depth + 1, continuation, cfg, collapsed);
     }
 
     free(visible_indices);
+}
+
+static void flatten_all(SelectState *state, TreeNode **trees, int tree_count,
+                        const Config *cfg, CollapsedSet *collapsed) {
+    int continuation[L_MAX_DEPTH] = {0};
+    state_clear(state);
+    for (int i = 0; i < tree_count; i++) {
+        memset(continuation, 0, sizeof(continuation));
+        flatten_node(state, trees[i], 0, continuation, cfg, collapsed);
+    }
 }
 
 /* ============================================================================
@@ -232,7 +313,8 @@ static void get_terminal_size(int *rows) {
     }
 }
 
-static void render_line(SelectState *state, int index, int is_selected, PrintContext *ctx) {
+static void render_line(SelectState *state, int index, int is_selected,
+                        PrintContext *ctx, CollapsedSet *collapsed) {
     FlatNode *item = &state->items[index];
 
     /* Clear line */
@@ -252,6 +334,13 @@ static void render_line(SelectState *state, int index, int is_selected, PrintCon
     /* Copy continuation state into context */
     memcpy(ctx->continuation, item->continuation, L_MAX_DEPTH * sizeof(int));
 
+    /* Adjust has_visible_children based on collapsed state */
+    int has_visible = item->has_visible_children;
+    if (is_directory(item->node) && collapsed_contains(collapsed, item->node->entry.path)) {
+        /* Show as having children even when collapsed (so we can expand) */
+        has_visible = (item->node->child_count > 0);
+    }
+
     /* Create a modified context with the line prefix */
     PrintContext line_ctx = *ctx;
     line_ctx.line_prefix = prefix;
@@ -259,10 +348,10 @@ static void render_line(SelectState *state, int index, int is_selected, PrintCon
     line_ctx.selected = is_selected;
 
     /* Call the real print_entry */
-    print_entry(&item->node->entry, item->depth, item->has_visible_children, &line_ctx);
+    print_entry(&item->node->entry, item->depth, has_visible, &line_ctx);
 }
 
-static void render_view(SelectState *state, PrintContext *ctx) {
+static void render_view(SelectState *state, PrintContext *ctx, CollapsedSet *collapsed) {
     int max_visible = state->term_rows - 2;  /* Leave room for status line */
     if (max_visible < 1) max_visible = 1;
     if (max_visible > state->count) max_visible = state->count;
@@ -275,26 +364,38 @@ static void render_view(SelectState *state, PrintContext *ctx) {
     }
 
     /* Move cursor up to top of our display area (if not first render) */
-    if (!state->first_render && state->visible_lines > 1) {
-        printf("\033[%dA", state->visible_lines - 1);
+    int old_visible = state->visible_lines;
+    if (!state->first_render && old_visible > 1) {
+        printf("\033[%dA", old_visible - 1);
     }
     state->first_render = 0;
 
     /* Render visible lines */
     int end = state->scroll_offset + max_visible;
     if (end > state->count) end = state->count;
+    int new_visible = (end - state->scroll_offset) + 1;  /* +1 for status */
 
     for (int i = state->scroll_offset; i < end; i++) {
-        render_line(state, i, i == state->cursor, ctx);
+        render_line(state, i, i == state->cursor, ctx, collapsed);
     }
 
     /* Status line */
-    printf("\r\033[K%s[j/k] move  [Enter] select  [o] open  [y] yank  [q] quit%s",
+    printf("\r\033[K%s[j/k] move  [h/l] collapse/expand  [Enter] select  [o] open  [y] yank  [q] quit%s",
            COLOR_GREY, COLOR_RESET);
+
+    /* Clear any extra lines from previous render (when tree shrinks) */
+    if (old_visible > new_visible) {
+        for (int i = 0; i < old_visible - new_visible; i++) {
+            printf("\n\033[K");
+        }
+        /* Move back up to status line position */
+        printf("\033[%dA", old_visible - new_visible);
+    }
+
     fflush(stdout);
 
     /* Track how many lines we printed */
-    state->visible_lines = (end - state->scroll_offset) + 1;
+    state->visible_lines = new_visible;
 }
 
 /* ============================================================================
@@ -326,18 +427,18 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
     SelectState state;
     state_init(&state);
 
-    /* We need a continuation array for flattening and rendering */
+    CollapsedSet collapsed;
+    collapsed_init(&collapsed);
+
+    /* We need a continuation array for rendering */
     int continuation[L_MAX_DEPTH] = {0};
 
     /* Flatten all trees into visible node list */
-    for (int i = 0; i < tree_count; i++) {
-        /* For root nodes, start fresh */
-        memset(continuation, 0, sizeof(continuation));
-        flatten_node(&state, trees[i], 0, continuation, ctx->cfg);
-    }
+    flatten_all(&state, trees, tree_count, ctx->cfg, &collapsed);
 
     if (state.count == 0) {
         state_free(&state);
+        collapsed_free(&collapsed);
         return NULL;
     }
 
@@ -351,50 +452,106 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
 
     /* Enter raw mode and render */
     term_enable_raw();
-    render_view(&state, &render_ctx);
+    render_view(&state, &render_ctx, &collapsed);
 
     char *result = NULL;
 
     while (1) {
         KeyPress key = term_read_key();
+        FlatNode *current = &state.items[state.cursor];
 
         switch (key) {
             case KEY_UP:
                 state.cursor = (state.cursor - 1 + state.count) % state.count;
-                render_view(&state, &render_ctx);
+                render_view(&state, &render_ctx, &collapsed);
                 break;
 
             case KEY_DOWN:
                 state.cursor = (state.cursor + 1) % state.count;
-                render_view(&state, &render_ctx);
+                render_view(&state, &render_ctx, &collapsed);
+                break;
+
+            case KEY_LEFT:
+                /* Collapse current directory (or parent if file/already collapsed) */
+                if (is_directory(current->node) &&
+                    !collapsed_contains(&collapsed, current->node->entry.path) &&
+                    current->node->child_count > 0) {
+                    /* Collapse this directory */
+                    collapsed_toggle(&collapsed, current->node->entry.path);
+                    const char *cur_path = current->node->entry.path;
+                    flatten_all(&state, trees, tree_count, ctx->cfg, &collapsed);
+                    /* Find the cursor position again */
+                    for (int i = 0; i < state.count; i++) {
+                        if (strcmp(state.items[i].node->entry.path, cur_path) == 0) {
+                            state.cursor = i;
+                            break;
+                        }
+                    }
+                    render_view(&state, &render_ctx, &collapsed);
+                }
+                break;
+
+            case KEY_RIGHT:
+                /* Expand current directory if collapsed */
+                if (is_directory(current->node) &&
+                    collapsed_contains(&collapsed, current->node->entry.path)) {
+                    collapsed_toggle(&collapsed, current->node->entry.path);
+                    const char *cur_path = current->node->entry.path;
+                    flatten_all(&state, trees, tree_count, ctx->cfg, &collapsed);
+                    /* Find the cursor position again */
+                    for (int i = 0; i < state.count; i++) {
+                        if (strcmp(state.items[i].node->entry.path, cur_path) == 0) {
+                            state.cursor = i;
+                            break;
+                        }
+                    }
+                    render_view(&state, &render_ctx, &collapsed);
+                }
+                break;
+
+            case KEY_OPEN:
+                if (is_directory(current->node)) {
+                    /* Toggle expand/collapse for directories */
+                    if (current->node->child_count > 0) {
+                        collapsed_toggle(&collapsed, current->node->entry.path);
+                        const char *cur_path = current->node->entry.path;
+                        flatten_all(&state, trees, tree_count, ctx->cfg, &collapsed);
+                        /* Find the cursor position again */
+                        for (int i = 0; i < state.count; i++) {
+                            if (strcmp(state.items[i].node->entry.path, cur_path) == 0) {
+                                state.cursor = i;
+                                break;
+                            }
+                        }
+                        render_view(&state, &render_ctx, &collapsed);
+                    }
+                } else {
+                    /* Open file in editor */
+                    const char *editor = getenv("EDITOR");
+                    if (!editor) editor = "vim";
+                    char cmd[PATH_MAX + 64];
+
+                    printf("\r\033[K\n");
+                    term_disable_raw();
+
+                    snprintf(cmd, sizeof(cmd), "%s \"%s\"", editor,
+                             current->node->entry.path);
+                    system(cmd);
+
+                    state_free(&state);
+                    collapsed_free(&collapsed);
+                    return NULL;
+                }
                 break;
 
             case KEY_ENTER:
-                result = strdup(state.items[state.cursor].node->entry.path);
+                result = strdup(current->node->entry.path);
                 goto cleanup;
 
-            case KEY_OPEN: {
-                const char *editor = getenv("EDITOR");
-                if (!editor) editor = "vim";
-                char cmd[PATH_MAX + 64];
-
-                /* Clear display and exit raw mode before opening editor */
-                printf("\r\033[K\n");
-                term_disable_raw();
-
-                snprintf(cmd, sizeof(cmd), "%s \"%s\"", editor,
-                         state.items[state.cursor].node->entry.path);
-                system(cmd);
-
-                /* Exit after opening */
-                state_free(&state);
-                return NULL;
-            }
-
             case KEY_YANK: {
-                copy_to_clipboard(state.items[state.cursor].node->entry.path);
+                copy_to_clipboard(current->node->entry.path);
                 printf("\r\033[K%sYanked: %s%s\n", COLOR_GREEN,
-                       state.items[state.cursor].node->entry.path, COLOR_RESET);
+                       current->node->entry.path, COLOR_RESET);
                 fflush(stdout);
                 goto cleanup;
             }
@@ -411,5 +568,6 @@ cleanup:
     printf("\r\033[K\n");
     term_disable_raw();
     state_free(&state);
+    collapsed_free(&collapsed);
     return result;
 }
