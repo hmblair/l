@@ -17,7 +17,7 @@ _l() {
         '(-t --tree)'{-t,--tree}'[Show full tree]' \
         '(-d --depth)'{-d,--depth}'[Limit tree depth]:depth:' \
         '(-p --path)'{-p,--path}'[Show ancestry from ~ (or /) to target]' \
-        '--expand-all[Expand all directories (ignore NO_EXPAND list)]' \
+        '(-e --expand-all)'{-e,--expand-all}'[Expand all directories (ignore skip list)]' \
         '--list[Flat list output (no tree structure)]' \
         '--no-icons[Hide file/folder/git icons]' \
         '(-c --color-all)'{-c,--color-all}"[Don't gray out gitignored files]" \

@@ -50,7 +50,7 @@ static void print_usage(void) {
     printf("  -t, --tree      Show full tree (depth %d)\n", L_MAX_DEPTH);
     printf("  -d, --depth INT Limit tree depth\n");
     printf("  -p, --path      Show ancestry from ~ (or /) to target\n");
-    printf("  --expand-all    Expand all directories (ignore skip list)\n");
+    printf("  -e, --expand-all  Expand all directories (ignore skip list)\n");
     printf("  --list          Flat list output (no tree structure)\n");
     printf("  --no-icons      Hide file/folder/git icons\n");
     printf("  -c, --color-all   Don't gray out gitignored files\n");
@@ -96,6 +96,7 @@ static int apply_short_flag(char flag, Config *cfg, OptionSet *set) {
         case 't': check_conflict(&set->depth, "-t", cfg);
                   cfg->max_depth = L_MAX_DEPTH; return 1;
         case 'p': cfg->show_ancestry = 1; return 1;
+        case 'e': cfg->expand_all = 1; return 1;
         case 'c': cfg->color_all = 1; return 1;
         case 'g': cfg->git_only = 1; cfg->show_hidden = 1; cfg->max_depth = L_MAX_DEPTH; return 1;
         case 'S': check_conflict(&set->sort, "-S", cfg);
