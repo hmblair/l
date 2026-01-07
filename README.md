@@ -6,10 +6,11 @@ Enhanced directory listing with tree view, icons, and git integration.
 
 - Tree view with Unicode box-drawing characters
 - Nerd Font icons for files, directories, and git status
-- Git integration (branch, modified/untracked indicators)
+- Git integration (branch, modified/untracked indicators, diff stats)
+- Interactive selection mode with vim-like navigation
 - Background daemon for caching directory sizes
 - Long format with size, line count, and modification time
-- Configurable depth limiting and sorting
+- Configurable depth limiting, filtering, and sorting
 
 ## Installation
 
@@ -51,18 +52,43 @@ l [options] [path...]
 | Flag | Description |
 |------|-------------|
 | `-a` | Show hidden files |
-| `-l, --long` | Long format (size, lines, time) |
+| `-l, --long` | Long format (size, lines, time) - default |
 | `-s, --short` | Short format (no metadata) |
-| `-t, --tree` | Show full tree |
+| `-t, --tree` | Show full tree (depth 50) |
 | `-d, --depth N` | Limit tree depth |
+| `-e, --expand-all` | Expand all directories (ignore skip list) |
 | `-p, --path` | Show ancestry from ~ to target |
+| `-i, --interactive` | Interactive selection mode |
 | `-g` | Git-only mode (modified/untracked files) |
-| `-S` | Sort by size |
-| `-T` | Sort by time |
-| `-N` | Sort by name |
-| `-r` | Reverse sort order |
-| `--daemon` | Manage size caching daemon |
+| `-f, --filter PATTERN` | Filter files matching pattern |
+| `-c, --color-all` | Don't gray out gitignored files |
+| `--list` | Flat list output (no tree structure) |
 | `--no-icons` | Hide icons |
+| `--daemon` | Manage size caching daemon |
+
+### Sorting
+
+| Flag | Description |
+|------|-------------|
+| `-S` | Sort by size (largest first) |
+| `-T` | Sort by time (newest first) |
+| `-N` | Sort by name (alphabetical) |
+| `-r` | Reverse sort order |
+
+### Interactive Mode
+
+Press `-i` to enter interactive selection mode:
+
+| Key | Action |
+|-----|--------|
+| `j/k` or arrows | Navigate up/down |
+| `h/l` or arrows | Collapse/expand directories |
+| `o` | Open file in `$EDITOR` or toggle directory |
+| `Enter` | Print selected path and exit |
+| `y` | Copy path to clipboard |
+| `q` or `Esc` | Quit |
+
+Directories can be dynamically expanded beyond the initial depth limit.
 
 ### Examples
 
@@ -71,6 +97,8 @@ l                    # Current directory
 l -at                # All files with full tree
 l -al ~/projects     # Long format, hidden files
 l -g                 # Only git-modified files
+l -f "*.go"          # Filter to Go files
+l -i                 # Interactive selection
 l -ST                # Sort by size, then time
 l --daemon           # Configure background caching
 ```
