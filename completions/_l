@@ -23,6 +23,7 @@ _l() {
         '(-c --color-all)'{-c,--color-all}"[Don't gray out gitignored files]" \
         '-g[Show only git-modified/untracked files (implies -at)]' \
         '(-f --filter)'{-f,--filter}'[Show only files/folders matching pattern (implies -at)]:pattern:' \
+        '(-i --interactive)'{-i,--interactive}'[Interactive selection mode]' \
         '-S[Sort by size (largest first)]' \
         '-T[Sort by modification time (newest first)]' \
         '-N[Sort by name (alphabetical)]' \

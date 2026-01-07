@@ -22,6 +22,7 @@ readonly = ""
 count_files = ""
 count_lines = "󰍜"
 count_pixels = "󰹑"
+cursor = "❯"
 [extensions]
 jpg,png,fig,webp,bpm,ico = ""
 mp3,wav,flac,ogg,m4a = "󰝚"

@@ -10,6 +10,7 @@
 #include "git.h"
 #include "ui.h"
 #include "daemon.h"
+#include "select.h"
 
 #ifdef HAVE_LIBGIT2
 #include <git2.h>
@@ -56,6 +57,7 @@ static void print_usage(void) {
     printf("  -c, --color-all   Don't gray out gitignored files\n");
     printf("  -g              Show only git-modified/untracked files (implies -at)\n");
     printf("  -f, --filter PATTERN  Show only files/folders matching pattern (implies -at)\n");
+    printf("  -i, --interactive     Interactive selection mode\n");
     printf("\n");
     printf("Sorting:\n");
     printf("  -S              Sort by size (largest first)\n");
@@ -98,6 +100,7 @@ static int apply_short_flag(char flag, Config *cfg, OptionSet *set) {
         case 'p': cfg->show_ancestry = 1; return 1;
         case 'e': cfg->expand_all = 1; return 1;
         case 'c': cfg->color_all = 1; return 1;
+        case 'i': cfg->interactive = 1; return 1;
         case 'g': cfg->git_only = 1; cfg->show_hidden = 1; cfg->max_depth = L_MAX_DEPTH; return 1;
         case 'S': check_conflict(&set->sort, "-S", cfg);
                   cfg->sort_by = SORT_SIZE; return 1;
@@ -196,6 +199,7 @@ static void parse_args(int argc, char **argv, Config *cfg,
             else if (MATCH_LONG("list"))       { cfg->list_mode = 1; }
             else if (MATCH_LONG("no-icons"))   { cfg->no_icons = 1; }
             else if (MATCH_LONG("color-all")) { cfg->color_all = 1; }
+            else if (MATCH_LONG("interactive")) { cfg->interactive = 1; }
             /* Options with arguments */
             else if ((val = match_opt_with_arg(arg, &i, argc, argv, 'd', "depth"))) {
                 check_conflict(&set.depth, "--depth", cfg);
@@ -288,6 +292,7 @@ int main(int argc, char **argv) {
         .git_only = 0,
         .show_ancestry = 0,
         .color_all = 0,
+        .interactive = 0,
         .is_tty = isatty(STDOUT_FILENO),
         .sort_by = SORT_NONE,
         .cwd = "",
@@ -391,32 +396,10 @@ int main(int argc, char **argv) {
         compute_diff_widths(trees, dir_count, &diff_add_width, &diff_del_width, &cfg);
     }
 
-    /* Print all trees (using consistent column widths) */
-    for (int i = 0; i < dir_count; i++) {
-        /* In git-only mode, show message if no changes and in sync with upstream */
-        if (cfg.git_only && !trees[i]->has_git_status) {
-            int in_sync = 1;
-            if (path_is_git_root(trees[i]->entry.path)) {
-                char *branch = git_get_branch(trees[i]->entry.path);
-                if (branch) {
-                    char local_hash[64], remote_hash[64];
-                    char local_ref[128], remote_ref[128];
-                    snprintf(local_ref, sizeof(local_ref), "refs/heads/%s", branch);
-                    snprintf(remote_ref, sizeof(remote_ref), "refs/remotes/origin/%s", branch);
-                    git_read_ref(trees[i]->entry.path, local_ref, local_hash, sizeof(local_hash));
-                    if (git_read_ref(trees[i]->entry.path, remote_ref, remote_hash, sizeof(remote_hash))) {
-                        in_sync = (strcmp(local_hash, remote_hash) == 0);
-                    }
-                    free(branch);
-                }
-            }
-            if (in_sync) {
-                printf("%sUp to date.%s\n", COLOR_GREEN, COLOR_RESET);
-                continue;
-            }
-        }
+    /* Interactive selection mode */
+    if (cfg.interactive) {
         PrintContext ctx = {
-            .git = &gits[i],
+            .git = &gits[0],
             .icons = &icons,
             .cfg = &cfg,
             .columns = cfg.long_format ? cols : NULL,
@@ -424,7 +407,61 @@ int main(int argc, char **argv) {
             .diff_add_width = diff_add_width,
             .diff_del_width = diff_del_width
         };
-        print_tree_node(trees[i], 0, &ctx);
+        char *selected = select_run(trees, dir_count, &ctx);
+        int exit_code = 0;
+        if (selected) {
+            printf("%s\n", selected);
+            free(selected);
+        } else {
+            exit_code = 1;  /* No selection made (quit/ESC) */
+        }
+        /* Cleanup and exit */
+        for (int i = 0; i < dir_count; i++) {
+            tree_node_free(trees[i]);
+            free(trees[i]);
+            git_cache_free(&gits[i]);
+        }
+        free(trees);
+        free(gits);
+        cache_unload();
+        return exit_code;
+    }
+    {
+        /* Print all trees (using consistent column widths) */
+        for (int i = 0; i < dir_count; i++) {
+            /* In git-only mode, show message if no changes and in sync with upstream */
+            if (cfg.git_only && !trees[i]->has_git_status) {
+                int in_sync = 1;
+                if (path_is_git_root(trees[i]->entry.path)) {
+                    char *branch = git_get_branch(trees[i]->entry.path);
+                    if (branch) {
+                        char local_hash[64], remote_hash[64];
+                        char local_ref[128], remote_ref[128];
+                        snprintf(local_ref, sizeof(local_ref), "refs/heads/%s", branch);
+                        snprintf(remote_ref, sizeof(remote_ref), "refs/remotes/origin/%s", branch);
+                        git_read_ref(trees[i]->entry.path, local_ref, local_hash, sizeof(local_hash));
+                        if (git_read_ref(trees[i]->entry.path, remote_ref, remote_hash, sizeof(remote_hash))) {
+                            in_sync = (strcmp(local_hash, remote_hash) == 0);
+                        }
+                        free(branch);
+                    }
+                }
+                if (in_sync) {
+                    printf("%sUp to date.%s\n", COLOR_GREEN, COLOR_RESET);
+                    continue;
+                }
+            }
+            PrintContext ctx = {
+                .git = &gits[i],
+                .icons = &icons,
+                .cfg = &cfg,
+                .columns = cfg.long_format ? cols : NULL,
+                .continuation = continuation,
+                .diff_add_width = diff_add_width,
+                .diff_del_width = diff_del_width
+            };
+            print_tree_node(trees[i], 0, &ctx);
+        }
     }
 
     /* Cleanup */

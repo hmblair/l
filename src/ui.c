@@ -316,6 +316,7 @@ static const struct { const char *key; size_t offset; } icon_keys[] = {
     { "count_files",    offsetof(Icons, count_files) },
     { "count_lines",    offsetof(Icons, count_lines) },
     { "count_pixels",   offsetof(Icons, count_pixels) },
+    { "cursor",         offsetof(Icons, cursor) },
     { NULL, 0 }
 };
 
@@ -542,7 +543,7 @@ FileType detect_file_type(const char *path, struct stat *st, char **symlink_targ
 const char *get_file_color(FileType type, int is_cwd, int is_ignored, const Config *cfg) {
     if (!cfg->is_tty) return "";
 
-    if (is_cwd) return COLOR_YELLOW_BOLD;
+    if (is_cwd) return COLOR_YELLOW;
     if (is_ignored && !cfg->color_all) return COLOR_GREY;
 
     switch (type) {
@@ -1375,12 +1376,17 @@ static void print_prefix(int depth, int *continuation, const Config *cfg) {
     printf("%s", COLOR_RESET);
 }
 
-static void print_entry(const FileEntry *fe, int depth, int has_visible_children, const PrintContext *ctx) {
+void print_entry(const FileEntry *fe, int depth, int has_visible_children, const PrintContext *ctx) {
     char abs_path[PATH_MAX];
     get_realpath(fe->path, abs_path, ctx->cfg);
 
     int is_cwd = (strcmp(abs_path, ctx->cfg->cwd) == 0);
     int is_hidden = (fe->name[0] == '.');
+
+    /* Print optional line prefix (used for interactive selection cursor) */
+    if (ctx->line_prefix) {
+        printf("%s", ctx->line_prefix);
+    }
 
     if (ctx->cfg->long_format && ctx->columns) {
         char buf[32];
@@ -1465,12 +1471,13 @@ static void print_entry(const FileEntry *fe, int depth, int has_visible_children
         printf("%s%s%s ", color, get_icon(ctx->icons, fe->type, is_cwd, is_locked, is_binary, fe->name), RST(ctx->cfg));
     }
 
+    const char *bold = ctx->selected ? CLR(ctx->cfg, STYLE_BOLD) : "";
     if (ctx->cfg->list_mode) {
         char abbrev[PATH_MAX];
         abbreviate_home(abs_path, abbrev, sizeof(abbrev), ctx->cfg);
-        printf("%s%s%s%s", color, style, abbrev, RST(ctx->cfg));
+        printf("%s%s%s%s%s", color, bold, style, abbrev, RST(ctx->cfg));
     } else {
-        printf("%s%s%s%s", color, style, fe->name, RST(ctx->cfg));
+        printf("%s%s%s%s%s", color, bold, style, fe->name, RST(ctx->cfg));
     }
 
     if (is_dir && path_is_git_root(fe->path)) {

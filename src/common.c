@@ -25,6 +25,7 @@ const char *COLOR_CYAN       = "\033[0;36m";
 const char *COLOR_GREY       = "\033[90m";
 const char *COLOR_WHITE      = "\033[0;37m";
 const char *COLOR_YELLOW_BOLD = "\033[1;33m";
+const char *STYLE_BOLD       = "\033[1m";
 const char *STYLE_ITALIC     = "\033[3m";
 
 /* ============================================================================

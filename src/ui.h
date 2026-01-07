@@ -48,6 +48,7 @@ typedef struct {
     int git_only;
     int show_ancestry;
     int color_all;
+    int interactive;
     int is_tty;
     SortMode sort_by;
     char cwd[PATH_MAX];
@@ -88,6 +89,7 @@ typedef struct Icons {
     char count_files[L_MAX_ICON_LEN];
     char count_lines[L_MAX_ICON_LEN];
     char count_pixels[L_MAX_ICON_LEN];
+    char cursor[L_MAX_ICON_LEN];
     ExtIcon ext_icons[L_MAX_EXT_ICONS];
     int ext_count;
 } Icons;
@@ -151,6 +153,8 @@ typedef struct {
     int *continuation;
     int diff_add_width;   /* Width of insertions column (0 = hidden) */
     int diff_del_width;   /* Width of deletions column (0 = hidden) */
+    const char *line_prefix;  /* Optional prefix printed at start of each line */
+    int selected;             /* Is this line selected (for interactive mode) */
 } PrintContext;
 
 /* Helper macros */
@@ -218,6 +222,7 @@ void columns_recalculate_visible(Column *cols, TreeNode **trees, int tree_count,
 void compute_diff_widths(TreeNode **trees, int tree_count, int *add_width, int *del_width,
                          const Config *cfg);
 void print_tree_node(const TreeNode *node, int depth, PrintContext *ctx);
+void print_entry(const FileEntry *fe, int depth, int has_visible_children, const PrintContext *ctx);
 
 /* ============================================================================
  * Git Status Indicator

@@ -1,0 +1,415 @@
+/*
+ * select.c - Interactive file selection mode
+ */
+
+#include "select.h"
+#include <termios.h>
+#include <sys/ioctl.h>
+#include <sys/select.h>
+#include <signal.h>
+
+/* ============================================================================
+ * Terminal Handling
+ * ============================================================================ */
+
+static struct termios orig_termios;
+static int raw_mode_enabled = 0;
+
+static void term_disable_raw(void) {
+    if (raw_mode_enabled) {
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+        printf("\033[?25h");  /* Show cursor */
+        fflush(stdout);
+        raw_mode_enabled = 0;
+    }
+}
+
+static void sigint_handler(int sig) {
+    term_disable_raw();
+    printf("\n");
+    _exit(128 + sig);
+}
+
+static void term_enable_raw(void) {
+    if (raw_mode_enabled) return;
+
+    tcgetattr(STDIN_FILENO, &orig_termios);
+    atexit(term_disable_raw);
+
+    /* Handle SIGINT to restore terminal */
+    struct sigaction sa;
+    sa.sa_handler = sigint_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGINT, &sa, NULL);
+
+    struct termios raw = orig_termios;
+    raw.c_lflag &= ~(ECHO | ICANON);
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+
+    printf("\033[?25l");  /* Hide cursor */
+    raw_mode_enabled = 1;
+}
+
+typedef enum {
+    KEY_NONE,
+    KEY_UP,
+    KEY_DOWN,
+    KEY_ENTER,
+    KEY_QUIT,
+    KEY_OPEN,
+    KEY_YANK
+} KeyPress;
+
+static KeyPress term_read_key(void) {
+    char c;
+    if (read(STDIN_FILENO, &c, 1) != 1) return KEY_NONE;
+
+    if (c == '\n' || c == '\r') return KEY_ENTER;
+    if (c == 'q' || c == 'Q') return KEY_QUIT;
+    if (c == 'k' || c == 'K') return KEY_UP;
+    if (c == 'j' || c == 'J') return KEY_DOWN;
+    if (c == 'o' || c == 'O') return KEY_OPEN;
+    if (c == 'y' || c == 'Y') return KEY_YANK;
+
+    if (c == '\033') {
+        /* Check if more data available (arrow key sequence) with timeout */
+        fd_set fds;
+        struct timeval tv = { .tv_sec = 0, .tv_usec = 50000 };  /* 50ms */
+        FD_ZERO(&fds);
+        FD_SET(STDIN_FILENO, &fds);
+
+        if (select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv) > 0) {
+            char seq[2];
+            if (read(STDIN_FILENO, &seq[0], 1) == 1 && seq[0] == '[') {
+                if (read(STDIN_FILENO, &seq[1], 1) == 1) {
+                    if (seq[1] == 'A') return KEY_UP;
+                    if (seq[1] == 'B') return KEY_DOWN;
+                }
+            }
+        }
+        /* ESC alone or unrecognized sequence */
+        return KEY_QUIT;
+    }
+    return KEY_NONE;
+}
+
+/* ============================================================================
+ * Selection State
+ * ============================================================================ */
+
+/* Info stored for each flattened node */
+typedef struct {
+    TreeNode *node;
+    int depth;
+    int has_visible_children;
+    int continuation[L_MAX_DEPTH];  /* Copy of continuation state at this node */
+} FlatNode;
+
+typedef struct {
+    FlatNode *items;
+    int count;
+    int capacity;
+    int cursor;            /* Current cursor position */
+    int scroll_offset;     /* First visible line */
+    int term_rows;         /* Terminal height */
+    int visible_lines;     /* Lines currently displayed */
+    int first_render;      /* Is this the first render? */
+} SelectState;
+
+static void state_init(SelectState *state) {
+    state->items = NULL;
+    state->count = 0;
+    state->capacity = 0;
+    state->cursor = 0;
+    state->scroll_offset = 0;
+    state->term_rows = 24;
+    state->visible_lines = 0;
+    state->first_render = 1;
+}
+
+static void state_add(SelectState *state, TreeNode *node, int depth,
+                      int has_visible_children, int *continuation) {
+    if (state->count >= state->capacity) {
+        state->capacity = state->capacity ? state->capacity * 2 : 256;
+        state->items = realloc(state->items, state->capacity * sizeof(FlatNode));
+    }
+    FlatNode *item = &state->items[state->count];
+    item->node = node;
+    item->depth = depth;
+    item->has_visible_children = has_visible_children;
+    memcpy(item->continuation, continuation, L_MAX_DEPTH * sizeof(int));
+    state->count++;
+}
+
+static void state_free(SelectState *state) {
+    free(state->items);
+}
+
+/* ============================================================================
+ * Tree Flattening
+ * ============================================================================ */
+
+static int is_filtering_active(const Config *cfg) {
+    return cfg->git_only || cfg->grep_pattern;
+}
+
+static int node_is_visible(const TreeNode *node, const Config *cfg) {
+    if (cfg->git_only && !node->has_git_status) return 0;
+    if (cfg->grep_pattern && !node->matches_grep) return 0;
+    return 1;
+}
+
+/* Count visible children for a node */
+static int count_visible_children(const TreeNode *node, const Config *cfg) {
+    int filtering = is_filtering_active(cfg);
+    int count = 0;
+    for (size_t i = 0; i < node->child_count; i++) {
+        if (!filtering || node_is_visible(&node->children[i], cfg)) {
+            count++;
+        }
+    }
+    return count;
+}
+
+static void flatten_children(SelectState *state, const TreeNode *parent,
+                             int depth, int *continuation, const Config *cfg);
+
+static void flatten_node(SelectState *state, TreeNode *node, int depth,
+                         int *continuation, const Config *cfg) {
+    int has_visible_children = count_visible_children(node, cfg) > 0;
+
+    /* Add this node */
+    state_add(state, node, depth, has_visible_children, continuation);
+
+    /* Recurse into children */
+    if (node->child_count > 0) {
+        flatten_children(state, node, depth, continuation, cfg);
+    }
+}
+
+static void flatten_children(SelectState *state, const TreeNode *parent,
+                             int depth, int *continuation, const Config *cfg) {
+    int filtering = is_filtering_active(cfg);
+
+    /* Build list of visible children indices */
+    size_t *visible_indices = malloc(parent->child_count * sizeof(size_t));
+    size_t visible_count = 0;
+
+    for (size_t i = 0; i < parent->child_count; i++) {
+        if (!filtering || node_is_visible(&parent->children[i], cfg)) {
+            visible_indices[visible_count++] = i;
+        }
+    }
+
+    /* Flatten each visible child */
+    for (size_t vi = 0; vi < visible_count; vi++) {
+        size_t i = visible_indices[vi];
+        TreeNode *child = &parent->children[i];
+        int is_last = (vi == visible_count - 1);
+
+        /* Set continuation for this depth */
+        continuation[depth] = !is_last;
+
+        flatten_node(state, child, depth + 1, continuation, cfg);
+    }
+
+    free(visible_indices);
+}
+
+/* ============================================================================
+ * Rendering
+ * ============================================================================ */
+
+static void get_terminal_size(int *rows) {
+    struct winsize ws;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
+        *rows = ws.ws_row;
+    } else {
+        *rows = 24;
+    }
+}
+
+static void render_line(SelectState *state, int index, int is_selected, PrintContext *ctx) {
+    FlatNode *item = &state->items[index];
+
+    /* Clear line */
+    printf("\r\033[K");
+
+    /* Set up the line prefix (cursor indicator) */
+    static char prefix_buf[64];
+    const char *cursor_icon = ctx->icons->cursor[0] ? ctx->icons->cursor : ">";
+    if (is_selected) {
+        snprintf(prefix_buf, sizeof(prefix_buf), "%s%s%s ", COLOR_CYAN, cursor_icon, COLOR_RESET);
+    } else {
+        /* Pad with spaces to match cursor icon width (assume single-width for now) */
+        snprintf(prefix_buf, sizeof(prefix_buf), "  ");
+    }
+    const char *prefix = prefix_buf;
+
+    /* Copy continuation state into context */
+    memcpy(ctx->continuation, item->continuation, L_MAX_DEPTH * sizeof(int));
+
+    /* Create a modified context with the line prefix */
+    PrintContext line_ctx = *ctx;
+    line_ctx.line_prefix = prefix;
+    line_ctx.continuation = ctx->continuation;
+    line_ctx.selected = is_selected;
+
+    /* Call the real print_entry */
+    print_entry(&item->node->entry, item->depth, item->has_visible_children, &line_ctx);
+}
+
+static void render_view(SelectState *state, PrintContext *ctx) {
+    int max_visible = state->term_rows - 2;  /* Leave room for status line */
+    if (max_visible < 1) max_visible = 1;
+    if (max_visible > state->count) max_visible = state->count;
+
+    /* Adjust scroll to keep cursor visible */
+    if (state->cursor < state->scroll_offset) {
+        state->scroll_offset = state->cursor;
+    } else if (state->cursor >= state->scroll_offset + max_visible) {
+        state->scroll_offset = state->cursor - max_visible + 1;
+    }
+
+    /* Move cursor up to top of our display area (if not first render) */
+    if (!state->first_render && state->visible_lines > 1) {
+        printf("\033[%dA", state->visible_lines - 1);
+    }
+    state->first_render = 0;
+
+    /* Render visible lines */
+    int end = state->scroll_offset + max_visible;
+    if (end > state->count) end = state->count;
+
+    for (int i = state->scroll_offset; i < end; i++) {
+        render_line(state, i, i == state->cursor, ctx);
+    }
+
+    /* Status line */
+    printf("\r\033[K%s[j/k] move  [Enter] select  [o] open  [y] yank  [q] quit%s",
+           COLOR_GREY, COLOR_RESET);
+    fflush(stdout);
+
+    /* Track how many lines we printed */
+    state->visible_lines = (end - state->scroll_offset) + 1;
+}
+
+/* ============================================================================
+ * Clipboard
+ * ============================================================================ */
+
+static void copy_to_clipboard(const char *text) {
+#ifdef __APPLE__
+    FILE *pbcopy = popen("pbcopy", "w");
+    if (pbcopy) {
+        fputs(text, pbcopy);
+        pclose(pbcopy);
+    }
+#else
+    /* Linux: try xclip or xsel */
+    FILE *clip = popen("xclip -selection clipboard 2>/dev/null || xsel --clipboard 2>/dev/null", "w");
+    if (clip) {
+        fputs(text, clip);
+        pclose(clip);
+    }
+#endif
+}
+
+/* ============================================================================
+ * Main Selection Loop
+ * ============================================================================ */
+
+char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
+    SelectState state;
+    state_init(&state);
+
+    /* We need a continuation array for flattening and rendering */
+    int continuation[L_MAX_DEPTH] = {0};
+
+    /* Flatten all trees into visible node list */
+    for (int i = 0; i < tree_count; i++) {
+        /* For root nodes, start fresh */
+        memset(continuation, 0, sizeof(continuation));
+        flatten_node(&state, trees[i], 0, continuation, ctx->cfg);
+    }
+
+    if (state.count == 0) {
+        state_free(&state);
+        return NULL;
+    }
+
+    /* Get terminal size */
+    get_terminal_size(&state.term_rows);
+
+    /* Set up context with our continuation array */
+    PrintContext render_ctx = *ctx;
+    render_ctx.continuation = continuation;
+    render_ctx.line_prefix = NULL;
+
+    /* Enter raw mode and render */
+    term_enable_raw();
+    render_view(&state, &render_ctx);
+
+    char *result = NULL;
+
+    while (1) {
+        KeyPress key = term_read_key();
+
+        switch (key) {
+            case KEY_UP:
+                state.cursor = (state.cursor - 1 + state.count) % state.count;
+                render_view(&state, &render_ctx);
+                break;
+
+            case KEY_DOWN:
+                state.cursor = (state.cursor + 1) % state.count;
+                render_view(&state, &render_ctx);
+                break;
+
+            case KEY_ENTER:
+                result = strdup(state.items[state.cursor].node->entry.path);
+                goto cleanup;
+
+            case KEY_OPEN: {
+                const char *editor = getenv("EDITOR");
+                if (!editor) editor = "vim";
+                char cmd[PATH_MAX + 64];
+
+                /* Clear display and exit raw mode before opening editor */
+                printf("\r\033[K\n");
+                term_disable_raw();
+
+                snprintf(cmd, sizeof(cmd), "%s \"%s\"", editor,
+                         state.items[state.cursor].node->entry.path);
+                system(cmd);
+
+                /* Exit after opening */
+                state_free(&state);
+                return NULL;
+            }
+
+            case KEY_YANK: {
+                copy_to_clipboard(state.items[state.cursor].node->entry.path);
+                printf("\r\033[K%sYanked: %s%s\n", COLOR_GREEN,
+                       state.items[state.cursor].node->entry.path, COLOR_RESET);
+                fflush(stdout);
+                goto cleanup;
+            }
+
+            case KEY_QUIT:
+                goto cleanup;
+
+            default:
+                break;
+        }
+    }
+
+cleanup:
+    printf("\r\033[K\n");
+    term_disable_raw();
+    state_free(&state);
+    return result;
+}

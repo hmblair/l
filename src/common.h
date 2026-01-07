@@ -117,6 +117,7 @@ extern const char *COLOR_CYAN;
 extern const char *COLOR_GREY;
 extern const char *COLOR_WHITE;
 extern const char *COLOR_YELLOW_BOLD;
+extern const char *STYLE_BOLD;
 extern const char *STYLE_ITALIC;
 
 /* ============================================================================
