@@ -96,22 +96,24 @@ install: all
 	@mkdir -p $(CONFIGDIR)
 	install -m 755 $(BINDIR)/l $(DESTBINDIR)/l
 	install -m 755 $(BINDIR)/l-cached $(DESTBINDIR)/l-cached
+	install -m 755 $(SRCDIR)/cl $(DESTBINDIR)/cl
 	install -m 644 icons.toml $(CONFIGDIR)/icons.toml
-	@echo "Installed l and l-cached to $(DESTBINDIR)"
+	@echo "Installed l, l-cached, and cl to $(DESTBINDIR)"
 	@echo "Installed icons.toml to $(CONFIGDIR)"
 	@if [ -w "$(SITE_FUNCTIONS)" ] || [ -w "$$(dirname $(SITE_FUNCTIONS))" ]; then \
 		mkdir -p $(SITE_FUNCTIONS); \
 		install -m 644 completions/_l $(SITE_FUNCTIONS)/_l; \
+		install -m 644 completions/_cl $(SITE_FUNCTIONS)/_cl; \
 		echo "Installed completions to $(SITE_FUNCTIONS)"; \
 	else \
 		echo "Note: Run with sudo to install completions to $(SITE_FUNCTIONS)"; \
 	fi
 
 uninstall:
-	rm -f $(DESTBINDIR)/l $(DESTBINDIR)/l-cached
+	rm -f $(DESTBINDIR)/l $(DESTBINDIR)/l-cached $(DESTBINDIR)/cl
 	rm -f $(CONFIGDIR)/icons.toml
 	rmdir $(CONFIGDIR) 2>/dev/null || true
-	rm -f $(SITE_FUNCTIONS)/_l
+	rm -f $(SITE_FUNCTIONS)/_l $(SITE_FUNCTIONS)/_cl
 	@echo "Uninstalled l"
 
 clean:
