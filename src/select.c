@@ -288,6 +288,7 @@ static void flatten_all(SelectState *state, TreeNode **trees, int tree_count,
 
 /* Recalculate column widths based on visible (flattened) items only */
 static void recalculate_columns(SelectState *state, Column *cols, const Icons *icons) {
+    if (!cols) return;  /* No columns in short format */
     /* Reset to minimum widths */
     for (int i = 0; i < NUM_COLUMNS; i++) {
         cols[i].width = 1;
