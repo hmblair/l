@@ -47,7 +47,7 @@ typedef struct {
     int sort_reverse;
     int git_only;
     int show_ancestry;
-    int colour_all;
+    int color_all;
     int is_tty;
     SortMode sort_by;
     char cwd[PATH_MAX];

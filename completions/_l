@@ -20,8 +20,9 @@ _l() {
         '--expand-all[Expand all directories (ignore NO_EXPAND list)]' \
         '--list[Flat list output (no tree structure)]' \
         '--no-icons[Hide file/folder/git icons]' \
+        '(-c --color-all)'{-c,--color-all}"[Don't gray out gitignored files]" \
         '-g[Show only git-modified/untracked files (implies -at)]' \
-        '(-f --filter)'{-f,--filter}'[Show only files/folders matching pattern]:pattern:' \
+        '(-f --filter)'{-f,--filter}'[Show only files/folders matching pattern (implies -at)]:pattern:' \
         '-S[Sort by size (largest first)]' \
         '-T[Sort by modification time (newest first)]' \
         '-N[Sort by name (alphabetical)]' \
