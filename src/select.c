@@ -492,10 +492,19 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                 break;
 
             case KEY_RIGHT:
-                /* Expand current directory if collapsed */
-                if (is_directory(current->node) &&
-                    collapsed_contains(&collapsed, current->node->entry.path)) {
-                    collapsed_toggle(&collapsed, current->node->entry.path);
+                /* Expand current directory if collapsed or not loaded */
+                if (is_directory(current->node)) {
+                    if (collapsed_contains(&collapsed, current->node->entry.path)) {
+                        /* Was manually collapsed - uncollapse */
+                        collapsed_toggle(&collapsed, current->node->entry.path);
+                    } else if (current->node->child_count == 0) {
+                        /* Not loaded yet - dynamically expand */
+                        tree_expand_node(current->node, ctx->columns, ctx->git,
+                                         ctx->cfg, ctx->icons);
+                    } else {
+                        /* Already expanded, nothing to do */
+                        break;
+                    }
                     const char *cur_path = current->node->entry.path;
                     flatten_all(&state, trees, tree_count, ctx->cfg, &collapsed);
                     /* Find the cursor position again */
@@ -513,18 +522,27 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                 if (is_directory(current->node)) {
                     /* Toggle expand/collapse for directories */
                     if (current->node->child_count > 0) {
+                        /* Has children - toggle collapsed state */
                         collapsed_toggle(&collapsed, current->node->entry.path);
-                        const char *cur_path = current->node->entry.path;
-                        flatten_all(&state, trees, tree_count, ctx->cfg, &collapsed);
-                        /* Find the cursor position again */
-                        for (int i = 0; i < state.count; i++) {
-                            if (strcmp(state.items[i].node->entry.path, cur_path) == 0) {
-                                state.cursor = i;
-                                break;
-                            }
+                    } else {
+                        /* No children loaded - dynamically expand */
+                        tree_expand_node(current->node, ctx->columns, ctx->git,
+                                         ctx->cfg, ctx->icons);
+                        if (current->node->child_count == 0) {
+                            /* Still no children (empty dir) - nothing to do */
+                            break;
                         }
-                        render_view(&state, &render_ctx, &collapsed);
                     }
+                    const char *cur_path = current->node->entry.path;
+                    flatten_all(&state, trees, tree_count, ctx->cfg, &collapsed);
+                    /* Find the cursor position again */
+                    for (int i = 0; i < state.count; i++) {
+                        if (strcmp(state.items[i].node->entry.path, cur_path) == 0) {
+                            state.cursor = i;
+                            break;
+                        }
+                    }
+                    render_view(&state, &render_ctx, &collapsed);
                 } else {
                     /* Open file in editor */
                     const char *editor = getenv("EDITOR");

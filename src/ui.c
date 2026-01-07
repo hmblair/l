@@ -1091,6 +1091,93 @@ static void build_tree_children(TreeNode *parent, int depth, Column *cols,
     free(list.entries);
 }
 
+/* Dynamically expand a directory node that wasn't fully loaded.
+ * This loads immediate children only (one level). */
+void tree_expand_node(TreeNode *node, Column *cols, GitCache *git,
+                      const Config *cfg, const Icons *icons) {
+    /* Only expand directories that haven't been loaded yet */
+    if (node->child_count > 0) return;
+    if (node->entry.type != FTYPE_DIR && node->entry.type != FTYPE_SYMLINK_DIR) return;
+    if (access(node->entry.path, R_OK) != 0) return;
+
+    FileList list;
+    file_list_init(&list);
+
+    if (read_directory(node->entry.path, &list, cfg) != 0) {
+        file_list_free(&list);
+        return;
+    }
+
+    if (list.count == 0) {
+        file_list_free(&list);
+        return;
+    }
+
+    /* Check if we're in a git repo */
+    char git_root[PATH_MAX];
+    int in_git_repo = git_find_root(node->entry.path, git_root, sizeof(git_root));
+    if (in_git_repo) {
+        git_populate_repo(git, git_root, cfg->long_format);
+    }
+
+    /* Find git repo roots in children */
+    int *is_git_repo_root = xmalloc(list.count * sizeof(int));
+    int *is_submodule = xmalloc(list.count * sizeof(int));
+
+    for (size_t i = 0; i < list.count; i++) {
+        is_git_repo_root[i] = 0;
+        is_submodule[i] = 0;
+        FileEntry *fe = &list.entries[i];
+        if ((fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR) &&
+            strcmp(fe->name, ".git") != 0 &&
+            path_is_git_root(fe->path)) {
+            is_git_repo_root[i] = 1;
+            if (in_git_repo) {
+                is_submodule[i] = 1;
+            } else {
+                git_populate_repo(git, fe->path, cfg->long_format);
+            }
+        }
+    }
+
+    /* Allocate children */
+    node->children = xmalloc(list.count * sizeof(TreeNode));
+    node->child_count = list.count;
+
+    for (size_t i = 0; i < list.count; i++) {
+        TreeNode *child = &node->children[i];
+        memset(child, 0, sizeof(TreeNode));
+        child->entry = list.entries[i];
+
+        GitStatusNode *git_node = git_cache_get_node(git, child->entry.path);
+        if (git_node) {
+            strncpy(child->entry.git_status, git_node->status, sizeof(child->entry.git_status) - 1);
+            child->entry.git_status[sizeof(child->entry.git_status) - 1] = '\0';
+            child->entry.diff_added = git_node->lines_added;
+            child->entry.diff_removed = git_node->lines_removed;
+        }
+        const char *git_status = git_node ? git_node->status : NULL;
+        child->entry.is_ignored = node->entry.is_ignored ||
+                                   (git_status && strcmp(git_status, "!!") == 0) ||
+                                   strcmp(child->entry.name, ".git") == 0 ||
+                                   is_submodule[i];
+
+        if (cfg->long_format && cols) {
+            columns_update_widths(cols, &child->entry, icons);
+        }
+
+        /* Set has_git_status flag for visibility in --git-only mode */
+        if (git_status && git_status[0] != '\0' && strcmp(git_status, "!!") != 0) {
+            child->has_git_status = 1;
+            node->has_git_status = 1;  /* Parent has git status if any child does */
+        }
+    }
+
+    free(is_git_repo_root);
+    free(is_submodule);
+    free(list.entries);  /* entries are moved to children, only free array */
+}
+
 TreeNode *build_tree(const char *path, Column *cols,
                      GitCache *git, const Config *cfg, const Icons *icons) {
     char abs_path[PATH_MAX];

@@ -224,6 +224,10 @@ void compute_diff_widths(TreeNode **trees, int tree_count, int *add_width, int *
 void print_tree_node(const TreeNode *node, int depth, PrintContext *ctx);
 void print_entry(const FileEntry *fe, int depth, int has_visible_children, const PrintContext *ctx);
 
+/* Dynamically expand a directory node that wasn't fully loaded */
+void tree_expand_node(TreeNode *node, Column *cols, GitCache *git,
+                      const Config *cfg, const Icons *icons);
+
 /* ============================================================================
  * Git Status Indicator
  * ============================================================================ */
