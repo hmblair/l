@@ -6,6 +6,7 @@
 #include <termios.h>
 #include <sys/ioctl.h>
 #include <signal.h>
+#include <time.h>
 #include <sqlite3.h>
 
 /* ============================================================================
