@@ -53,6 +53,7 @@ static void print_usage(void) {
     printf("  --expand-all    Expand all directories (ignore skip list)\n");
     printf("  --list          Flat list output (no tree structure)\n");
     printf("  --no-icons      Hide file/folder/git icons\n");
+    printf("  -c, --colour-all  Don't grey out gitignored files\n");
     printf("  -g              Show only git-modified/untracked files (implies -at)\n");
     printf("  -f, --filter PATTERN  Show only files/folders matching pattern (implies -at)\n");
     printf("\n");
@@ -95,6 +96,7 @@ static int apply_short_flag(char flag, Config *cfg, OptionSet *set) {
         case 't': check_conflict(&set->depth, "-t", cfg);
                   cfg->max_depth = L_MAX_DEPTH; return 1;
         case 'p': cfg->show_ancestry = 1; return 1;
+        case 'c': cfg->colour_all = 1; return 1;
         case 'g': cfg->git_only = 1; cfg->show_hidden = 1; cfg->max_depth = L_MAX_DEPTH; return 1;
         case 'S': check_conflict(&set->sort, "-S", cfg);
                   cfg->sort_by = SORT_SIZE; return 1;
@@ -192,6 +194,7 @@ static void parse_args(int argc, char **argv, Config *cfg,
             else if (MATCH_LONG("expand-all")) { cfg->expand_all = 1; }
             else if (MATCH_LONG("list"))       { cfg->list_mode = 1; }
             else if (MATCH_LONG("no-icons"))   { cfg->no_icons = 1; }
+            else if (MATCH_LONG("colour-all")) { cfg->colour_all = 1; }
             /* Options with arguments */
             else if ((val = match_opt_with_arg(arg, &i, argc, argv, 'd', "depth"))) {
                 check_conflict(&set.depth, "--depth", cfg);
@@ -283,6 +286,7 @@ int main(int argc, char **argv) {
         .sort_reverse = 0,
         .git_only = 0,
         .show_ancestry = 0,
+        .colour_all = 0,
         .is_tty = isatty(STDOUT_FILENO),
         .sort_by = SORT_NONE,
         .cwd = "",

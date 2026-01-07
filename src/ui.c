@@ -543,7 +543,7 @@ const char *get_file_color(FileType type, int is_cwd, int is_ignored, const Conf
     if (!cfg->is_tty) return "";
 
     if (is_cwd) return COLOR_YELLOW_BOLD;
-    if (is_ignored) return COLOR_GREY;
+    if (is_ignored && !cfg->colour_all) return COLOR_GREY;
 
     switch (type) {
         case FTYPE_DIR:            return COLOR_BLUE;
