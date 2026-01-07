@@ -138,14 +138,18 @@ static void collapsed_toggle(CollapsedSet *set, const char *path) {
     for (int i = 0; i < set->count; i++) {
         if (strcmp(set->paths[i], path) == 0) {
             free(set->paths[i]);
-            set->paths[i] = set->paths[set->count - 1];
+            /* Move last element to fill gap (unless removing last) */
+            if (i < set->count - 1) {
+                set->paths[i] = set->paths[set->count - 1];
+            }
             set->count--;
             return;
         }
     }
     /* Not found, add it (collapse) */
     if (set->count < MAX_COLLAPSED) {
-        set->paths[set->count++] = strdup(path);
+        char *dup = strdup(path);
+        if (dup) set->paths[set->count++] = dup;
     }
 }
 
@@ -191,8 +195,11 @@ static void state_clear(SelectState *state) {
 static void state_add(SelectState *state, TreeNode *node, int depth,
                       int has_visible_children, int *continuation) {
     if (state->count >= state->capacity) {
-        state->capacity = state->capacity ? state->capacity * 2 : 256;
-        state->items = realloc(state->items, state->capacity * sizeof(FlatNode));
+        int new_cap = state->capacity ? state->capacity * 2 : 256;
+        FlatNode *new_items = realloc(state->items, new_cap * sizeof(FlatNode));
+        if (!new_items) return;  /* Out of memory - skip this node */
+        state->items = new_items;
+        state->capacity = new_cap;
     }
     FlatNode *item = &state->items[state->count];
     item->node = node;
@@ -204,6 +211,9 @@ static void state_add(SelectState *state, TreeNode *node, int depth,
 
 static void state_free(SelectState *state) {
     free(state->items);
+    state->items = NULL;
+    state->count = 0;
+    state->capacity = 0;
 }
 
 /* ============================================================================
@@ -249,10 +259,13 @@ static void flatten_node(SelectState *state, TreeNode *node, int depth,
 static void flatten_children(SelectState *state, const TreeNode *parent,
                              int depth, int *continuation, const Config *cfg,
                              CollapsedSet *collapsed) {
+    if (parent->child_count == 0) return;
+
     int filtering = is_filtering_active(cfg);
 
     /* Build list of visible children indices */
     size_t *visible_indices = malloc(parent->child_count * sizeof(size_t));
+    if (!visible_indices) return;  /* Out of memory */
     size_t visible_count = 0;
 
     for (size_t i = 0; i < parent->child_count; i++) {
@@ -456,6 +469,9 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
     char *result = NULL;
 
     while (1) {
+        /* Safety check - exit if tree becomes empty */
+        if (state.count == 0) break;
+
         KeyPress key = term_read_key();
         FlatNode *current = &state.items[state.cursor];
 
@@ -481,6 +497,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                     flatten_all(&state, trees, tree_count, ctx->cfg, &collapsed);
                     recalculate_columns(&state, ctx->columns, ctx->icons);
                     /* Find the cursor position again */
+                    state.cursor = 0;  /* Default to first item */
                     for (int i = 0; i < state.count; i++) {
                         if (strcmp(state.items[i].node->entry.path, cur_path) == 0) {
                             state.cursor = i;
@@ -509,6 +526,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                     flatten_all(&state, trees, tree_count, ctx->cfg, &collapsed);
                     recalculate_columns(&state, ctx->columns, ctx->icons);
                     /* Find the cursor position again */
+                    state.cursor = 0;  /* Default to first item */
                     for (int i = 0; i < state.count; i++) {
                         if (strcmp(state.items[i].node->entry.path, cur_path) == 0) {
                             state.cursor = i;
@@ -538,6 +556,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                     flatten_all(&state, trees, tree_count, ctx->cfg, &collapsed);
                     recalculate_columns(&state, ctx->columns, ctx->icons);
                     /* Find the cursor position again */
+                    state.cursor = 0;  /* Default to first item */
                     for (int i = 0; i < state.count; i++) {
                         if (strcmp(state.items[i].node->entry.path, cur_path) == 0) {
                             state.cursor = i;
