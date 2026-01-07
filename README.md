@@ -54,7 +54,7 @@ l [options] [path...]
 | `-a` | Show hidden files |
 | `-l, --long` | Long format (size, lines, time) - default |
 | `-s, --short` | Short format (no metadata) |
-| `-t, --tree` | Show full tree (depth 50) |
+| `-t, --tree` | Show full tree |
 | `-d, --depth N` | Limit tree depth |
 | `-e, --expand-all` | Expand all directories (ignore skip list) |
 | `-p, --path` | Show ancestry from ~ to target |
