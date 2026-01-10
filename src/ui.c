@@ -751,13 +751,14 @@ int count_file_lines(const char *path) {
     char buf[L_READ_BUFFER_SIZE];
     size_t n;
     while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
-        for (size_t i = 0; i < n; i++) {
-            if (buf[i] == '\n') {
-                count++;
-                if (count > L_LINE_COUNT_LIMIT) {
-                    fclose(f);
-                    return L_LINE_COUNT_EXCEEDED;
-                }
+        char *p = buf;
+        char *end = buf + n;
+        while ((p = memchr(p, '\n', end - p)) != NULL) {
+            count++;
+            p++;
+            if (count > L_LINE_COUNT_LIMIT) {
+                fclose(f);
+                return L_LINE_COUNT_EXCEEDED;
             }
         }
     }
