@@ -726,42 +726,49 @@ static int get_image_megapixels(const char *path) {
     return (int)(mp * 10 + 0.5);
 }
 
-static int is_binary_file(FILE *f) {
-    unsigned char buf[L_BINARY_CHECK_SIZE];
-    size_t n = fread(buf, 1, sizeof(buf), f);
-    rewind(f);
-    for (size_t i = 0; i < n; i++) {
-        if (buf[i] == '\0') return 1;
-    }
-    return 0;
-}
-
 int count_file_lines(const char *path) {
     if (has_binary_extension(path)) return -1;
 
     FILE *f = fopen(path, "r");
     if (!f) return -1;
 
-    if (is_binary_file(f)) {
-        fclose(f);
-        return -1;
-    }
-
     int count = 0;
     char buf[L_READ_BUFFER_SIZE];
     size_t n;
+
+    /* First chunk: check for binary while counting lines */
+    if ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+        size_t check_len = n < L_BINARY_CHECK_SIZE ? n : L_BINARY_CHECK_SIZE;
+        if (memchr(buf, '\0', check_len) != NULL) {
+            fclose(f);
+            return -1;
+        }
+        char *p = buf;
+        char *end = buf + n;
+        while ((p = memchr(p, '\n', end - p)) != NULL) {
+            count++;
+            p++;
+        }
+        if (count > L_LINE_COUNT_LIMIT) {
+            fclose(f);
+            return L_LINE_COUNT_EXCEEDED;
+        }
+    }
+
+    /* Remaining chunks: just count lines */
     while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
         char *p = buf;
         char *end = buf + n;
         while ((p = memchr(p, '\n', end - p)) != NULL) {
             count++;
             p++;
-            if (count > L_LINE_COUNT_LIMIT) {
-                fclose(f);
-                return L_LINE_COUNT_EXCEEDED;
-            }
+        }
+        if (count > L_LINE_COUNT_LIMIT) {
+            fclose(f);
+            return L_LINE_COUNT_EXCEEDED;
         }
     }
+
     fclose(f);
     return count;
 }
