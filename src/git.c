@@ -179,6 +179,27 @@ int git_deleted_lines_direct(GitCache *cache, const char *dir_path) {
     return lines;
 }
 
+int git_deleted_lines_recursive(GitCache *cache, const char *dir_path) {
+    if (!cache) return 0;
+
+    int lines = 0;
+    size_t dir_len = strlen(dir_path);
+
+    for (int i = 0; i < L_HASH_SIZE; i++) {
+        GitStatusNode *node = cache->buckets[i];
+        while (node) {
+            /* Check if deleted and anywhere under this directory */
+            if (node->status[1] == 'D' &&
+                strncmp(node->path, dir_path, dir_len) == 0 &&
+                node->path[dir_len] == '/') {
+                lines += node->lines_removed;
+            }
+            node = node->next;
+        }
+    }
+    return lines;
+}
+
 int git_path_in_ignored(GitCache *cache, const char *path, const char *git_root) {
     if (!cache || !path || !git_root) return 0;
 

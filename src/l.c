@@ -393,7 +393,7 @@ int main(int argc, char **argv) {
     /* Compute diff column widths (only in long format) */
     int diff_add_width = 0, diff_del_width = 0;
     if (cfg.long_format) {
-        compute_diff_widths(trees, dir_count, &diff_add_width, &diff_del_width, &cfg);
+        compute_diff_widths(trees, dir_count, gits, &diff_add_width, &diff_del_width, &cfg);
     }
 
     /* Interactive selection mode */

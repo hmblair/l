@@ -227,8 +227,8 @@ int compute_git_status_flags(TreeNode *node);
 int compute_grep_flags(TreeNode *node, const char *pattern);
 void columns_recalculate_visible(Column *cols, TreeNode **trees, int tree_count,
                                  const Icons *icons, const Config *cfg);
-void compute_diff_widths(TreeNode **trees, int tree_count, int *add_width, int *del_width,
-                         const Config *cfg);
+void compute_diff_widths(TreeNode **trees, int tree_count, GitCache *gits,
+                         int *add_width, int *del_width, const Config *cfg);
 void print_tree_node(const TreeNode *node, int depth, PrintContext *ctx);
 void print_entry(const FileEntry *fe, int depth, int has_visible_children, const PrintContext *ctx);
 

@@ -250,29 +250,36 @@ static int count_digits(int n) {
     return count;
 }
 
-static void compute_diff_widths_recursive(const TreeNode *node, int *add_width, int *del_width,
+static void compute_diff_widths_recursive(const TreeNode *node, GitCache *git,
+                                          int *add_width, int *del_width,
                                           const Config *cfg) {
     if (node_is_visible(node, cfg)) {
         if (node->entry.diff_added > 0) {
             int w = count_digits(node->entry.diff_added);
             if (w > *add_width) *add_width = w;
         }
-        if (node->entry.diff_removed > 0) {
-            int w = count_digits(node->entry.diff_removed);
+        /* For directories, use recursive count (maximum possible value) */
+        int diff_removed = node->entry.diff_removed;
+        if (node->entry.type == FTYPE_DIR || node->entry.type == FTYPE_SYMLINK_DIR) {
+            int recursive = git_deleted_lines_recursive(git, node->entry.path);
+            if (recursive > diff_removed) diff_removed = recursive;
+        }
+        if (diff_removed > 0) {
+            int w = count_digits(diff_removed);
             if (w > *del_width) *del_width = w;
         }
     }
     for (size_t i = 0; i < node->child_count; i++) {
-        compute_diff_widths_recursive(&node->children[i], add_width, del_width, cfg);
+        compute_diff_widths_recursive(&node->children[i], git, add_width, del_width, cfg);
     }
 }
 
-void compute_diff_widths(TreeNode **trees, int tree_count, int *add_width, int *del_width,
-                         const Config *cfg) {
+void compute_diff_widths(TreeNode **trees, int tree_count, GitCache *gits,
+                         int *add_width, int *del_width, const Config *cfg) {
     *add_width = 0;
     *del_width = 0;
     for (int i = 0; i < tree_count; i++) {
-        compute_diff_widths_recursive(trees[i], add_width, del_width, cfg);
+        compute_diff_widths_recursive(trees[i], &gits[i], add_width, del_width, cfg);
     }
 }
 
@@ -1513,9 +1520,18 @@ void print_entry(const FileEntry *fe, int depth, int has_visible_children, const
             }
         }
         if (ctx->diff_del_width > 0) {
-            if (fe->diff_removed > 0) {
+            /* For directories, compute deleted lines based on collapsed/expanded state */
+            int diff_removed = fe->diff_removed;
+            if (fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR) {
+                if (has_visible_children) {
+                    diff_removed = git_deleted_lines_direct(ctx->git, abs_path);
+                } else {
+                    diff_removed = git_deleted_lines_recursive(ctx->git, abs_path);
+                }
+            }
+            if (diff_removed > 0) {
                 printf("%s%-*d%s ", CLR(ctx->cfg, COLOR_RED),
-                       ctx->diff_del_width, fe->diff_removed, RST(ctx->cfg));
+                       ctx->diff_del_width, diff_removed, RST(ctx->cfg));
             } else {
                 printf("%s%-*s%s ", CLR(ctx->cfg, COLOR_GREY),
                        ctx->diff_del_width, "-", RST(ctx->cfg));
