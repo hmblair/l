@@ -237,7 +237,7 @@ static void daemon_load(void) {
 
     char cmd[PATH_MAX + 64];
     snprintf(cmd, sizeof(cmd), "launchctl load -w '%s' 2>/dev/null", plist_path);
-    system(cmd);
+    (void)system(cmd);
 }
 
 static void daemon_unload(void) {
@@ -246,7 +246,7 @@ static void daemon_unload(void) {
 
     char cmd[PATH_MAX + 64];
     snprintf(cmd, sizeof(cmd), "launchctl unload '%s' 2>/dev/null", plist_path);
-    system(cmd);
+    (void)system(cmd);
 }
 
 static void daemon_remove_plist(void) {
@@ -285,7 +285,7 @@ static time_t cache_get_mtime(void) {
     get_cache_path(cache_path, sizeof(cache_path));
 
     /* Check WAL file first (SQLite WAL mode) */
-    char wal_path[PATH_MAX];
+    char wal_path[PATH_MAX + 8];
     snprintf(wal_path, sizeof(wal_path), "%s-wal", cache_path);
 
     struct stat st;
@@ -317,7 +317,7 @@ static void cache_clear(void) {
     char cache_path[PATH_MAX];
     get_cache_path(cache_path, sizeof(cache_path));
 
-    char wal_path[PATH_MAX], shm_path[PATH_MAX];
+    char wal_path[PATH_MAX + 8], shm_path[PATH_MAX + 8];
     snprintf(wal_path, sizeof(wal_path), "%s-wal", cache_path);
     snprintf(shm_path, sizeof(shm_path), "%s-shm", cache_path);
 

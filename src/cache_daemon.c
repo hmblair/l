@@ -92,7 +92,7 @@ int cache_daemon_init(void) {
     }
 
     /* Failed - delete corrupt database and retry */
-    char wal_path[PATH_MAX], shm_path[PATH_MAX];
+    char wal_path[PATH_MAX + 8], shm_path[PATH_MAX + 8];
     snprintf(wal_path, sizeof(wal_path), "%s-wal", path);
     snprintf(shm_path, sizeof(shm_path), "%s-shm", path);
     unlink(path);

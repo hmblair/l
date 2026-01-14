@@ -55,11 +55,13 @@ void resolve_source_dir(const char *argv0, char *src_dir, size_t len) {
         char *slash = strrchr(exe_abs, '/');
         if (slash) {
             *slash = '\0';
-            snprintf(try_path, sizeof(try_path), "%s/icons.toml", exe_abs);
-            if (access(try_path, R_OK) == 0) {
-                strncpy(src_dir, exe_abs, len - 1);
-                src_dir[len - 1] = '\0';
-                return;
+            if (strlen(exe_abs) + sizeof("/icons.toml") <= sizeof(try_path)) {
+                snprintf(try_path, sizeof(try_path), "%s/icons.toml", exe_abs);
+                if (access(try_path, R_OK) == 0) {
+                    strncpy(src_dir, exe_abs, len - 1);
+                    src_dir[len - 1] = '\0';
+                    return;
+                }
             }
         }
     }
@@ -503,8 +505,12 @@ static char *resolve_symlink(const char *path) {
     char *slash = strrchr(dir, '/');
     if (slash) {
         slash[1] = '\0';
-        snprintf(abs_target, PATH_MAX, "%s%s", dir, target);
-        return xstrdup(abs_target);
+        size_t dir_len = strlen(dir);
+        size_t target_len = strlen(target);
+        if (dir_len + target_len < PATH_MAX) {
+            snprintf(abs_target, PATH_MAX, "%s%s", dir, target);
+            return xstrdup(abs_target);
+        }
     }
     return xstrdup(target);
 }
@@ -1376,11 +1382,19 @@ TreeNode *build_ancestry_tree(const char *path, Column *cols, GitCache *git,
         if (comp_len > 0) {
             /* Build the full path to this component */
             size_t path_len = strlen(path_so_far);
-            if (path_so_far[path_len - 1] != '/') {
-                strncat(path_so_far, "/", sizeof(path_so_far) - path_len - 1);
+            size_t remaining = sizeof(path_so_far) - path_len - 1;
+
+            if (remaining > 0 && path_so_far[path_len - 1] != '/') {
+                path_so_far[path_len++] = '/';
+                path_so_far[path_len] = '\0';
+                remaining--;
             }
-            strncat(path_so_far, p, comp_len);
-            path_so_far[sizeof(path_so_far) - 1] = '\0';
+
+            if (remaining > 0) {
+                size_t to_copy = comp_len < remaining ? comp_len : remaining;
+                memcpy(path_so_far + path_len, p, to_copy);
+                path_so_far[path_len + to_copy] = '\0';
+            }
 
             components[comp_count++] = xstrdup(path_so_far);
         }
