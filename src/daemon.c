@@ -99,7 +99,7 @@ static void menu_render(MenuItem *items, int count, int selected) {
     for (int i = 0; i < count; i++) {
         printf("\r\033[K");  /* Clear line */
         if (i == selected) {
-            printf("  %s> %s%s\n", COLOR_CYAN, items[i].label, COLOR_RESET);
+            printf("  %s❯%s %s%s\n", COLOR_CYAN, COLOR_RESET, items[i].label, COLOR_RESET);
         } else {
             printf("    %s%s%s\n", COLOR_GREY, items[i].label, COLOR_RESET);
         }
@@ -331,23 +331,25 @@ static void cache_clear(void) {
  * ============================================================================ */
 
 static void print_status(void) {
-    printf("%sl --daemon%s\n\n", COLOR_WHITE, COLOR_RESET);
+    printf("\n");
 
     /* Daemon status */
     if (daemon_is_installed()) {
         if (daemon_is_running()) {
-            printf("Daemon:  %srunning%s\n", COLOR_GREEN, COLOR_RESET);
+            printf("  %s●%s Daemon    %srunning%s\n", COLOR_GREEN, COLOR_RESET, COLOR_GREEN, COLOR_RESET);
         } else {
-            printf("Daemon:  %sinstalled but stopped%s\n", COLOR_YELLOW, COLOR_RESET);
+            printf("  %s●%s Daemon    %sstopped%s\n", COLOR_YELLOW, COLOR_RESET, COLOR_YELLOW, COLOR_RESET);
         }
     } else {
-        printf("Daemon:  %snot installed%s\n", COLOR_GREY, COLOR_RESET);
+        printf("  %s○%s Daemon    %snot installed%s\n", COLOR_GREY, COLOR_RESET, COLOR_GREY, COLOR_RESET);
     }
 
     /* Cache status */
     int count = cache_get_count();
     time_t mtime = cache_get_mtime();
     off_t size = cache_get_size();
+    char cache_path[PATH_MAX];
+    get_cache_path(cache_path, sizeof(cache_path));
 
     if (count > 0) {
         char time_buf[64];
@@ -363,21 +365,21 @@ static void print_status(void) {
             snprintf(size_buf, sizeof(size_buf), "%lldB", (long long)size);
         }
 
-        printf("Cache:   %s%d entries%s (%s)\n", COLOR_GREEN, count, COLOR_RESET, size_buf);
-        printf("         updated %s\n", time_buf);
+        printf("  %s●%s Cache     %s%d%s entries %s(%s)%s\n",
+               COLOR_GREEN, COLOR_RESET, COLOR_WHITE, count, COLOR_RESET,
+               COLOR_GREY, size_buf, COLOR_RESET);
+        printf("              %supdated %s%s\n", COLOR_GREY, time_buf, COLOR_RESET);
     } else {
-        printf("Cache:   %sempty%s\n", COLOR_GREY, COLOR_RESET);
+        printf("  %s○%s Cache     %sempty%s\n", COLOR_GREY, COLOR_RESET, COLOR_GREY, COLOR_RESET);
     }
-    char cache_path[PATH_MAX];
-    get_cache_path(cache_path, sizeof(cache_path));
-    printf("         %s\n", cache_path);
+    printf("              %s%s%s\n", COLOR_GREY, cache_path, COLOR_RESET);
 
     /* Log file */
     char log_path[PATH_MAX];
     get_log_path(log_path, sizeof(log_path));
     struct stat st;
     if (stat(log_path, &st) == 0) {
-        printf("Log:     %s\n", log_path);
+        printf("  %s○%s Log       %s%s%s\n", COLOR_GREY, COLOR_RESET, COLOR_GREY, log_path, COLOR_RESET);
     }
 
     printf("\n");
