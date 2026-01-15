@@ -62,9 +62,6 @@
 #define L_INITIAL_FILE_CAPACITY 64
 
 /* Line counting */
-#define L_LINE_COUNT_LIMIT      1000000
-#define L_LINE_COUNT_EXCEEDED   (-2)
-#define L_READ_BUFFER_SIZE      65536
 #define L_BINARY_CHECK_SIZE     512
 
 /* Git */

@@ -8,6 +8,8 @@
 #include <ctype.h>
 #include <fnmatch.h>
 #include <time.h>
+#include <fcntl.h>
+#include <sys/mman.h>
 
 /* ============================================================================
  * Path Wrappers (using Config)
@@ -163,8 +165,6 @@ static void col_format_lines(const FileEntry *fe, const Icons *icons, char *buf,
         } else {
             snprintf(buf, len, "%.1fM", mp);
         }
-    } else if (fe->line_count == L_LINE_COUNT_EXCEEDED) {
-        snprintf(buf, len, ">1M");
     } else if (fe->line_count >= 1000000) {
         double m = fe->line_count / 1000000.0;
         snprintf(buf, len, m < 10 ? "%.1fM" : "%.0fM", m);
@@ -290,7 +290,7 @@ const char *get_count_icon(const FileEntry *fe, const Icons *icons) {
         return icons->count_files;
     } else if (fe->is_image && fe->line_count >= 0) {
         return icons->count_pixels;
-    } else if (fe->line_count >= 0 || fe->line_count == L_LINE_COUNT_EXCEEDED) {
+    } else if (fe->line_count >= 0) {
         return icons->count_lines;
     }
     return "";
@@ -742,48 +742,46 @@ static int get_image_megapixels(const char *path) {
 int count_file_lines(const char *path) {
     if (has_binary_extension(path)) return -1;
 
-    FILE *f = fopen(path, "r");
-    if (!f) return -1;
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return -1;
 
-    int count = 0;
-    char buf[L_READ_BUFFER_SIZE];
-    size_t n;
-
-    /* First chunk: check for binary while counting lines */
-    if ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
-        size_t check_len = n < L_BINARY_CHECK_SIZE ? n : L_BINARY_CHECK_SIZE;
-        if (memchr(buf, '\0', check_len) != NULL) {
-            fclose(f);
-            return -1;
-        }
-        char *p = buf;
-        char *end = buf + n;
-        while ((p = memchr(p, '\n', end - p)) != NULL) {
-            count++;
-            p++;
-        }
-        if (count > L_LINE_COUNT_LIMIT) {
-            fclose(f);
-            return L_LINE_COUNT_EXCEEDED;
-        }
+    struct stat st;
+    if (fstat(fd, &st) != 0 || st.st_size == 0) {
+        close(fd);
+        return st.st_size == 0 ? 0 : -1;
     }
 
-    /* Remaining chunks: just count lines */
-    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
-        char *p = buf;
-        char *end = buf + n;
-        while ((p = memchr(p, '\n', end - p)) != NULL) {
-            count++;
-            p++;
-        }
-        if (count > L_LINE_COUNT_LIMIT) {
-            fclose(f);
-            return L_LINE_COUNT_EXCEEDED;
-        }
+    /* For very large files, use mmap for better performance */
+    size_t size = (size_t)st.st_size;
+    char *data = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+
+    if (data == MAP_FAILED) return -1;
+
+    /* Hint to OS about sequential access */
+    madvise(data, size, MADV_SEQUENTIAL);
+
+    /* Check for binary content at start */
+    size_t check_len = size < L_BINARY_CHECK_SIZE ? size : L_BINARY_CHECK_SIZE;
+    if (memchr(data, '\0', check_len) != NULL) {
+        munmap(data, size);
+        return -1;
     }
 
-    fclose(f);
-    return count;
+    /* Count newlines using memchr (typically SIMD-optimized by libc) */
+    long count = 0;
+    const char *p = data;
+    const char *end = data + size;
+
+    while ((p = memchr(p, '\n', end - p)) != NULL) {
+        count++;
+        p++;
+    }
+
+    munmap(data, size);
+
+    /* Clamp to INT_MAX for return value */
+    return count > INT_MAX ? INT_MAX : (int)count;
 }
 
 /* ============================================================================
