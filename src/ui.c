@@ -1034,6 +1034,7 @@ static void build_tree_children(TreeNode *parent, int depth, Column *cols,
             strcmp(fe->name, ".git") != 0 &&
             path_is_git_root(fe->path)) {
             is_git_repo_root[i] = 1;
+            fe->is_git_root = 1;
             if (in_git_repo) {
                 /* This is a submodule/nested repo - treat as ignored */
                 is_submodule[i] = 1;
@@ -1157,6 +1158,7 @@ void tree_expand_node(TreeNode *node, Column *cols, GitCache *git,
             strcmp(fe->name, ".git") != 0 &&
             path_is_git_root(fe->path)) {
             is_git_repo_root[i] = 1;
+            fe->is_git_root = 1;
             if (in_git_repo) {
                 is_submodule[i] = 1;
             } else {
@@ -1634,7 +1636,7 @@ void print_entry(const FileEntry *fe, int depth, int has_visible_children, const
         printf("%s%s%s%s%s", color, bold, style, fe->name, RST(ctx->cfg));
     }
 
-    if (is_dir && path_is_git_root(fe->path)) {
+    if (is_dir && fe->is_git_root) {
         char *branch = git_get_branch(fe->path);
         if (branch) {
             char local_hash[64], remote_hash[64];

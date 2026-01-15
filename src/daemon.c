@@ -368,6 +368,9 @@ static void print_status(void) {
     } else {
         printf("Cache:   %sempty%s\n", COLOR_GREY, COLOR_RESET);
     }
+    char cache_path[PATH_MAX];
+    get_cache_path(cache_path, sizeof(cache_path));
+    printf("         %s\n", cache_path);
 
     /* Log file */
     char log_path[PATH_MAX];

@@ -106,6 +106,7 @@ typedef struct FileEntry {
     int line_count;      /* For images: megapixels * 10 (e.g., 125 = 12.5MP) */
     int is_image;        /* 1 if line_count holds megapixels */
     int is_ignored;
+    int is_git_root;     /* 1 if this directory is a git repo root */
     char git_status[3];
     int diff_added;
     int diff_removed;
