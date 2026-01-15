@@ -101,7 +101,7 @@ l -al ~/projects     # Long format, hidden files
 l -g                 # Only git-modified files
 l -f "*.go"          # Filter to Go files
 l -i                 # Interactive selection
-l -ST                # Sort by size, then time
+l -Sr                # Sort by size, reversed (smallest first)
 l --daemon           # Configure background caching
 ```
 
