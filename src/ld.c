@@ -3,7 +3,7 @@
  *
  * Periodically scans directories and caches sizes for large directories.
  * Uses directory mtime to skip unchanged subtrees efficiently.
- * Skips network filesystems automatically via MNT_LOCAL check.
+ * Skips network filesystems automatically.
  */
 
 #include "common.h"
@@ -13,7 +13,6 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <time.h>
-#include <sys/mount.h>
 
 #define LOG_FILE "/tmp/l-cached.log"
 
@@ -58,12 +57,6 @@ static void write_status(const char *status) {
     }
 }
 
-/* Check if path is on a local filesystem (not network) */
-static int is_local_filesystem(const char *path) {
-    struct statfs sf;
-    if (statfs(path, &sf) != 0) return 0;
-    return (sf.f_flags & MNT_LOCAL) != 0;
-}
 
 /* ============================================================================
  * Directory Scanning
@@ -83,7 +76,7 @@ static ScanResult scan_dir(const char *path) {
         return (ScanResult){-1, -1};
 
     /* Skip network filesystems */
-    if (!is_local_filesystem(path))
+    if (path_is_network_fs(path))
         return (ScanResult){0, 0};
 
     /* Check cache - skip if mtime unchanged */
