@@ -1450,10 +1450,17 @@ static int entry_has_git_status(const FileEntry *fe) {
     return 1;
 }
 
-int compute_git_status_flags(TreeNode *node) {
+int compute_git_status_flags(TreeNode *node, GitCache *git, int show_hidden) {
     int result = entry_has_git_status(&node->entry);
     for (size_t i = 0; i < node->child_count; i++) {
-        if (compute_git_status_flags(&node->children[i])) {
+        if (compute_git_status_flags(&node->children[i], git, show_hidden)) {
+            result = 1;
+        }
+    }
+    /* If hidden files aren't shown, check if this directory has hidden children
+     * with git status that wouldn't otherwise be visible */
+    if (!show_hidden && node->entry.type == FTYPE_DIR) {
+        if (git_dir_has_hidden_status(git, node->entry.path)) {
             result = 1;
         }
     }
@@ -1580,10 +1587,28 @@ void print_entry(const FileEntry *fe, int depth, int has_visible_children, const
             printf("%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), gs.deleted, ctx->icons->git_deleted, RST(ctx->cfg));
         }
     } else if (is_dir && has_visible_children && !ctx->cfg->no_icons) {
-        /* Expanded directory: show only directly deleted files count */
+        /* Expanded directory: show directly deleted files count */
         int deleted_direct = git_count_deleted_direct(ctx->git, abs_path);
         if (deleted_direct) {
             printf("%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), deleted_direct, ctx->icons->git_deleted, RST(ctx->cfg));
+        }
+        /* Also show hidden file status if hidden files aren't shown */
+        if (!ctx->cfg->show_hidden) {
+            GitSummary gs = git_get_hidden_dir_summary(ctx->git, abs_path);
+            if (gs.modified) {
+                printf("%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), gs.modified, ctx->icons->git_modified, RST(ctx->cfg));
+            }
+            if (gs.untracked) {
+                printf("%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), gs.untracked, ctx->icons->git_untracked, RST(ctx->cfg));
+            }
+            if (gs.staged) {
+                printf("%s%d %s%s ", CLR(ctx->cfg, COLOR_YELLOW), gs.staged, ctx->icons->git_staged, RST(ctx->cfg));
+            }
+            /* Note: deleted already counted above in deleted_direct if visible,
+             * but hidden deleted files need separate handling */
+            if (gs.deleted && !deleted_direct) {
+                printf("%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), gs.deleted, ctx->icons->git_deleted, RST(ctx->cfg));
+            }
         }
     } else {
         const char *git_ind = get_git_indicator(ctx->git, abs_path, ctx->icons, ctx->cfg);

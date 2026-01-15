@@ -223,7 +223,7 @@ TreeNode *build_tree(const char *path, Column *cols, GitCache *git,
                      const Config *cfg, const Icons *icons);
 TreeNode *build_ancestry_tree(const char *path, Column *cols, GitCache *git,
                               const Config *cfg, const Icons *icons);
-int compute_git_status_flags(TreeNode *node);
+int compute_git_status_flags(TreeNode *node, GitCache *git, int show_hidden);
 int compute_grep_flags(TreeNode *node, const char *pattern);
 void columns_recalculate_visible(Column *cols, TreeNode **trees, int tree_count,
                                  const Icons *icons, const Config *cfg);

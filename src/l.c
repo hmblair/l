@@ -377,7 +377,7 @@ int main(int argc, char **argv) {
     /* Pre-compute visibility flags for filtering */
     if (cfg.git_only) {
         for (int i = 0; i < dir_count; i++) {
-            compute_git_status_flags(trees[i]);
+            compute_git_status_flags(trees[i], &gits[i], cfg.show_hidden);
         }
     }
     if (cfg.grep_pattern) {

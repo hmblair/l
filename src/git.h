@@ -84,6 +84,12 @@ int git_deleted_lines_direct(GitCache *cache, const char *dir_path);
 /* Sum deleted lines recursively in a directory */
 int git_deleted_lines_recursive(GitCache *cache, const char *dir_path);
 
+/* Check if a directory has hidden direct children with git status */
+int git_dir_has_hidden_status(GitCache *cache, const char *dir_path);
+
+/* Get git status summary for hidden direct children of a directory */
+GitSummary git_get_hidden_dir_summary(GitCache *cache, const char *dir_path);
+
 /* Check if a path is inside an ignored directory (walks up ancestors) */
 int git_path_in_ignored(GitCache *cache, const char *path, const char *git_root);
 
