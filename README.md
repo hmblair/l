@@ -53,18 +53,20 @@ l [options] [path...]
 |------|-------------|
 | `-a` | Show hidden files |
 | `-l, --long` | Long format (size, lines, time) - default |
-| `-s, --short` | Short format (no metadata) |
-| `-t, --tree` | Show full tree |
+| `-s, --short` | Short format (auto-enabled on network filesystems) |
+| `-t, --tree` | Show full tree (depth 50) |
 | `-d, --depth N` | Limit tree depth |
 | `-e, --expand-all` | Expand all directories (ignore skip list) |
 | `-p, --path` | Show ancestry from ~ to target |
 | `-i, --interactive` | Interactive selection mode |
-| `-g` | Git-only mode (modified/untracked files) |
-| `-f, --filter PATTERN` | Filter files matching pattern |
+| `-g` | Git-only mode (modified/untracked files, implies `-at`) |
+| `-f, --filter PATTERN` | Filter files matching pattern (implies `-at`) |
 | `-c, --color-all` | Don't gray out gitignored files |
 | `--list` | Flat list output (no tree structure) |
 | `--no-icons` | Hide icons |
 | `--daemon` | Manage size caching daemon |
+| `--version` | Show version |
+| `-h, --help` | Show help |
 
 ### Sorting
 
@@ -102,6 +104,22 @@ l -i                 # Interactive selection
 l -ST                # Sort by size, then time
 l --daemon           # Configure background caching
 ```
+
+## Daemon
+
+The size caching daemon (`l-cached`) runs in the background to pre-calculate directory sizes, making `l` display sizes instantly even for large directories.
+
+```bash
+l --daemon           # Interactive daemon management
+```
+
+Features:
+- Scans from `/` every 30 minutes
+- Caches directories with 1000+ files
+- Skips network filesystems automatically
+- Shows status (scanning/idle) and PID
+
+The daemon is managed via launchd on macOS and stores its cache in `~/.cache/l/sizes.db`.
 
 ## License
 
