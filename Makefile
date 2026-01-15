@@ -5,7 +5,8 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "unk
 PREFIX ?= $(HOME)/.local
 DESTBINDIR = $(PREFIX)/bin
 CONFIGDIR = $(HOME)/.config/l
-SITE_FUNCTIONS = /usr/local/share/zsh/site-functions
+ZSH_COMPLETIONS = /usr/local/share/zsh/site-functions
+BASH_COMPLETIONS = /usr/local/share/bash-completion/completions
 
 # Local build output
 BINDIR = bin
@@ -107,20 +108,29 @@ install: all
 	install -m 644 icons.toml $(CONFIGDIR)/icons.toml
 	@echo "Installed l, l-cached, and cl to $(DESTBINDIR)"
 	@echo "Installed icons.toml to $(CONFIGDIR)"
-	@if [ -w "$(SITE_FUNCTIONS)" ] || [ -w "$$(dirname $(SITE_FUNCTIONS))" ]; then \
-		mkdir -p $(SITE_FUNCTIONS); \
-		install -m 644 completions/_l $(SITE_FUNCTIONS)/_l; \
-		install -m 644 completions/_cl $(SITE_FUNCTIONS)/_cl; \
-		echo "Installed completions to $(SITE_FUNCTIONS)"; \
+	@if [ -w "$(ZSH_COMPLETIONS)" ] || [ -w "$$(dirname $(ZSH_COMPLETIONS))" ]; then \
+		mkdir -p $(ZSH_COMPLETIONS); \
+		install -m 644 completions/_l $(ZSH_COMPLETIONS)/_l; \
+		install -m 644 completions/_cl $(ZSH_COMPLETIONS)/_cl; \
+		echo "Installed zsh completions to $(ZSH_COMPLETIONS)"; \
 	else \
-		echo "Note: Run with sudo to install completions to $(SITE_FUNCTIONS)"; \
+		echo "Note: Run with sudo to install zsh completions to $(ZSH_COMPLETIONS)"; \
+	fi
+	@if [ -w "$(BASH_COMPLETIONS)" ] || [ -w "$$(dirname $(BASH_COMPLETIONS))" ]; then \
+		mkdir -p $(BASH_COMPLETIONS); \
+		install -m 644 completions/l.bash $(BASH_COMPLETIONS)/l; \
+		ln -sf l $(BASH_COMPLETIONS)/cl; \
+		echo "Installed bash completions to $(BASH_COMPLETIONS)"; \
+	else \
+		echo "Note: Run with sudo to install bash completions to $(BASH_COMPLETIONS)"; \
 	fi
 
 uninstall:
 	rm -f $(DESTBINDIR)/l $(DESTBINDIR)/l-cached $(DESTBINDIR)/cl
 	rm -f $(CONFIGDIR)/icons.toml
 	rmdir $(CONFIGDIR) 2>/dev/null || true
-	rm -f $(SITE_FUNCTIONS)/_l $(SITE_FUNCTIONS)/_cl
+	rm -f $(ZSH_COMPLETIONS)/_l $(ZSH_COMPLETIONS)/_cl
+	rm -f $(BASH_COMPLETIONS)/l $(BASH_COMPLETIONS)/cl
 	@echo "Uninstalled l"
 
 clean:
