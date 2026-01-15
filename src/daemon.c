@@ -162,6 +162,11 @@ static void get_log_path(char *buf, size_t len) {
     snprintf(buf, len, "/tmp/l-cached.log");
 }
 
+static void get_status_path(char *buf, size_t len) {
+    const char *home = getenv("HOME");
+    snprintf(buf, len, "%s/.cache/l/status", home ? home : "/tmp");
+}
+
 /* ============================================================================
  * Launchd Management
  * ============================================================================ */
@@ -210,8 +215,6 @@ static void daemon_create_plist(const char *binary_path) {
     fprintf(f, "  <key>ProgramArguments</key>\n");
     fprintf(f, "  <array>\n");
     fprintf(f, "    <string>%s</string>\n", binary_path);
-    fprintf(f, "    <string>/</string>\n");
-    fprintf(f, "    <string>%s</string>\n", home ? home : "/Users");
     fprintf(f, "  </array>\n");
     fprintf(f, "  <key>KeepAlive</key>\n");
     fprintf(f, "  <true/>\n");
@@ -336,7 +339,37 @@ static void print_status(void) {
     /* Daemon status */
     if (daemon_is_installed()) {
         if (daemon_is_running()) {
-            printf("  %s●%s Daemon    %srunning%s\n", COLOR_GREEN, COLOR_RESET, COLOR_GREEN, COLOR_RESET);
+            /* Get PID */
+            pid_t pid = 0;
+            FILE *fp = popen("pgrep -x l-cached", "r");
+            if (fp) {
+                char buf[32];
+                if (fgets(buf, sizeof(buf), fp))
+                    pid = (pid_t)atoi(buf);
+                pclose(fp);
+            }
+            /* Get status (scanning/idle) */
+            char status_path[PATH_MAX];
+            get_status_path(status_path, sizeof(status_path));
+            char status[16] = "idle";
+            FILE *sf = fopen(status_path, "r");
+            if (sf) {
+                if (fgets(status, sizeof(status), sf)) {
+                    status[strcspn(status, "\n")] = '\0';
+                }
+                fclose(sf);
+            }
+            int is_scanning = (strcmp(status, "scanning") == 0);
+            if (pid > 0) {
+                printf("  %s●%s Daemon    %srunning%s %s(%s, PID %d)%s\n",
+                       COLOR_GREEN, COLOR_RESET, COLOR_GREEN, COLOR_RESET,
+                       COLOR_GREY, status, pid, COLOR_RESET);
+            } else {
+                printf("  %s●%s Daemon    %srunning%s %s(%s)%s\n",
+                       COLOR_GREEN, COLOR_RESET, COLOR_GREEN, COLOR_RESET,
+                       COLOR_GREY, status, COLOR_RESET);
+            }
+            (void)is_scanning;  /* Suppress unused warning */
         } else {
             printf("  %s●%s Daemon    %sstopped%s\n", COLOR_YELLOW, COLOR_RESET, COLOR_YELLOW, COLOR_RESET);
         }

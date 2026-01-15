@@ -3,6 +3,7 @@
  *
  * Periodically scans directories and caches sizes for large directories.
  * Uses directory mtime to skip unchanged subtrees efficiently.
+ * Skips network filesystems automatically via MNT_LOCAL check.
  */
 
 #include "common.h"
@@ -12,13 +13,12 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <time.h>
+#include <sys/mount.h>
 
 #define LOG_FILE "/tmp/l-cached.log"
 
 static volatile sig_atomic_t g_shutdown = 0;
 static volatile sig_atomic_t g_refresh = 0;
-static char g_roots[L_MAX_ROOTS][PATH_MAX];
-static int g_root_count = 0;
 
 /* ============================================================================
  * Logging
@@ -47,24 +47,34 @@ static void rotate_log(void) {
     }
 }
 
+static void write_status(const char *status) {
+    const char *home = getenv("HOME");
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/.cache/l/status", home ? home : "/tmp");
+    FILE *f = fopen(path, "w");
+    if (f) {
+        fprintf(f, "%s\n", status);
+        fclose(f);
+    }
+}
+
+/* Check if path is on a local filesystem (not network) */
+static int is_local_filesystem(const char *path) {
+    struct statfs sf;
+    if (statfs(path, &sf) != 0) return 0;
+    return (sf.f_flags & MNT_LOCAL) != 0;
+}
+
 /* ============================================================================
  * Directory Scanning
  * ============================================================================ */
-
-static int is_other_root(const char *path, int current_idx) {
-    for (int i = 0; i < g_root_count; i++) {
-        if (i != current_idx && strcmp(path, g_roots[i]) == 0)
-            return 1;
-    }
-    return 0;
-}
 
 typedef struct {
     off_t size;
     long file_count;
 } ScanResult;
 
-static ScanResult scan_dir(const char *path, dev_t root_dev, int root_idx) {
+static ScanResult scan_dir(const char *path) {
     ScanResult result = {0, 0};
     if (g_shutdown) return result;
 
@@ -72,11 +82,9 @@ static ScanResult scan_dir(const char *path, dev_t root_dev, int root_idx) {
     if (stat(path, &dir_st) != 0 || !S_ISDIR(dir_st.st_mode))
         return (ScanResult){-1, -1};
 
-    if (root_dev == 0) {
-        root_dev = dir_st.st_dev;
-    } else if (dir_st.st_dev != root_dev) {
+    /* Skip network filesystems */
+    if (!is_local_filesystem(path))
         return (ScanResult){0, 0};
-    }
 
     /* Check cache - skip if mtime unchanged */
     const CacheEntry *cached = cache_daemon_lookup(path);
@@ -143,17 +151,7 @@ static ScanResult scan_dir(const char *path, dev_t root_dev, int root_idx) {
 
             if (path_should_skip_firmlink(full)) continue;
 
-            if (is_other_root(full, root_idx)) {
-                const CacheEntry *other = cache_daemon_lookup(full);
-                if (other && other->size >= 0) {
-                    result.size += other->size;
-                    if (!skip_file_count && other->file_count >= 0)
-                        result.file_count += other->file_count;
-                }
-                continue;
-            }
-
-            ScanResult sub = scan_dir(full, root_dev, root_idx);
+            ScanResult sub = scan_dir(full);
             if (sub.size >= 0) result.size += sub.size;
             if (!skip_file_count && sub.file_count >= 0)
                 result.file_count += sub.file_count;
@@ -161,8 +159,9 @@ static ScanResult scan_dir(const char *path, dev_t root_dev, int root_idx) {
     }
     closedir(dir);
 
-    /* Cache if meets threshold */
-    if (!skip_file_count && result.file_count >= L_FILE_COUNT_THRESHOLD) {
+    /* Cache if meets threshold (but never cache root - we always need to recurse from it) */
+    if (!skip_file_count && result.file_count >= L_FILE_COUNT_THRESHOLD &&
+        strcmp(path, "/") != 0) {
         if (cache_daemon_store(path, result.size, result.file_count, dir_st.st_mtime) == 0)
             log_info("cached %s (%ld files)", path, result.file_count);
     }
@@ -186,44 +185,12 @@ static void handle_refresh(int sig) {
 }
 
 /* ============================================================================
- * Root Management
- * ============================================================================ */
-
-static int add_root(const char *path) {
-    if (g_root_count >= L_MAX_ROOTS) return -1;
-    if (!realpath(path, g_roots[g_root_count])) return -1;
-    for (int i = 0; i < g_root_count; i++) {
-        if (strcmp(g_roots[i], g_roots[g_root_count]) == 0)
-            return 0;
-    }
-    log_info("root: %s", g_roots[g_root_count]);
-    g_root_count++;
-    return 0;
-}
-
-/* ============================================================================
  * Main
  * ============================================================================ */
 
 int main(int argc, char *argv[]) {
-    if (argc > 1 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0)) {
-        fprintf(stderr, "Usage: %s [root...]\n", argv[0]);
-        return 0;
-    }
-
-    if (argc > 1) {
-        for (int i = 1; i < argc; i++)
-            add_root(argv[i]);
-    } else {
-        add_root("/");
-        const char *home = getenv("HOME");
-        if (home) add_root(home);
-    }
-
-    if (g_root_count == 0) {
-        log_error("no valid roots");
-        return 1;
-    }
+    (void)argc;
+    (void)argv;
 
     if (cache_daemon_init() != 0) {
         log_error("cache init failed");
@@ -240,12 +207,10 @@ int main(int argc, char *argv[]) {
         rotate_log();
         time_t start = time(NULL);
 
-        for (int i = g_root_count - 1; i >= 0 && !g_shutdown; i--) {
-            log_info("scanning %s...", g_roots[i]);
-            ScanResult r = scan_dir(g_roots[i], 0, i);
-            log_info("  %s: %ld files, %lld bytes",
-                     g_roots[i], r.file_count, (long long)r.size);
-        }
+        write_status("scanning");
+        log_info("scanning /...");
+        ScanResult r = scan_dir("/");
+        log_info("  /: %ld files, %lld bytes", r.file_count, (long long)r.size);
 
         int pruned = cache_daemon_prune_stale();
         if (pruned > 0)
@@ -256,6 +221,7 @@ int main(int argc, char *argv[]) {
 
         time_t elapsed = time(NULL) - start;
         log_info("scan complete (%lds, %d cached)", elapsed, cache_daemon_count());
+        write_status("idle");
 
         for (int i = 0; i < L_SCAN_INTERVAL && !g_shutdown && !g_refresh; i++)
             sleep(1);

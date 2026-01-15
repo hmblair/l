@@ -85,7 +85,6 @@
 /* Daemon constants */
 #define L_SCAN_INTERVAL         1800    /* 30 minutes between scans */
 #define L_FILE_COUNT_THRESHOLD  1000    /* Cache directories with >= this many files */
-#define L_MAX_ROOTS             8
 #define L_MAX_LOG_SIZE          (1024 * 1024)  /* 1MB max log size */
 
 /* Error codes */

@@ -11,7 +11,7 @@
 #include "common.h"
 
 /* Launchd service label */
-#define DAEMON_LABEL "com.zu.l-cached"
+#define DAEMON_LABEL "com.l.cached"
 
 /* Run the daemon management interface */
 void daemon_run(const char *binary_path);
