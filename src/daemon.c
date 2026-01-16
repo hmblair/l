@@ -5,6 +5,7 @@
 #include "daemon.h"
 #include <termios.h>
 #include <sys/ioctl.h>
+#include <sys/select.h>
 #include <signal.h>
 #include <time.h>
 #include <sqlite3.h>
@@ -62,7 +63,19 @@ typedef enum {
     KEY_QUIT
 } KeyPress;
 
-static KeyPress term_read_key(void) {
+/* Read key with optional timeout (ms). Returns KEY_NONE on timeout. */
+static KeyPress term_read_key(int timeout_ms) {
+    if (timeout_ms > 0) {
+        fd_set fds;
+        struct timeval tv;
+        FD_ZERO(&fds);
+        FD_SET(STDIN_FILENO, &fds);
+        tv.tv_sec = timeout_ms / 1000;
+        tv.tv_usec = (timeout_ms % 1000) * 1000;
+        if (select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv) <= 0)
+            return KEY_NONE;
+    }
+
     char c;
     if (read(STDIN_FILENO, &c, 1) != 1) return KEY_NONE;
 
@@ -106,6 +119,29 @@ static void menu_render(MenuItem *items, int count, int selected) {
     }
 }
 
+/* Forward declarations for status refresh */
+static int is_daemon_scanning(void);
+static int cache_get_count(void);
+static off_t cache_get_size(void);
+
+/* Line offset from bottom of status to cache count line (set by print_status) */
+static int g_cache_count_line = 0;
+
+static void refresh_cache_count(int menu_count) {
+    int count = cache_get_count();
+
+    /* Move up from menu to the cache line, update count, move back */
+    int lines_up = menu_count + g_cache_count_line + 1;
+    printf("\033[s");  /* Save cursor */
+    printf("\033[%dA", lines_up);  /* Move up */
+    printf("\r\033[K");  /* Clear line */
+    printf("  %s●%s Cache     %s%d%s entries %s(scanning...)%s",
+           COLOR_GREEN, COLOR_RESET, COLOR_WHITE, count, COLOR_RESET,
+           COLOR_GREY, COLOR_RESET);
+    printf("\033[u");  /* Restore cursor */
+    fflush(stdout);
+}
+
 static int menu_run(MenuItem *items, int count, const char *binary_path) {
     int selected = 0;
 
@@ -116,7 +152,16 @@ static int menu_run(MenuItem *items, int count, const char *binary_path) {
     menu_render(items, count, selected);
 
     while (1) {
-        KeyPress key = term_read_key();
+        /* Use 200ms timeout when scanning to allow status refresh */
+        int timeout = is_daemon_scanning() ? 200 : 0;
+        KeyPress key = term_read_key(timeout);
+
+        if (key == KEY_NONE && timeout > 0) {
+            /* Timeout while scanning - refresh cache count */
+            refresh_cache_count(count);
+            continue;
+        }
+
         switch (key) {
             case KEY_UP:
                 selected = (selected - 1 + count) % count;
@@ -170,6 +215,19 @@ static void get_log_path(char *buf, size_t len) {
 static void get_status_path(char *buf, size_t len) {
     const char *home = getenv("HOME");
     snprintf(buf, len, "%s/.cache/l/status", home ? home : "/tmp");
+}
+
+static int is_daemon_scanning(void) {
+    char path[PATH_MAX];
+    get_status_path(path, sizeof(path));
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    char status[16] = "";
+    if (fgets(status, sizeof(status), f)) {
+        status[strcspn(status, "\n")] = '\0';
+    }
+    fclose(f);
+    return strcmp(status, "scanning") == 0;
 }
 
 static void get_config_path(char *buf, size_t len) {
@@ -384,11 +442,22 @@ static off_t cache_get_size(void) {
     char cache_path[PATH_MAX];
     get_cache_path(cache_path, sizeof(cache_path));
 
+    off_t total = 0;
     struct stat st;
+
+    /* Main database file */
     if (stat(cache_path, &st) == 0) {
-        return st.st_size;
+        total += st.st_size;
     }
-    return 0;
+
+    /* WAL file (SQLite writes here first) */
+    char wal_path[PATH_MAX + 8];
+    snprintf(wal_path, sizeof(wal_path), "%s-wal", cache_path);
+    if (stat(wal_path, &st) == 0) {
+        total += st.st_size;
+    }
+
+    return total;
 }
 
 static void cache_clear(void) {
@@ -409,6 +478,8 @@ static void cache_clear(void) {
  * ============================================================================ */
 
 static void print_status(void) {
+    int lines_after_cache = 0;  /* Count lines printed after the cache count line */
+
     printf("\n");
 
     /* Daemon status */
@@ -476,11 +547,14 @@ static void print_status(void) {
         printf("  %s●%s Cache     %s%d%s entries %s(%s)%s\n",
                COLOR_GREEN, COLOR_RESET, COLOR_WHITE, count, COLOR_RESET,
                COLOR_GREY, size_buf, COLOR_RESET);
+        /* Lines after the cache count line start here */
         printf("              %supdated %s%s\n", COLOR_GREY, time_buf, COLOR_RESET);
+        lines_after_cache++;
     } else {
         printf("  %s○%s Cache     %sempty%s\n", COLOR_GREY, COLOR_RESET, COLOR_GREY, COLOR_RESET);
     }
     printf("              %s%s%s\n", COLOR_GREY, cache_path, COLOR_RESET);
+    lines_after_cache++;
 
     /* Log file */
     char log_path[PATH_MAX];
@@ -488,14 +562,20 @@ static void print_status(void) {
     struct stat st;
     if (stat(log_path, &st) == 0) {
         printf("  %s○%s Log       %s%s%s\n", COLOR_GREY, COLOR_RESET, COLOR_GREY, log_path, COLOR_RESET);
+        lines_after_cache++;
     }
 
     /* Config */
     printf("  %s○%s Config    %sscan every %dm, cache dirs with ≥%d files%s\n",
            COLOR_GREY, COLOR_RESET, COLOR_GREY,
            config_get_interval() / 60, config_get_threshold(), COLOR_RESET);
+    lines_after_cache++;
 
     printf("\n");
+    lines_after_cache++;
+
+    /* Set global for dynamic refresh */
+    g_cache_count_line = lines_after_cache;
 }
 
 /* ============================================================================
@@ -537,15 +617,27 @@ static void action_stop(const char *binary_path) {
 
 static void action_clear(const char *binary_path) {
     (void)binary_path;
-
     int count = cache_get_count();
     if (count == 0) {
         printf("%sCache already empty%s\n", COLOR_YELLOW, COLOR_RESET);
         return;
     }
 
+    /* Stop daemon first so it releases the database file */
+    int was_running = daemon_is_running();
+    if (was_running) {
+        daemon_unload();
+        usleep(500000);  /* Wait for daemon to stop */
+    }
+
     cache_clear();
     printf("%sCleared %d entries%s\n", COLOR_GREEN, count, COLOR_RESET);
+
+    /* Restart daemon if it was running */
+    if (was_running) {
+        daemon_load();
+        printf("%sDaemon restarted%s\n", COLOR_GREEN, COLOR_RESET);
+    }
 }
 
 static void action_refresh(const char *binary_path) {
@@ -619,7 +711,7 @@ static void action_configure(const char *binary_path) {
 
     int selected = 0;
     while (1) {
-        KeyPress key = term_read_key();
+        KeyPress key = term_read_key(0);
         switch (key) {
             case KEY_UP:
                 selected = (selected - 1 + count) % count;
