@@ -75,8 +75,8 @@ static ScanResult scan_dir(const char *path) {
     if (stat(path, &dir_st) != 0 || !S_ISDIR(dir_st.st_mode))
         return (ScanResult){-1, -1};
 
-    /* Skip network filesystems */
-    if (path_is_network_fs(path))
+    /* Skip network and virtual filesystems (proc, sysfs, etc.) */
+    if (path_is_network_fs(path) || path_is_virtual_fs(path))
         return (ScanResult){0, 0};
 
     /* Check cache - skip if mtime unchanged */

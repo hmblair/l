@@ -287,6 +287,11 @@ int cache_lookup_wrapper(const char *path, off_t *size, long *count) {
 }
 
 DirStats get_dir_stats_cached(const char *path) {
+    /* Skip virtual filesystems (proc, sysfs, etc.) - they report fake sizes */
+    if (path_is_virtual_fs(path)) {
+        return (DirStats){-1, -1};
+    }
+
     /* Resolve symlinks for cache lookup (cache stores real paths) */
     char resolved[PATH_MAX];
     const char *lookup_path = path;
