@@ -527,6 +527,97 @@ int get_audio_duration(const char *path) {
 }
 
 /* ============================================================================
+ * PDF Page Counting
+ * ============================================================================ */
+
+static int has_pdf_extension(const char *path) {
+    const char *ext = strrchr(path, '.');
+    if (!ext) return 0;
+    return strcasecmp(ext, ".pdf") == 0;
+}
+
+/* Get page count from PDF file.
+ * Returns page count, or -1 on failure.
+ *
+ * PDFs store page count in the document catalog's /Pages dictionary.
+ * We search for /Type /Pages followed by /Count N to find it.
+ */
+int get_pdf_page_count(const char *path) {
+    if (!has_pdf_extension(path)) return -1;
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return -1;
+
+    struct stat st;
+    if (fstat(fd, &st) != 0 || st.st_size < 100) {
+        close(fd);
+        return -1;
+    }
+
+    /* Map the file for searching */
+    size_t size = (size_t)st.st_size;
+    char *data = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+
+    if (data == MAP_FAILED) return -1;
+
+    /* Verify PDF header */
+    if (memcmp(data, "%PDF-", 5) != 0) {
+        munmap(data, size);
+        return -1;
+    }
+
+    int page_count = -1;
+
+    /* Search for /Type /Pages (or /Type/Pages) and find /Count in same object */
+    for (size_t i = 0; i + 20 < size; i++) {
+        if (data[i] == '/' && memcmp(data + i, "/Type", 5) == 0) {
+            size_t j = i + 5;
+            /* Skip whitespace */
+            while (j < size && (data[j] == ' ' || data[j] == '\r' || data[j] == '\n'))
+                j++;
+            if (j + 6 < size && memcmp(data + j, "/Pages", 6) == 0) {
+                /* Found /Type /Pages - find object boundaries (<< and >>) */
+                size_t obj_start = i;
+                while (obj_start > 1 && !(data[obj_start-1] == '<' && data[obj_start-2] == '<'))
+                    obj_start--;
+                if (obj_start >= 2) obj_start -= 2;
+
+                size_t obj_end = j + 6;
+                while (obj_end + 1 < size && !(data[obj_end] == '>' && data[obj_end+1] == '>'))
+                    obj_end++;
+
+                /* Search for /Count within object boundaries */
+                for (size_t k = obj_start; k + 7 < obj_end; k++) {
+                    if (data[k] == '/' && memcmp(data + k, "/Count", 6) == 0) {
+                        size_t m = k + 6;
+                        /* Skip whitespace */
+                        while (m < obj_end && (data[m] == ' ' || data[m] == '\r' || data[m] == '\n'))
+                            m++;
+                        /* Parse number */
+                        if (m < obj_end && data[m] >= '0' && data[m] <= '9') {
+                            int count = 0;
+                            while (m < obj_end && data[m] >= '0' && data[m] <= '9') {
+                                count = count * 10 + (data[m] - '0');
+                                m++;
+                            }
+                            /* Take the largest /Count we find (root Pages object) */
+                            if (count > page_count) {
+                                page_count = count;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    munmap(data, size);
+    return page_count;
+}
+
+/* ============================================================================
  * Line Counting
  * ============================================================================ */
 

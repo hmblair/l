@@ -52,9 +52,10 @@ typedef struct FileEntry {
     off_t size;
     long file_count;
     time_t mtime;
-    int line_count;      /* For images: megapixels * 10; for audio: duration in seconds */
+    int line_count;      /* For images: megapixels * 10; for audio: duration in seconds; for PDF: page count */
     int is_image;        /* 1 if line_count holds megapixels */
     int is_audio;        /* 1 if line_count holds duration in seconds */
+    int is_pdf;          /* 1 if line_count holds page count */
     int is_ignored;
     int is_git_root;     /* 1 if this directory is a git repo root */
     char git_status[3];

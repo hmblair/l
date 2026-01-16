@@ -38,6 +38,7 @@ static const struct { const char *key; size_t offset; } icon_keys[] = {
     { "count_lines",    offsetof(Icons, count_lines) },
     { "count_pixels",   offsetof(Icons, count_pixels) },
     { "count_duration", offsetof(Icons, count_duration) },
+    { "count_pages",    offsetof(Icons, count_pages) },
     { "cursor",         offsetof(Icons, cursor) },
     { NULL, 0 }
 };
