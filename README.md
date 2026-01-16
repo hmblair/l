@@ -12,6 +12,7 @@ Enhanced directory listing with tree view, icons, and git integration.
 - Long format with size, line count, and modification time
 - Image dimensions and megapixels (JPEG, PNG, TIFF, WebP, BMP)
 - Audio/video duration (M4B, M4A, MP4, MOV)
+- PDF page counts
 - Configurable depth limiting, filtering, and sorting
 
 ## Installation
