@@ -437,9 +437,16 @@ static int has_isobmff_audio_extension(const char *path) {
     return 0;
 }
 
+/* Forward declaration for Matroska parser */
+static int get_matroska_duration(const char *path);
+
 /* Get audio/video duration from ISOBMFF container (M4B, M4A, MP4, MOV, etc.)
  * Returns duration in seconds, or -1 on failure. */
 int get_audio_duration(const char *path) {
+    /* Try Matroska first (MKV, WebM) */
+    int dur = get_matroska_duration(path);
+    if (dur >= 0) return dur;
+
     if (!has_isobmff_audio_extension(path)) return -1;
 
     FILE *f = fopen(path, "rb");
@@ -524,6 +531,146 @@ int get_audio_duration(const char *path) {
 
     fclose(f);
     return -1;
+}
+
+/* Check if file has a Matroska/WebM extension */
+static int has_matroska_extension(const char *path) {
+    const char *dot = strrchr(path, '/');
+    dot = dot ? strrchr(dot, '.') : strrchr(path, '.');
+    if (!dot) return 0;
+    dot++;
+
+    static const char *exts[] = { "mkv", "webm", "mka", NULL };
+    for (const char **e = exts; *e; e++) {
+        if (strcasecmp(dot, *e) == 0) return 1;
+    }
+    return 0;
+}
+
+/* Read EBML variable-length integer, return number of bytes read (0 on error) */
+static int read_ebml_vint(FILE *f, uint64_t *value, int strip_marker) {
+    int c = fgetc(f);
+    if (c == EOF) return 0;
+
+    /* Find leading 1 bit to determine length */
+    int len = 1;
+    uint8_t mask = 0x80;
+    while (len <= 8 && !(c & mask)) {
+        mask >>= 1;
+        len++;
+    }
+    if (len > 8) return 0;
+
+    *value = strip_marker ? (c & (mask - 1)) : c;
+    for (int i = 1; i < len; i++) {
+        c = fgetc(f);
+        if (c == EOF) return 0;
+        *value = (*value << 8) | c;
+    }
+    return len;
+}
+
+/* Read EBML element ID */
+static int read_ebml_id(FILE *f, uint64_t *id) {
+    return read_ebml_vint(f, id, 0);
+}
+
+/* Read EBML element size */
+static int read_ebml_size(FILE *f, uint64_t *size) {
+    return read_ebml_vint(f, size, 1);
+}
+
+/* Get duration from Matroska/WebM file. Returns duration in seconds, or -1. */
+static int get_matroska_duration(const char *path) {
+    if (!has_matroska_extension(path)) return -1;
+
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+
+    /* Verify EBML header (ID 0x1A45DFA3) */
+    unsigned char header[4];
+    if (fread(header, 1, 4, f) < 4 ||
+        header[0] != 0x1A || header[1] != 0x45 ||
+        header[2] != 0xDF || header[3] != 0xA3) {
+        fclose(f);
+        return -1;
+    }
+
+    /* Skip EBML header content */
+    uint64_t header_size;
+    if (!read_ebml_size(f, &header_size)) { fclose(f); return -1; }
+    fseek(f, header_size, SEEK_CUR);
+
+    /* Look for Segment element (ID 0x18538067) */
+    uint64_t id, size;
+    if (!read_ebml_id(f, &id) || id != 0x18538067) { fclose(f); return -1; }
+    if (!read_ebml_size(f, &size)) { fclose(f); return -1; }
+
+    long segment_end = ftell(f) + (long)size;
+    double duration = -1;
+    uint64_t timecode_scale = 1000000; /* Default: 1ms */
+
+    /* Search for Info element within Segment */
+    while (ftell(f) < segment_end) {
+        long elem_start = ftell(f);
+        if (!read_ebml_id(f, &id)) break;
+        if (!read_ebml_size(f, &size)) break;
+
+        if (id == 0x1549A966) { /* Info element */
+            long info_end = ftell(f) + (long)size;
+
+            /* Search within Info for Duration and TimecodeScale */
+            while (ftell(f) < info_end) {
+                if (!read_ebml_id(f, &id)) break;
+                if (!read_ebml_size(f, &size)) break;
+
+                if (id == 0x2AD7B1 && size <= 8) { /* TimecodeScale */
+                    timecode_scale = 0;
+                    for (uint64_t i = 0; i < size; i++) {
+                        int c = fgetc(f);
+                        if (c == EOF) break;
+                        timecode_scale = (timecode_scale << 8) | c;
+                    }
+                } else if (id == 0x4489 && size == 8) { /* Duration (float) */
+                    unsigned char buf[8];
+                    if (fread(buf, 1, 8, f) == 8) {
+                        uint64_t bits = 0;
+                        for (int i = 0; i < 8; i++)
+                            bits = (bits << 8) | buf[i];
+                        memcpy(&duration, &bits, 8);
+                    }
+                } else if (id == 0x4489 && size == 4) { /* Duration (float32) */
+                    unsigned char buf[4];
+                    if (fread(buf, 1, 4, f) == 4) {
+                        uint32_t bits = (buf[0] << 24) | (buf[1] << 16) |
+                                        (buf[2] << 8) | buf[3];
+                        float f32;
+                        memcpy(&f32, &bits, 4);
+                        duration = f32;
+                    }
+                } else {
+                    fseek(f, size, SEEK_CUR);
+                }
+            }
+            break; /* Found Info, done */
+        } else {
+            /* Skip unknown elements, but limit skip for "unknown size" */
+            if (size > 0x00FFFFFFFFFFFFFF) {
+                /* Unknown size marker - scan forward */
+                break;
+            }
+            fseek(f, size, SEEK_CUR);
+        }
+
+        /* Safety: prevent infinite loop */
+        if (ftell(f) <= elem_start) break;
+    }
+
+    fclose(f);
+
+    if (duration < 0) return -1;
+    /* Duration is in timecode units; convert to seconds */
+    return (int)((duration * timecode_scale) / 1000000000.0);
 }
 
 /* ============================================================================
