@@ -1,11 +1,13 @@
 /*
- * ui.h - Display types and functions: icons, columns, tree, colors
+ * ui.h - Display types and functions: columns, tree, colors
  */
 
 #ifndef L_UI_H
 #define L_UI_H
 
 #include "common.h"
+#include "icons.h"
+#include "fileinfo.h"
 #include "git.h"
 
 /* ============================================================================
@@ -18,23 +20,6 @@ typedef enum {
     SORT_TIME,
     SORT_NAME
 } SortMode;
-
-typedef enum {
-    FTYPE_UNKNOWN,
-    FTYPE_DIR,
-    FTYPE_FILE,
-    FTYPE_EXEC,
-    FTYPE_DEVICE,
-    FTYPE_SOCKET,
-    FTYPE_FIFO,
-    FTYPE_SYMLINK,
-    FTYPE_SYMLINK_DIR,
-    FTYPE_SYMLINK_EXEC,
-    FTYPE_SYMLINK_DEVICE,
-    FTYPE_SYMLINK_SOCKET,
-    FTYPE_SYMLINK_FIFO,
-    FTYPE_SYMLINK_BROKEN
-} FileType;
 
 typedef struct {
     int max_depth;
@@ -57,43 +42,6 @@ typedef struct {
     char script_dir[PATH_MAX];
     const char *grep_pattern;
 } Config;
-
-/* Extension icon mapping */
-typedef struct {
-    char ext[L_MAX_EXT_LEN];
-    char icon[L_MAX_ICON_LEN];
-} ExtIcon;
-
-/* Icons configuration */
-typedef struct Icons {
-    char default_icon[L_MAX_ICON_LEN];
-    char symlink[L_MAX_ICON_LEN];
-    char symlink_dir[L_MAX_ICON_LEN];
-    char symlink_exec[L_MAX_ICON_LEN];
-    char symlink_file[L_MAX_ICON_LEN];
-    char symlink_broken[L_MAX_ICON_LEN];
-    char closed_directory[L_MAX_ICON_LEN];
-    char open_directory[L_MAX_ICON_LEN];
-    char locked_dir[L_MAX_ICON_LEN];
-    char executable[L_MAX_ICON_LEN];
-    char device[L_MAX_ICON_LEN];
-    char socket[L_MAX_ICON_LEN];
-    char fifo[L_MAX_ICON_LEN];
-    char file[L_MAX_ICON_LEN];
-    char binary[L_MAX_ICON_LEN];
-    char git_modified[L_MAX_ICON_LEN];
-    char git_untracked[L_MAX_ICON_LEN];
-    char git_staged[L_MAX_ICON_LEN];
-    char git_deleted[L_MAX_ICON_LEN];
-    char git_upstream[L_MAX_ICON_LEN];
-    char readonly[L_MAX_ICON_LEN];
-    char count_files[L_MAX_ICON_LEN];
-    char count_lines[L_MAX_ICON_LEN];
-    char count_pixels[L_MAX_ICON_LEN];
-    char cursor[L_MAX_ICON_LEN];
-    ExtIcon ext_icons[L_MAX_EXT_ICONS];
-    int ext_count;
-} Icons;
 
 /* File entry representing a filesystem entry */
 typedef struct FileEntry {
@@ -163,19 +111,6 @@ typedef struct {
 /* Helper macros */
 #define CLR(cfg, c) ((cfg)->is_tty ? (c) : "")
 #define RST(cfg)    ((cfg)->is_tty ? COLOR_RESET : "")
-#define ICON_OR_FALLBACK(preferred, fallback) \
-    ((preferred)[0] ? (preferred) : (fallback))
-
-/* ============================================================================
- * Icons Functions
- * ============================================================================ */
-
-void icons_init_defaults(Icons *icons);
-void icons_load(Icons *icons, const char *script_dir);
-const char *get_icon(const Icons *icons, FileType type, int is_expanded,
-                     int is_locked, int is_binary, const char *name);
-const char *get_ext_icon(const Icons *icons, const char *name);
-const char *get_count_icon(const FileEntry *fe, const Icons *icons);
 
 /* ============================================================================
  * Column Functions
@@ -185,19 +120,7 @@ void columns_init(Column *cols);
 void columns_update_widths(Column *cols, const FileEntry *fe, const Icons *icons);
 void format_size(off_t bytes, char *buf, size_t len);
 void format_relative_time(time_t mtime, char *buf, size_t len);
-
-/* ============================================================================
- * File Type Detection
- * ============================================================================ */
-
-FileType detect_file_type(const char *path, struct stat *st, char **symlink_target);
-const char *get_file_color(FileType type, int is_cwd, int is_ignored, const Config *cfg);
-
-/* ============================================================================
- * Line Counting
- * ============================================================================ */
-
-int count_file_lines(const char *path);
+const char *get_count_icon(const FileEntry *fe, const Icons *icons);
 
 /* ============================================================================
  * File List Management
