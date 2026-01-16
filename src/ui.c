@@ -95,6 +95,10 @@ void resolve_source_dir(const char *argv0, char *src_dir, size_t len) {
  * ============================================================================ */
 
 void format_size(off_t bytes, char *buf, size_t len) {
+    if (bytes < 0) {
+        snprintf(buf, len, "-");
+        return;
+    }
     const char *units[] = {"B", "K", "M", "G", "T", "P"};
     int unit_idx = 0;
     double size = (double)bytes;
@@ -886,6 +890,9 @@ int read_directory(const char *dir_path, FileList *list, const Config *cfg) {
     DIR *dir = opendir(dir_path);
     if (!dir) return -1;
 
+    /* Check once if this directory is on a virtual filesystem (proc, sysfs, etc.) */
+    int is_virtual_fs = path_is_virtual_fs(dir_path);
+
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
         if (PATH_IS_DOT_OR_DOTDOT(entry->d_name))
@@ -910,15 +917,16 @@ int read_directory(const char *dir_path, FileList *list, const Config *cfg) {
         fe.type = detect_file_type(full_path, &st, &fe.symlink_target);
         fe.mode = st.st_mode;
         fe.mtime = GET_MTIME(st);
-        fe.size = st.st_size;
+        /* Virtual filesystems report fake sizes (e.g., /proc/kcore = 128T) */
+        fe.size = is_virtual_fs ? -1 : st.st_size;
 
         file_list_add(list, &fe);
     }
 
     closedir(dir);
 
-    /* Compute expensive data in parallel */
-    if (cfg->long_format && list->count > 0) {
+    /* Compute expensive data in parallel (skip for virtual filesystems) */
+    if (cfg->long_format && list->count > 0 && !is_virtual_fs) {
         #pragma omp parallel for schedule(dynamic)
         for (size_t i = 0; i < list->count; i++) {
             FileEntry *fe = &list->entries[i];
@@ -1106,8 +1114,13 @@ static void build_tree_children(TreeNode *parent, int depth, Column *cols,
             if (cfg->long_format && cfg->show_hidden && child->child_count > 0) {
                 off_t total_size = 0;
                 long total_count = 0;
+                int has_unknown_size = 0;
                 for (size_t j = 0; j < child->child_count; j++) {
-                    total_size += child->children[j].entry.size;
+                    if (child->children[j].entry.size < 0) {
+                        has_unknown_size = 1;
+                    } else {
+                        total_size += child->children[j].entry.size;
+                    }
                     FileType t = child->children[j].entry.type;
                     if (t == FTYPE_FILE || t == FTYPE_EXEC ||
                         t == FTYPE_SYMLINK || t == FTYPE_SYMLINK_EXEC) {
@@ -1116,7 +1129,7 @@ static void build_tree_children(TreeNode *parent, int depth, Column *cols,
                         total_count += child->children[j].entry.file_count;
                     }
                 }
-                child->entry.size = total_size;
+                child->entry.size = has_unknown_size ? -1 : total_size;
                 child->entry.file_count = total_count;
             }
         }
@@ -1243,8 +1256,12 @@ TreeNode *build_tree(const char *path, Column *cols,
     root->entry.line_count = -1;
     root->entry.file_count = -1;
 
-    if (cfg->long_format && (type == FTYPE_FILE || type == FTYPE_EXEC ||
-                             type == FTYPE_SYMLINK || type == FTYPE_SYMLINK_EXEC)) {
+    /* Check if path is on a virtual filesystem (e.g., /proc, /sys) */
+    int is_virtual_fs = path_is_virtual_fs(abs_path);
+
+    if (cfg->long_format && !is_virtual_fs &&
+        (type == FTYPE_FILE || type == FTYPE_EXEC ||
+         type == FTYPE_SYMLINK || type == FTYPE_SYMLINK_EXEC)) {
         int mp = get_image_megapixels(abs_path);
         if (mp >= 0) {
             root->entry.line_count = mp;
@@ -1254,8 +1271,10 @@ TreeNode *build_tree(const char *path, Column *cols,
         }
     }
 
-    root->entry.size = st.st_size;
-    if (cfg->long_format && (type == FTYPE_DIR || type == FTYPE_SYMLINK_DIR) && !cfg->show_hidden) {
+    /* Virtual filesystems report fake sizes (e.g., /proc/kcore = 128T) */
+    root->entry.size = is_virtual_fs ? -1 : st.st_size;
+    if (cfg->long_format && !is_virtual_fs &&
+        (type == FTYPE_DIR || type == FTYPE_SYMLINK_DIR) && !cfg->show_hidden) {
         DirStats stats = get_dir_stats_cached(abs_path);
         root->entry.size = stats.size;
         root->entry.file_count = stats.file_count;
@@ -1282,8 +1301,13 @@ TreeNode *build_tree(const char *path, Column *cols,
         if (cfg->long_format && cfg->show_hidden) {
             off_t total_size = 0;
             long total_count = 0;
+            int has_unknown_size = 0;
             for (size_t i = 0; i < root->child_count; i++) {
-                total_size += root->children[i].entry.size;
+                if (root->children[i].entry.size < 0) {
+                    has_unknown_size = 1;
+                } else {
+                    total_size += root->children[i].entry.size;
+                }
                 FileType t = root->children[i].entry.type;
                 if (t == FTYPE_FILE || t == FTYPE_EXEC ||
                     t == FTYPE_SYMLINK || t == FTYPE_SYMLINK_EXEC) {
@@ -1292,7 +1316,7 @@ TreeNode *build_tree(const char *path, Column *cols,
                     total_count += root->children[i].entry.file_count;
                 }
             }
-            root->entry.size = total_size;
+            root->entry.size = has_unknown_size ? -1 : total_size;
             root->entry.file_count = total_count;
             if (cols) {
                 columns_update_widths(cols, &root->entry, icons);
@@ -1326,12 +1350,16 @@ static TreeNode *build_ancestor_node(const char *path, Column *cols,
     node->entry.symlink_target = symlink_target;
     node->entry.mode = st.st_mode;
     node->entry.mtime = GET_MTIME(st);
-    node->entry.size = st.st_size;
     node->entry.line_count = -1;
     node->entry.file_count = -1;
 
-    /* Compute size/file count for long format */
-    if (cfg->long_format && (type == FTYPE_DIR || type == FTYPE_SYMLINK_DIR)) {
+    /* Virtual filesystems report fake sizes */
+    int is_virtual_fs = path_is_virtual_fs(path);
+    node->entry.size = is_virtual_fs ? -1 : st.st_size;
+
+    /* Compute size/file count for long format (skip virtual filesystems) */
+    if (cfg->long_format && !is_virtual_fs &&
+        (type == FTYPE_DIR || type == FTYPE_SYMLINK_DIR)) {
         DirStats stats = get_dir_stats_cached(path);
         node->entry.size = stats.size;
         node->entry.file_count = stats.file_count;

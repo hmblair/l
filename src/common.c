@@ -264,3 +264,32 @@ int path_is_network_fs(const char *path) {
 #endif
     return 0;
 }
+
+int path_is_virtual_fs(const char *path) {
+#ifdef __linux__
+    /* Virtual/pseudo filesystem magic numbers */
+    #define PROC_SUPER_MAGIC    0x9fa0
+    #define SYSFS_MAGIC         0x62656572
+    #define DEVTMPFS_MAGIC      0x01021994
+    #define DEBUGFS_MAGIC       0x64626720
+    #define SECURITYFS_MAGIC    0x73636673
+    #define CGROUP_SUPER_MAGIC  0x27e0eb
+    #define CGROUP2_SUPER_MAGIC 0x63677270
+
+    struct statfs st;
+    if (statfs(path, &st) != 0) return 0;
+    switch ((unsigned long)st.f_type) {
+        case PROC_SUPER_MAGIC:
+        case SYSFS_MAGIC:
+        case DEVTMPFS_MAGIC:
+        case DEBUGFS_MAGIC:
+        case SECURITYFS_MAGIC:
+        case CGROUP_SUPER_MAGIC:
+        case CGROUP2_SUPER_MAGIC:
+            return 1;
+    }
+#else
+    (void)path;
+#endif
+    return 0;
+}

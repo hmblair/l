@@ -171,6 +171,9 @@ void path_abbreviate_home(const char *path, char *buf, size_t len, const char *h
 /* Check if path is on a network filesystem */
 int path_is_network_fs(const char *path);
 
+/* Check if path is on a virtual filesystem (proc, sysfs, etc.) */
+int path_is_virtual_fs(const char *path);
+
 /* Get cache database path */
 void cache_get_path(char *buf, size_t len);
 
