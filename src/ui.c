@@ -1468,23 +1468,23 @@ static const char *get_type_from_shebang(const char *path, const Shebangs *sb) {
 
 static const char *get_file_type_name(const char *path, const FileTypes *ft,
                                        const Shebangs *sb) {
-    /* Try loaded file types first */
-    if (ft && ft->count > 0) {
-        const char *type = filetypes_lookup(ft, path);
-        if (type) return type;
-    }
-
     const char *ext = strrchr(path, '.');
     const char *basename = strrchr(path, '/');
     basename = basename ? basename + 1 : path;
 
-    /* Special filenames (check before extension) */
+    /* Special filenames (check before extension lookup) */
     if (strcmp(basename, "Makefile") == 0 || strcmp(basename, "makefile") == 0 ||
         strcmp(basename, "GNUmakefile") == 0) return "Makefile";
     if (strcmp(basename, "CMakeLists.txt") == 0) return "CMake";
     if (strcmp(basename, "Dockerfile") == 0) return "Dockerfile";
     if (strcmp(basename, "Jenkinsfile") == 0) return "Jenkinsfile";
     if (strcmp(basename, "Vagrantfile") == 0) return "Vagrantfile";
+
+    /* Try loaded file types */
+    if (ft && ft->count > 0) {
+        const char *type = filetypes_lookup(ft, path);
+        if (type) return type;
+    }
 
     /* No extension or extension at start of basename - try shebang */
     if (!ext || ext < basename || ext == basename) {
