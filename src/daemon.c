@@ -301,13 +301,13 @@ static void daemon_load(void) {
 
     char cmd[PATH_MAX + 64];
     snprintf(cmd, sizeof(cmd), "launchctl load -w '%s' 2>/dev/null", service_path);
-    (void)system(cmd);
+    if (system(cmd)) { /* ignore */ }
 #else
     /* Reload systemd user daemon and enable+start the service */
-    (void)system("systemctl --user daemon-reload 2>/dev/null");
+    if (system("systemctl --user daemon-reload 2>/dev/null")) { /* ignore */ }
     char cmd[256];
     snprintf(cmd, sizeof(cmd), "systemctl --user enable --now %s 2>/dev/null", DAEMON_LABEL);
-    (void)system(cmd);
+    if (system(cmd)) { /* ignore */ }
 #endif
 }
 
@@ -318,12 +318,12 @@ static void daemon_unload(void) {
 
     char cmd[PATH_MAX + 64];
     snprintf(cmd, sizeof(cmd), "launchctl unload '%s' 2>/dev/null", service_path);
-    (void)system(cmd);
+    if (system(cmd)) { /* ignore */ }
 #else
     /* Stop and disable the systemd user service */
     char cmd[256];
     snprintf(cmd, sizeof(cmd), "systemctl --user disable --now %s 2>/dev/null", DAEMON_LABEL);
-    (void)system(cmd);
+    if (system(cmd)) { /* ignore */ }
 #endif
 }
 

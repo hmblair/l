@@ -575,7 +575,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
 
                     snprintf(cmd, sizeof(cmd), "%s \"%s\"", editor,
                              current->node->entry.path);
-                    (void)system(cmd);
+                    if (system(cmd)) { /* ignore */ }
 
                     state_free(&state);
                     collapsed_free(&collapsed);

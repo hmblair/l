@@ -428,10 +428,14 @@ void icons_load(Icons *icons, const char *script_dir) {
                 while (end > ext && isspace(*end)) *end-- = '\0';
 
                 if (*ext && icons->ext_count < L_MAX_EXT_ICONS) {
-                    strncpy(icons->ext_icons[icons->ext_count].ext, ext, L_MAX_EXT_LEN - 1);
-                    icons->ext_icons[icons->ext_count].ext[L_MAX_EXT_LEN - 1] = '\0';
-                    strncpy(icons->ext_icons[icons->ext_count].icon, value, L_MAX_ICON_LEN - 1);
-                    icons->ext_icons[icons->ext_count].icon[L_MAX_ICON_LEN - 1] = '\0';
+                    size_t ext_len = strlen(ext);
+                    size_t icon_len = strlen(value);
+                    if (ext_len >= L_MAX_EXT_LEN) ext_len = L_MAX_EXT_LEN - 1;
+                    if (icon_len >= L_MAX_ICON_LEN) icon_len = L_MAX_ICON_LEN - 1;
+                    memcpy(icons->ext_icons[icons->ext_count].ext, ext, ext_len);
+                    icons->ext_icons[icons->ext_count].ext[ext_len] = '\0';
+                    memcpy(icons->ext_icons[icons->ext_count].icon, value, icon_len);
+                    icons->ext_icons[icons->ext_count].icon[icon_len] = '\0';
                     icons->ext_count++;
                 }
             }
