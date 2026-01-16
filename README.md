@@ -11,7 +11,7 @@ Enhanced directory listing with tree view, icons, and git integration.
 - Background daemon for caching directory sizes
 - Long format with size, line count, and modification time
 - Image dimensions and megapixels (JPEG, PNG, TIFF, WebP, BMP)
-- Audio/video duration (M4B, M4A, MP4, MOV)
+- Audio/video duration (M4B, M4A, MP4, MOV, MKV, WebM)
 - PDF page counts
 - Configurable depth limiting, filtering, and sorting
 
