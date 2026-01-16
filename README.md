@@ -34,6 +34,7 @@ make install PREFIX=/usr/local
 **Required:**
 - sqlite3
 - pthread
+- zlib
 
 **Optional:**
 - libgit2 (faster git status)
