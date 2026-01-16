@@ -19,6 +19,7 @@ _l() {
         '(-p --path)'{-p,--path}'[Show ancestry from ~ (or /) to target]' \
         '(-e --expand-all)'{-e,--expand-all}'[Expand all directories (ignore skip list)]' \
         '--list[Flat list output (no tree structure)]' \
+        '--summary[Show summary info for file/directory]' \
         '--no-icons[Hide file/folder/git icons]' \
         '(-c --color-all)'{-c,--color-all}"[Don't gray out gitignored files]" \
         '-g[Show only git-modified/untracked files (implies -at)]' \
