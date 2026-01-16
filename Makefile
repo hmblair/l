@@ -5,6 +5,7 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "unk
 PREFIX ?= $(HOME)/.local
 DESTBINDIR = $(PREFIX)/bin
 CONFIGDIR = $(HOME)/.config/l
+CONFIG_FILE = config.toml
 ZSH_COMPLETIONS = /usr/local/share/zsh/site-functions
 BASH_COMPLETIONS = /usr/local/share/bash-completion/completions
 
@@ -111,9 +112,9 @@ install: all
 	install -m 755 $(BINDIR)/l $(DESTBINDIR)/l
 	install -m 755 $(BINDIR)/l-cached $(DESTBINDIR)/l-cached
 	install -m 755 $(SRCDIR)/cl $(DESTBINDIR)/cl
-	install -m 644 icons.toml $(CONFIGDIR)/icons.toml
+	install -m 644 $(CONFIG_FILE) $(CONFIGDIR)/$(CONFIG_FILE)
 	@echo "Installed l, l-cached, and cl to $(DESTBINDIR)"
-	@echo "Installed icons.toml to $(CONFIGDIR)"
+	@echo "Installed $(CONFIG_FILE) to $(CONFIGDIR)"
 	@if [ -w "$(ZSH_COMPLETIONS)" ] || [ -w "$$(dirname $(ZSH_COMPLETIONS))" ]; then \
 		mkdir -p $(ZSH_COMPLETIONS); \
 		install -m 644 completions/_l $(ZSH_COMPLETIONS)/_l; \
@@ -133,7 +134,7 @@ install: all
 
 uninstall:
 	rm -f $(DESTBINDIR)/l $(DESTBINDIR)/l-cached $(DESTBINDIR)/cl
-	rm -f $(CONFIGDIR)/icons.toml
+	rm -f $(CONFIGDIR)/$(CONFIG_FILE)
 	rmdir $(CONFIGDIR) 2>/dev/null || true
 	rm -f $(ZSH_COMPLETIONS)/_l $(ZSH_COMPLETIONS)/_cl
 	rm -f $(BASH_COMPLETIONS)/l $(BASH_COMPLETIONS)/cl

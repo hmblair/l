@@ -98,19 +98,21 @@ static int parse_toml_line(const char *line, char *key, size_t key_len,
 
 void icons_load(Icons *icons, const char *script_dir) {
     char path[PATH_MAX];
-    snprintf(path, sizeof(path), "%s/icons.toml", script_dir);
+    snprintf(path, sizeof(path), "%s/%s", script_dir, L_CONFIG_FILE);
 
     FILE *f = fopen(path, "r");
     if (!f) return;
 
     char line[L_TOML_LINE_MAX];
     char key[64], value[L_MAX_ICON_LEN];
+    int in_icons = 0;
     int in_extensions = 0;
 
     while (fgets(line, sizeof(line), f)) {
         const char *p = line;
         while (*p && isspace(*p)) p++;
         if (*p == '[') {
+            in_icons = (strncmp(p, "[icons]", 7) == 0);
             in_extensions = (strncmp(p, "[extensions]", 12) == 0);
             continue;
         }
@@ -141,7 +143,7 @@ void icons_load(Icons *icons, const char *script_dir) {
                     icons->ext_count++;
                 }
             }
-        } else {
+        } else if (in_icons) {
             icons_set(icons, key, value);
         }
     }
@@ -200,4 +202,79 @@ const char *get_icon(const Icons *icons, FileType type, int is_expanded,
         default:
             return icons->default_icon;
     }
+}
+
+/* ============================================================================
+ * File Types Functions
+ * ============================================================================ */
+
+void filetypes_init(FileTypes *ft) {
+    memset(ft, 0, sizeof(FileTypes));
+}
+
+void filetypes_load(FileTypes *ft, const char *script_dir) {
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/%s", script_dir, L_CONFIG_FILE);
+
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+
+    char line[L_TOML_LINE_MAX];
+    char key[64], value[L_MAX_FILETYPE_NAME];
+    int in_filetypes = 0;
+
+    while (fgets(line, sizeof(line), f)) {
+        const char *p = line;
+        while (*p && isspace(*p)) p++;
+        if (*p == '[') {
+            in_filetypes = (strncmp(p, "[filetypes]", 11) == 0);
+            continue;
+        }
+
+        if (!in_filetypes) continue;
+        if (!parse_toml_line(line, key, sizeof(key), value, sizeof(value)))
+            continue;
+
+        /* Parse comma-separated extensions */
+        char *ext_list = key;
+        char *ext;
+        while ((ext = strsep(&ext_list, ",")) != NULL) {
+            while (*ext && isspace(*ext)) ext++;
+            char *end = ext + strlen(ext) - 1;
+            while (end > ext && isspace(*end)) *end-- = '\0';
+
+            if (*ext && ft->count < L_MAX_FILETYPES) {
+                size_t ext_len = strlen(ext);
+                size_t name_len = strlen(value);
+                if (ext_len >= L_MAX_EXT_LEN) ext_len = L_MAX_EXT_LEN - 1;
+                if (name_len >= L_MAX_FILETYPE_NAME) name_len = L_MAX_FILETYPE_NAME - 1;
+                memcpy(ft->mappings[ft->count].ext, ext, ext_len);
+                ft->mappings[ft->count].ext[ext_len] = '\0';
+                memcpy(ft->mappings[ft->count].name, value, name_len);
+                ft->mappings[ft->count].name[name_len] = '\0';
+                ft->count++;
+            }
+        }
+    }
+
+    fclose(f);
+}
+
+const char *filetypes_lookup(const FileTypes *ft, const char *path) {
+    const char *ext = strrchr(path, '.');
+    const char *basename = strrchr(path, '/');
+    basename = basename ? basename + 1 : path;
+
+    /* No extension or extension at start of basename */
+    if (!ext || ext < basename || ext == basename) {
+        return NULL;
+    }
+    ext++;  /* skip the dot */
+
+    for (int i = 0; i < ft->count; i++) {
+        if (strcasecmp(ext, ft->mappings[i].ext) == 0) {
+            return ft->mappings[i].name;
+        }
+    }
+    return NULL;
 }

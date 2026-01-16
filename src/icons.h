@@ -38,6 +38,20 @@ typedef struct {
     char icon[L_MAX_ICON_LEN];
 } ExtIcon;
 
+/* Extension to file type name mapping */
+#define L_MAX_FILETYPE_NAME 32
+#define L_MAX_FILETYPES 256
+
+typedef struct {
+    char ext[L_MAX_EXT_LEN];
+    char name[L_MAX_FILETYPE_NAME];
+} FileTypeMapping;
+
+typedef struct {
+    FileTypeMapping mappings[L_MAX_FILETYPES];
+    int count;
+} FileTypes;
+
 /* Icons configuration */
 typedef struct Icons {
     char default_icon[L_MAX_ICON_LEN];
@@ -84,5 +98,10 @@ void icons_load(Icons *icons, const char *script_dir);
 const char *get_icon(const Icons *icons, FileType type, int is_expanded,
                      int is_locked, int is_binary, const char *name);
 const char *get_ext_icon(const Icons *icons, const char *name);
+
+/* File type functions */
+void filetypes_init(FileTypes *ft);
+void filetypes_load(FileTypes *ft, const char *script_dir);
+const char *filetypes_lookup(const FileTypes *ft, const char *path);
 
 #endif /* L_ICONS_H */

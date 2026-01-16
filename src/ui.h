@@ -101,6 +101,7 @@ typedef struct {
 typedef struct {
     GitCache *git;
     const Icons *icons;
+    const FileTypes *filetypes;
     const Config *cfg;
     Column *columns;
     int *continuation;

@@ -344,6 +344,11 @@ int main(int argc, char **argv) {
     icons_init_defaults(&icons);
     icons_load(&icons, cfg.script_dir);
 
+    /* Load file types */
+    FileTypes filetypes;
+    filetypes_init(&filetypes);
+    filetypes_load(&filetypes, cfg.script_dir);
+
     /* Load size cache */
     cache_load();
 
@@ -404,6 +409,7 @@ int main(int argc, char **argv) {
         PrintContext ctx = {
             .git = &gits[0],
             .icons = &icons,
+            .filetypes = &filetypes,
             .cfg = &cfg,
             .columns = cfg.long_format ? cols : NULL,
             .continuation = continuation,
@@ -457,6 +463,7 @@ int main(int argc, char **argv) {
             PrintContext ctx = {
                 .git = &gits[i],
                 .icons = &icons,
+                .filetypes = &filetypes,
                 .cfg = &cfg,
                 .columns = cfg.long_format ? cols : NULL,
                 .continuation = continuation,

@@ -57,8 +57,8 @@ void resolve_source_dir(const char *argv0, char *src_dir, size_t len) {
         char *slash = strrchr(exe_abs, '/');
         if (slash) {
             *slash = '\0';
-            if (strlen(exe_abs) + sizeof("/icons.toml") <= sizeof(try_path)) {
-                snprintf(try_path, sizeof(try_path), "%s/icons.toml", exe_abs);
+            if (strlen(exe_abs) + sizeof("/" L_CONFIG_FILE) <= sizeof(try_path)) {
+                snprintf(try_path, sizeof(try_path), "%s/%s", exe_abs, L_CONFIG_FILE);
                 if (access(try_path, R_OK) == 0) {
                     strncpy(src_dir, exe_abs, len - 1);
                     src_dir[len - 1] = '\0';
@@ -71,7 +71,7 @@ void resolve_source_dir(const char *argv0, char *src_dir, size_t len) {
     /* 2. Check ~/.config/l/ (installed) */
     const char *home = getenv("HOME");
     if (home) {
-        snprintf(try_path, sizeof(try_path), "%s/.config/l/icons.toml", home);
+        snprintf(try_path, sizeof(try_path), "%s/.config/l/%s", home, L_CONFIG_FILE);
         if (access(try_path, R_OK) == 0) {
             snprintf(src_dir, len, "%s/.config/l", home);
             return;
@@ -79,7 +79,8 @@ void resolve_source_dir(const char *argv0, char *src_dir, size_t len) {
     }
 
     /* 3. Check /usr/local/share/l/ (system-wide) */
-    if (access("/usr/local/share/l/icons.toml", R_OK) == 0) {
+    snprintf(try_path, sizeof(try_path), "/usr/local/share/l/%s", L_CONFIG_FILE);
+    if (access(try_path, R_OK) == 0) {
         strncpy(src_dir, "/usr/local/share/l", len - 1);
         src_dir[len - 1] = '\0';
         return;
@@ -1457,7 +1458,13 @@ static const char *get_type_from_shebang(const char *path) {
     return result;
 }
 
-static const char *get_file_type_name(const char *path) {
+static const char *get_file_type_name(const char *path, const FileTypes *ft) {
+    /* Try loaded file types first */
+    if (ft && ft->count > 0) {
+        const char *type = filetypes_lookup(ft, path);
+        if (type) return type;
+    }
+
     const char *ext = strrchr(path, '.');
     const char *basename = strrchr(path, '/');
     basename = basename ? basename + 1 : path;
@@ -1468,12 +1475,16 @@ static const char *get_file_type_name(const char *path) {
     }
     ext++;  /* skip the dot */
 
+    /* Fallback: hardcoded defaults */
+
     /* Common programming languages */
     if (strcasecmp(ext, "c") == 0) return "C source";
     if (strcasecmp(ext, "h") == 0) return "C header";
     if (strcasecmp(ext, "cpp") == 0 || strcasecmp(ext, "cc") == 0 ||
         strcasecmp(ext, "cxx") == 0) return "C++ source";
     if (strcasecmp(ext, "hpp") == 0 || strcasecmp(ext, "hh") == 0) return "C++ header";
+    if (strcasecmp(ext, "cu") == 0) return "CUDA source";
+    if (strcasecmp(ext, "cuh") == 0) return "CUDA header";
     if (strcasecmp(ext, "py") == 0) return "Python";
     if (strcasecmp(ext, "js") == 0) return "JavaScript";
     if (strcasecmp(ext, "ts") == 0) return "TypeScript";
@@ -1624,7 +1635,7 @@ static int lang_stat_cmp(const void *a, const void *b) {
 /* Recursively count lines by language in a directory, skipping gitignored files */
 static void count_dir_lines_by_lang(const char *path, int show_hidden,
                                     GitCache *git, const char *git_root,
-                                    LangStats *stats) {
+                                    const FileTypes *ft, LangStats *stats) {
     DIR *dir = opendir(path);
     if (!dir) return;
 
@@ -1653,12 +1664,12 @@ static void count_dir_lines_by_lang(const char *path, int show_hidden,
         if (S_ISREG(st.st_mode)) {
             int lines = count_file_lines(full_path);
             if (lines > 0) {
-                const char *type = get_file_type_name(full_path);
+                const char *type = get_file_type_name(full_path, ft);
                 if (!type) type = "Other";
                 lang_stats_add(stats, type, lines);
             }
         } else if (S_ISDIR(st.st_mode)) {
-            count_dir_lines_by_lang(full_path, show_hidden, git, git_root, stats);
+            count_dir_lines_by_lang(full_path, show_hidden, git, git_root, ft, stats);
         }
     }
 
@@ -1732,7 +1743,7 @@ void print_summary(const TreeNode *node, PrintContext *ctx) {
 
     /* Type (files only) */
     if (!is_dir) {
-        const char *type_name = get_file_type_name(fe->path);
+        const char *type_name = get_file_type_name(fe->path, ctx->filetypes);
         if (type_name) {
             printf("   %sType:%s     %s\n", CLR(cfg, COLOR_GREY), RST(cfg), type_name);
         }
@@ -1755,7 +1766,7 @@ void print_summary(const TreeNode *node, PrintContext *ctx) {
         LangStats stats = {0};
         char git_root[PATH_MAX];
         const char *root_ptr = git_find_root(fe->path, git_root, sizeof(git_root)) ? git_root : NULL;
-        count_dir_lines_by_lang(fe->path, cfg->show_hidden, ctx->git, root_ptr, &stats);
+        count_dir_lines_by_lang(fe->path, cfg->show_hidden, ctx->git, root_ptr, ctx->filetypes, &stats);
         if (stats.total > 0) {
             char total_buf[32];
             format_count(stats.total, total_buf, sizeof(total_buf));

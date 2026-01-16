@@ -70,7 +70,8 @@
 #define L_SHELL_CMD_BUF_SIZE    (PATH_MAX * 2 + 64)
 #define L_GIT_INDICATOR_SIZE    64
 
-/* TOML parsing */
+/* Config file */
+#define L_CONFIG_FILE           "config.toml"
 #define L_TOML_LINE_MAX         256
 
 /* Time constants for relative time formatting */
