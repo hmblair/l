@@ -172,6 +172,27 @@ static void get_status_path(char *buf, size_t len) {
     snprintf(buf, len, "%s/.cache/l/status", home ? home : "/tmp");
 }
 
+static void get_config_path(char *buf, size_t len) {
+    const char *home = getenv("HOME");
+    snprintf(buf, len, "%s/.cache/l/config", home ? home : "/tmp");
+}
+
+/* ============================================================================
+ * Configuration (local for interactive editing, uses common.c for reading)
+ * ============================================================================ */
+
+static void config_save(int interval, int threshold) {
+    char path[PATH_MAX];
+    get_config_path(path, sizeof(path));
+
+    FILE *f = fopen(path, "w");
+    if (!f) return;
+
+    fprintf(f, "scan_interval=%d\n", interval);
+    fprintf(f, "file_threshold=%d\n", threshold);
+    fclose(f);
+}
+
 /* ============================================================================
  * Service Management (launchd on macOS, systemd on Linux)
  * ============================================================================ */
@@ -469,6 +490,11 @@ static void print_status(void) {
         printf("  %s○%s Log       %s%s%s\n", COLOR_GREY, COLOR_RESET, COLOR_GREY, log_path, COLOR_RESET);
     }
 
+    /* Config */
+    printf("  %s○%s Config    %sscan every %dm, cache dirs with ≥%d files%s\n",
+           COLOR_GREY, COLOR_RESET, COLOR_GREY,
+           config_get_interval() / 60, config_get_threshold(), COLOR_RESET);
+
     printf("\n");
 }
 
@@ -543,6 +569,83 @@ static void action_refresh(const char *binary_path) {
 static void action_exit(const char *binary_path) {
     (void)binary_path;
     /* No-op, handled by menu return */
+}
+
+static int read_number(const char *prompt, int current) {
+    term_disable_raw();
+    printf("%s%s [%d]: %s", COLOR_WHITE, prompt, current, COLOR_RESET);
+    fflush(stdout);
+
+    char buf[32];
+    if (!fgets(buf, sizeof(buf), stdin)) {
+        term_enable_raw();
+        return current;
+    }
+
+    int val = atoi(buf);
+    term_enable_raw();
+    return (val > 0) ? val : current;
+}
+
+static void action_configure(const char *binary_path) {
+    (void)binary_path;
+
+    int cur_interval = config_get_interval();
+    int cur_threshold = config_get_threshold();
+
+    printf("\n%sCurrent Configuration%s\n", COLOR_WHITE, COLOR_RESET);
+    printf("  Scan interval: %s%d minutes%s\n", COLOR_CYAN, cur_interval / 60, COLOR_RESET);
+    printf("  Min files:     %s%d%s\n\n", COLOR_CYAN, cur_threshold, COLOR_RESET);
+
+    MenuItem items[] = {
+        {"Change scan interval", NULL},
+        {"Change min files", NULL},
+        {"Back", NULL}
+    };
+    int count = 3;
+
+    /* Print lines for menu */
+    for (int i = 0; i < count; i++) printf("\n");
+
+    term_enable_raw();
+    menu_render(items, count, 0);
+
+    int selected = 0;
+    while (1) {
+        KeyPress key = term_read_key();
+        switch (key) {
+            case KEY_UP:
+                selected = (selected - 1 + count) % count;
+                menu_render(items, count, selected);
+                break;
+            case KEY_DOWN:
+                selected = (selected + 1) % count;
+                menu_render(items, count, selected);
+                break;
+            case KEY_ENTER:
+                term_disable_raw();
+                printf("\n");
+                if (selected == 0) {
+                    int mins = read_number("Scan interval (minutes)", cur_interval / 60);
+                    cur_interval = mins * 60;
+                    config_save(cur_interval, cur_threshold);
+                    printf("%sSaved: scan every %d minutes%s\n", COLOR_GREEN, mins, COLOR_RESET);
+                    printf("%sRestart daemon to apply%s\n", COLOR_GREY, COLOR_RESET);
+                } else if (selected == 1) {
+                    cur_threshold = read_number("Min files to cache", cur_threshold);
+                    config_save(cur_interval, cur_threshold);
+                    printf("%sSaved: cache dirs with >= %d files%s\n", COLOR_GREEN, cur_threshold, COLOR_RESET);
+                    printf("%sRestart daemon to apply%s\n", COLOR_GREY, COLOR_RESET);
+                }
+                return;
+            case KEY_QUIT:
+                term_disable_raw();
+                printf("\n");
+                return;
+            default:
+                break;
+        }
+    }
 }
 
 /* ============================================================================
@@ -624,7 +727,7 @@ void daemon_run(const char *binary_path) {
     print_status();
 
     /* Build menu based on current state */
-    MenuItem items[5];
+    MenuItem items[6];
     int count = 0;
 
     if (daemon_is_running()) {
@@ -638,6 +741,7 @@ void daemon_run(const char *binary_path) {
         items[count++] = (MenuItem){"Clear cache", action_clear};
     }
 
+    items[count++] = (MenuItem){"Configure", action_configure};
     items[count++] = (MenuItem){"Exit", action_exit};
 
     int choice = menu_run(items, count, daemon_path);

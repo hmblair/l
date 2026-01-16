@@ -29,6 +29,54 @@ const char *STYLE_BOLD       = "\033[1m";
 const char *STYLE_ITALIC     = "\033[3m";
 
 /* ============================================================================
+ * Daemon Configuration
+ * ============================================================================ */
+
+static int g_scan_interval = L_SCAN_INTERVAL;
+static int g_file_threshold = L_FILE_COUNT_THRESHOLD;
+static int g_config_loaded = 0;
+
+static void config_load(void) {
+    if (g_config_loaded) return;
+    g_config_loaded = 1;
+
+    const char *home = getenv("HOME");
+    if (!home) return;
+
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/.cache/l/config", home);
+
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        char *eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        int val = atoi(eq + 1);
+        if (val <= 0) continue;
+
+        if (strcmp(line, "scan_interval") == 0) {
+            g_scan_interval = val;
+        } else if (strcmp(line, "file_threshold") == 0) {
+            g_file_threshold = val;
+        }
+    }
+    fclose(f);
+}
+
+int config_get_interval(void) {
+    config_load();
+    return g_scan_interval;
+}
+
+int config_get_threshold(void) {
+    config_load();
+    return g_file_threshold;
+}
+
+/* ============================================================================
  * Memory Allocation
  * ============================================================================ */
 

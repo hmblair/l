@@ -153,7 +153,7 @@ static ScanResult scan_dir(const char *path) {
     closedir(dir);
 
     /* Cache if meets threshold (but never cache root - we always need to recurse from it) */
-    if (!skip_file_count && result.file_count >= L_FILE_COUNT_THRESHOLD &&
+    if (!skip_file_count && result.file_count >= config_get_threshold() &&
         strcmp(path, "/") != 0) {
         if (cache_daemon_store(path, result.size, result.file_count, dir_st.st_mtime) == 0)
             log_info("cached %s (%ld files)", path, result.file_count);
@@ -194,7 +194,8 @@ int main(int argc, char *argv[]) {
     signal(SIGTERM, handle_shutdown);
     signal(SIGUSR1, handle_refresh);
 
-    log_info("starting (scan interval: %ds)", L_SCAN_INTERVAL);
+    int scan_interval = config_get_interval();
+    log_info("starting (scan interval: %ds)", scan_interval);
 
     while (!g_shutdown) {
         rotate_log();
@@ -216,7 +217,7 @@ int main(int argc, char *argv[]) {
         log_info("scan complete (%lds, %d cached)", elapsed, cache_daemon_count());
         write_status("idle");
 
-        for (int i = 0; i < L_SCAN_INTERVAL && !g_shutdown && !g_refresh; i++)
+        for (int i = 0; i < scan_interval && !g_shutdown && !g_refresh; i++)
             sleep(1);
 
         if (g_refresh) {

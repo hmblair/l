@@ -79,10 +79,14 @@
 #define L_SECONDS_PER_DAY       86400
 #define L_SECONDS_PER_WEEK      604800
 
-/* Daemon constants */
+/* Daemon constants (defaults, can be overridden by config) */
 #define L_SCAN_INTERVAL         1800    /* 30 minutes between scans */
 #define L_FILE_COUNT_THRESHOLD  1000    /* Cache directories with >= this many files */
 #define L_MAX_LOG_SIZE          (1024 * 1024)  /* 1MB max log size */
+
+/* Daemon configuration (reads from ~/.cache/l/config) */
+int config_get_interval(void);   /* Scan interval in seconds */
+int config_get_threshold(void);  /* Min files to cache a directory */
 
 /* Error codes */
 #define L_OK                    0
