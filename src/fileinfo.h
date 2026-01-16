@@ -33,6 +33,7 @@ const char *get_file_color(FileType type, int is_cwd, int is_ignored, int is_tty
  * ============================================================================ */
 
 int count_file_lines(const char *path);
+int count_file_words(const char *path);
 int get_image_megapixels(const char *path);
 int get_audio_duration(const char *path);
 int get_pdf_page_count(const char *path);

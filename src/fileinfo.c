@@ -1091,6 +1091,7 @@ void fileinfo_compute_content(struct FileEntry *fe, int do_line_count, int do_me
         int lines = count_file_lines(fe->path);
         if (lines >= 0) {
             fe->line_count = lines;
+            fe->word_count = count_file_words(fe->path);
             fe->content_type = CONTENT_TEXT;
             return;
         }
@@ -1098,6 +1099,7 @@ void fileinfo_compute_content(struct FileEntry *fe, int do_line_count, int do_me
 
     /* Binary or unknown */
     fe->line_count = -1;
+    fe->word_count = -1;
     fe->content_type = CONTENT_BINARY;
 }
 
@@ -1147,5 +1149,55 @@ int count_file_lines(const char *path) {
     munmap(data, size);
 
     /* Clamp to INT_MAX for return value */
+    return count > INT_MAX ? INT_MAX : (int)count;
+}
+
+int count_file_words(const char *path) {
+    if (has_binary_extension(path)) return -1;
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return -1;
+
+    struct stat st;
+    if (fstat(fd, &st) != 0 || st.st_size == 0) {
+        close(fd);
+        return st.st_size == 0 ? 0 : -1;
+    }
+
+    size_t size = (size_t)st.st_size;
+    char *data = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+
+    if (data == MAP_FAILED) return -1;
+
+    madvise(data, size, MADV_SEQUENTIAL);
+
+    /* Check for binary content at start */
+    size_t check_len = size < L_BINARY_CHECK_SIZE ? size : L_BINARY_CHECK_SIZE;
+    if (memchr(data, '\0', check_len) != NULL) {
+        munmap(data, size);
+        return -1;
+    }
+
+    /* Count words (transitions from whitespace to non-whitespace) */
+    long count = 0;
+    int in_word = 0;
+    const unsigned char *p = (const unsigned char *)data;
+    const unsigned char *end = p + size;
+
+    while (p < end) {
+        unsigned char c = *p++;
+        int is_space = (c == ' ' || c == '\t' || c == '\n' || c == '\r' ||
+                        c == '\v' || c == '\f');
+        if (!is_space && !in_word) {
+            count++;
+            in_word = 1;
+        } else if (is_space) {
+            in_word = 0;
+        }
+    }
+
+    munmap(data, size);
+
     return count > INT_MAX ? INT_MAX : (int)count;
 }

@@ -112,6 +112,7 @@ int read_directory(const char *dir_path, FileList *list,
         fe.name = strrchr(fe.path, '/');
         fe.name = fe.name ? fe.name + 1 : fe.path;
         fe.line_count = -1;
+        fe.word_count = -1;
         fe.file_count = -1;
 
         struct stat st;
@@ -341,6 +342,7 @@ TreeNode *build_tree(const char *path, const TreeBuildOpts *opts,
     root->entry.mode = st.st_mode;
     root->entry.mtime = GET_MTIME(st);
     root->entry.line_count = -1;
+    root->entry.word_count = -1;
     root->entry.file_count = -1;
 
     int is_virtual_fs = path_is_virtual_fs(abs_path);
@@ -505,6 +507,7 @@ static TreeNode *build_ancestor_node(const char *path, const TreeBuildOpts *opts
     node->entry.mode = st.st_mode;
     node->entry.mtime = GET_MTIME(st);
     node->entry.line_count = -1;
+    node->entry.word_count = -1;
     node->entry.file_count = -1;
 
     int is_virtual_fs = path_is_virtual_fs(path);

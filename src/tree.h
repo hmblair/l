@@ -27,7 +27,7 @@ typedef struct {
 #define COMPUTE_NONE     ((ComputeOpts){0, 0, 0, 0, 0, 0})
 #define COMPUTE_BASIC    ((ComputeOpts){1, 1, 0, 0, 1, 0})  /* sizes, counts, git status */
 #define COMPUTE_LONG     ((ComputeOpts){1, 1, 1, 1, 1, 1})  /* everything */
-#define COMPUTE_SUMMARY  ((ComputeOpts){1, 1, 1, 0, 1, 0})  /* sizes, counts, lines, git status */
+#define COMPUTE_SUMMARY  ((ComputeOpts){1, 1, 1, 1, 1, 0})  /* sizes, counts, lines, media, git status */
 
 /* ============================================================================
  * File Entry - Represents a single filesystem entry
@@ -43,6 +43,7 @@ typedef struct FileEntry {
     time_t mtime;
     ContentType content_type;
     int line_count;
+    int word_count;
     int is_ignored;
     int is_git_root;
     char git_status[3];

@@ -878,10 +878,17 @@ void print_summary(const TreeNode *node, PrintContext *ctx) {
                        line_buf);
             }
         }
-    } else if (fe->line_count > 0 && fe->content_type == CONTENT_TEXT) {
+    } else if (fe->line_count >= 0 && fe->content_type == CONTENT_TEXT) {
         char line_buf[32];
         format_count(fe->line_count, line_buf, sizeof(line_buf));
         printf("   %sLines:%s    %s\n", CLR(cfg, COLOR_GREY), RST(cfg), line_buf);
+        if (fe->word_count >= 0) {
+            char word_buf[32];
+            format_count(fe->word_count, word_buf, sizeof(word_buf));
+            printf("   %sWords:%s    %s\n", CLR(cfg, COLOR_GREY), RST(cfg), word_buf);
+        }
+    } else if (fe->line_count >= 0 && fe->content_type == CONTENT_PDF) {
+        printf("   %sPages:%s    %d\n", CLR(cfg, COLOR_GREY), RST(cfg), fe->line_count);
     }
 
     /* Modified time */

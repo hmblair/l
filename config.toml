@@ -107,6 +107,7 @@ md,markdown = "Markdown"
 rst = "reStructuredText"
 txt = "Plain text"
 tex = "LaTeX"
+bib = "BibTeX"
 org = "Org"
 
 # Build/Project
