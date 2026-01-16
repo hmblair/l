@@ -113,6 +113,18 @@ void format_size(off_t bytes, char *buf, size_t len) {
     }
 }
 
+static void format_count(long count, char *buf, size_t len) {
+    if (count >= 1000000) {
+        double m = count / 1000000.0;
+        snprintf(buf, len, m < 10 ? "%.1fM" : "%.0fM", m);
+    } else if (count >= 1000) {
+        double k = count / 1000.0;
+        snprintf(buf, len, k < 10 ? "%.1fK" : "%.0fK", k);
+    } else {
+        snprintf(buf, len, "%ld", count);
+    }
+}
+
 void format_relative_time(time_t mtime, char *buf, size_t len) {
     time_t now = time(NULL);
     long diff = (long)(now - mtime);
@@ -1795,4 +1807,391 @@ static void print_tree_children(const TreeNode *parent, int depth, PrintContext 
     }
 
     free(visible_indices);
+}
+
+/* ============================================================================
+ * Summary Mode
+ * ============================================================================ */
+
+/* Extension to file type name mapping */
+static const char *get_file_type_name(const char *path) {
+    const char *ext = strrchr(path, '.');
+    if (!ext || ext == path) return NULL;
+    ext++;  /* skip the dot */
+
+    /* Common programming languages */
+    if (strcasecmp(ext, "c") == 0) return "C source";
+    if (strcasecmp(ext, "h") == 0) return "C header";
+    if (strcasecmp(ext, "cpp") == 0 || strcasecmp(ext, "cc") == 0 ||
+        strcasecmp(ext, "cxx") == 0) return "C++ source";
+    if (strcasecmp(ext, "hpp") == 0 || strcasecmp(ext, "hh") == 0) return "C++ header";
+    if (strcasecmp(ext, "py") == 0) return "Python";
+    if (strcasecmp(ext, "js") == 0) return "JavaScript";
+    if (strcasecmp(ext, "ts") == 0) return "TypeScript";
+    if (strcasecmp(ext, "jsx") == 0) return "JSX";
+    if (strcasecmp(ext, "tsx") == 0) return "TSX";
+    if (strcasecmp(ext, "go") == 0) return "Go";
+    if (strcasecmp(ext, "rs") == 0) return "Rust";
+    if (strcasecmp(ext, "java") == 0) return "Java";
+    if (strcasecmp(ext, "rb") == 0) return "Ruby";
+    if (strcasecmp(ext, "php") == 0) return "PHP";
+    if (strcasecmp(ext, "swift") == 0) return "Swift";
+    if (strcasecmp(ext, "kt") == 0) return "Kotlin";
+    if (strcasecmp(ext, "scala") == 0) return "Scala";
+    if (strcasecmp(ext, "cs") == 0) return "C#";
+    if (strcasecmp(ext, "fs") == 0) return "F#";
+    if (strcasecmp(ext, "hs") == 0) return "Haskell";
+    if (strcasecmp(ext, "ml") == 0) return "OCaml";
+    if (strcasecmp(ext, "ex") == 0 || strcasecmp(ext, "exs") == 0) return "Elixir";
+    if (strcasecmp(ext, "erl") == 0) return "Erlang";
+    if (strcasecmp(ext, "clj") == 0) return "Clojure";
+    if (strcasecmp(ext, "lua") == 0) return "Lua";
+    if (strcasecmp(ext, "pl") == 0 || strcasecmp(ext, "pm") == 0) return "Perl";
+    if (strcasecmp(ext, "r") == 0) return "R";
+    if (strcasecmp(ext, "jl") == 0) return "Julia";
+    if (strcasecmp(ext, "dart") == 0) return "Dart";
+    if (strcasecmp(ext, "zig") == 0) return "Zig";
+    if (strcasecmp(ext, "nim") == 0) return "Nim";
+    if (strcasecmp(ext, "v") == 0) return "V";
+    if (strcasecmp(ext, "cr") == 0) return "Crystal";
+
+    /* Shell scripts */
+    if (strcasecmp(ext, "sh") == 0) return "Shell script";
+    if (strcasecmp(ext, "bash") == 0) return "Bash script";
+    if (strcasecmp(ext, "zsh") == 0) return "Zsh script";
+    if (strcasecmp(ext, "fish") == 0) return "Fish script";
+    if (strcasecmp(ext, "ps1") == 0) return "PowerShell";
+
+    /* Web */
+    if (strcasecmp(ext, "html") == 0 || strcasecmp(ext, "htm") == 0) return "HTML";
+    if (strcasecmp(ext, "css") == 0) return "CSS";
+    if (strcasecmp(ext, "scss") == 0) return "SCSS";
+    if (strcasecmp(ext, "sass") == 0) return "Sass";
+    if (strcasecmp(ext, "less") == 0) return "Less";
+    if (strcasecmp(ext, "vue") == 0) return "Vue";
+    if (strcasecmp(ext, "svelte") == 0) return "Svelte";
+
+    /* Data/Config */
+    if (strcasecmp(ext, "json") == 0) return "JSON";
+    if (strcasecmp(ext, "yaml") == 0 || strcasecmp(ext, "yml") == 0) return "YAML";
+    if (strcasecmp(ext, "toml") == 0) return "TOML";
+    if (strcasecmp(ext, "xml") == 0) return "XML";
+    if (strcasecmp(ext, "csv") == 0) return "CSV";
+    if (strcasecmp(ext, "tsv") == 0) return "TSV";
+    if (strcasecmp(ext, "ini") == 0) return "INI";
+    if (strcasecmp(ext, "conf") == 0 || strcasecmp(ext, "cfg") == 0) return "Config";
+    if (strcasecmp(ext, "env") == 0) return "Environment";
+    if (strcasecmp(ext, "sql") == 0) return "SQL";
+
+    /* Documentation */
+    if (strcasecmp(ext, "md") == 0 || strcasecmp(ext, "markdown") == 0) return "Markdown";
+    if (strcasecmp(ext, "rst") == 0) return "reStructuredText";
+    if (strcasecmp(ext, "txt") == 0) return "Plain text";
+    if (strcasecmp(ext, "tex") == 0) return "LaTeX";
+    if (strcasecmp(ext, "org") == 0) return "Org";
+
+    /* Build/Project */
+    if (strcasecmp(ext, "make") == 0 || strcmp(path, "Makefile") == 0) return "Makefile";
+    if (strcasecmp(ext, "cmake") == 0) return "CMake";
+    if (strcasecmp(ext, "gradle") == 0) return "Gradle";
+    if (strcasecmp(ext, "lock") == 0) return "Lock file";
+
+    /* Images */
+    if (strcasecmp(ext, "png") == 0) return "PNG image";
+    if (strcasecmp(ext, "jpg") == 0 || strcasecmp(ext, "jpeg") == 0) return "JPEG image";
+    if (strcasecmp(ext, "gif") == 0) return "GIF image";
+    if (strcasecmp(ext, "svg") == 0) return "SVG image";
+    if (strcasecmp(ext, "webp") == 0) return "WebP image";
+    if (strcasecmp(ext, "ico") == 0) return "Icon";
+    if (strcasecmp(ext, "bmp") == 0) return "Bitmap";
+
+    /* Archives */
+    if (strcasecmp(ext, "zip") == 0) return "ZIP archive";
+    if (strcasecmp(ext, "tar") == 0) return "TAR archive";
+    if (strcasecmp(ext, "gz") == 0) return "Gzip";
+    if (strcasecmp(ext, "bz2") == 0) return "Bzip2";
+    if (strcasecmp(ext, "xz") == 0) return "XZ";
+    if (strcasecmp(ext, "7z") == 0) return "7-Zip";
+    if (strcasecmp(ext, "rar") == 0) return "RAR archive";
+
+    /* Binary/Executable */
+    if (strcasecmp(ext, "o") == 0) return "Object file";
+    if (strcasecmp(ext, "a") == 0) return "Static library";
+    if (strcasecmp(ext, "so") == 0) return "Shared library";
+    if (strcasecmp(ext, "dylib") == 0) return "Dynamic library";
+    if (strcasecmp(ext, "dll") == 0) return "DLL";
+    if (strcasecmp(ext, "exe") == 0) return "Executable";
+
+    /* Other */
+    if (strcasecmp(ext, "log") == 0) return "Log file";
+    if (strcasecmp(ext, "db") == 0) return "Database";
+    if (strcasecmp(ext, "pdf") == 0) return "PDF";
+    if (strcasecmp(ext, "plist") == 0) return "Property list";
+
+    return NULL;
+}
+
+/* Line count by language */
+#define MAX_LANG_STATS 64
+
+typedef struct {
+    const char *name;
+    long lines;
+} LangStat;
+
+typedef struct {
+    LangStat entries[MAX_LANG_STATS];
+    int count;
+    long total;
+} LangStats;
+
+static void lang_stats_add(LangStats *stats, const char *name, int lines) {
+    if (lines <= 0) return;
+    stats->total += lines;
+
+    /* Find existing entry */
+    for (int i = 0; i < stats->count; i++) {
+        if (stats->entries[i].name == name) {  /* pointer comparison OK - static strings */
+            stats->entries[i].lines += lines;
+            return;
+        }
+    }
+
+    /* Add new entry */
+    if (stats->count < MAX_LANG_STATS) {
+        stats->entries[stats->count].name = name;
+        stats->entries[stats->count].lines = lines;
+        stats->count++;
+    }
+}
+
+static int lang_stat_cmp(const void *a, const void *b) {
+    const LangStat *la = a, *lb = b;
+    if (lb->lines > la->lines) return 1;
+    if (lb->lines < la->lines) return -1;
+    return 0;
+}
+
+/* Recursively count lines by language in a directory, skipping gitignored files */
+static void count_dir_lines_by_lang(const char *path, int show_hidden,
+                                    GitCache *git, const char *git_root,
+                                    LangStats *stats) {
+    DIR *dir = opendir(path);
+    if (!dir) return;
+
+    struct dirent *entry;
+
+    while ((entry = readdir(dir)) != NULL) {
+        if (PATH_IS_DOT_OR_DOTDOT(entry->d_name)) continue;
+        if (!show_hidden && entry->d_name[0] == '.') continue;
+
+        /* Skip .git directory */
+        if (strcmp(entry->d_name, ".git") == 0) continue;
+
+        char full_path[PATH_MAX];
+        snprintf(full_path, sizeof(full_path), "%s/%s", path, entry->d_name);
+
+        /* Skip gitignored paths */
+        if (git && git_root) {
+            const char *status = git_cache_get(git, full_path);
+            if (status && strcmp(status, "!!") == 0) continue;
+            if (git_path_in_ignored(git, full_path, git_root)) continue;
+        }
+
+        struct stat st;
+        if (lstat(full_path, &st) != 0) continue;
+
+        if (S_ISREG(st.st_mode)) {
+            int lines = count_file_lines(full_path);
+            if (lines > 0) {
+                const char *type = get_file_type_name(full_path);
+                if (!type) type = "Other";
+                lang_stats_add(stats, type, lines);
+            }
+        } else if (S_ISDIR(st.st_mode)) {
+            count_dir_lines_by_lang(full_path, show_hidden, git, git_root, stats);
+        }
+    }
+
+    closedir(dir);
+}
+
+/* Print summary for a single file or directory */
+void print_summary(const TreeNode *node, PrintContext *ctx) {
+    const FileEntry *fe = &node->entry;
+    const Config *cfg = ctx->cfg;
+    int is_dir = (fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR);
+
+    /* Icon and name */
+    const char *icon = "";
+    if (!cfg->no_icons) {
+        int is_cwd = (strcmp(fe->path, cfg->cwd) == 0);
+        int is_locked = (fe->type == FTYPE_DIR && access(fe->path, R_OK) != 0);
+        icon = get_icon(ctx->icons, fe->type, is_cwd, is_locked, 0, fe->name);
+    }
+
+    const char *color = get_file_color(fe->type, 0, fe->is_ignored, cfg);
+    const char *name = fe->name;
+    const char *suffix = is_dir ? "/" : "";
+
+    printf(" %s%s%s%s%s\n", CLR(cfg, color), icon, name, suffix, RST(cfg));
+
+    /* Type (files only) */
+    if (!is_dir) {
+        const char *type_name = get_file_type_name(fe->path);
+        if (type_name) {
+            printf("   %sType:%s     %s\n", CLR(cfg, COLOR_GREY), RST(cfg), type_name);
+        }
+    }
+
+    /* Size */
+    char size_buf[32];
+    format_size(fe->size, size_buf, sizeof(size_buf));
+    printf("   %sSize:%s     %s\n", CLR(cfg, COLOR_GREY), RST(cfg), size_buf);
+
+    /* File count (directories only) */
+    if (is_dir && fe->file_count >= 0) {
+        char count_buf[32];
+        format_count(fe->file_count, count_buf, sizeof(count_buf));
+        printf("   %sFiles:%s    %s\n", CLR(cfg, COLOR_GREY), RST(cfg), count_buf);
+    }
+
+    /* Line count */
+    if (is_dir) {
+        LangStats stats = {0};
+        char git_root[PATH_MAX];
+        const char *root_ptr = git_find_root(fe->path, git_root, sizeof(git_root)) ? git_root : NULL;
+        count_dir_lines_by_lang(fe->path, cfg->show_hidden, ctx->git, root_ptr, &stats);
+        if (stats.total > 0) {
+            char total_buf[32];
+            format_count(stats.total, total_buf, sizeof(total_buf));
+            printf("   %sLines:%s    %s\n", CLR(cfg, COLOR_GREY), RST(cfg), total_buf);
+            /* Sort by line count descending */
+            qsort(stats.entries, stats.count, sizeof(LangStat), lang_stat_cmp);
+            /* Calculate alignment widths */
+            int max_name_len = 0;
+            int max_count_len = 0;
+            for (int i = 0; i < stats.count; i++) {
+                int len = (int)strlen(stats.entries[i].name);
+                if (len > max_name_len) max_name_len = len;
+                char tmp[32];
+                format_count(stats.entries[i].lines, tmp, sizeof(tmp));
+                int clen = (int)strlen(tmp);
+                if (clen > max_count_len) max_count_len = clen;
+            }
+            /* Show breakdown */
+            for (int i = 0; i < stats.count; i++) {
+                char line_buf[32];
+                format_count(stats.entries[i].lines, line_buf, sizeof(line_buf));
+                printf("     %s%s:%s %*s\n", CLR(cfg, COLOR_GREY),
+                       stats.entries[i].name, RST(cfg),
+                       (int)(max_name_len - strlen(stats.entries[i].name) + max_count_len + 1),
+                       line_buf);
+            }
+        }
+    } else if (fe->line_count > 0 && !fe->is_image) {
+        char line_buf[32];
+        format_count(fe->line_count, line_buf, sizeof(line_buf));
+        printf("   %sLines:%s    %s\n", CLR(cfg, COLOR_GREY), RST(cfg), line_buf);
+    }
+
+    /* Modified time */
+    char time_buf[64];
+    struct tm *tm = localtime(&fe->mtime);
+    strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M", tm);
+    printf("   %sModified:%s %s\n", CLR(cfg, COLOR_GREY), RST(cfg), time_buf);
+
+    /* Git info (for git repositories) */
+    char git_root[PATH_MAX];
+    if (is_dir && git_find_root(fe->path, git_root, sizeof(git_root)) &&
+        strcmp(fe->path, git_root) == 0) {
+
+        printf("\n");
+
+        /* Branch */
+        char *branch = git_get_branch(git_root);
+        if (branch) {
+            /* Get commit hash */
+            char hash[64] = "";
+            char ref[128];
+            snprintf(ref, sizeof(ref), "refs/heads/%s", branch);
+            git_read_ref(git_root, ref, hash, sizeof(hash));
+            hash[7] = '\0';  /* Short hash */
+
+            printf("   %sBranch:%s   %s %s(%s)%s\n", CLR(cfg, COLOR_GREY), RST(cfg),
+                   branch, CLR(cfg, COLOR_GREY), hash, RST(cfg));
+            free(branch);
+        }
+
+        /* Commit count */
+        char cmd[PATH_MAX + 64];
+        snprintf(cmd, sizeof(cmd), "git -C '%s' rev-list --count HEAD 2>/dev/null", git_root);
+        FILE *fp = popen(cmd, "r");
+        if (fp) {
+            char buf[32];
+            if (fgets(buf, sizeof(buf), fp)) {
+                buf[strcspn(buf, "\n")] = '\0';
+                long count = atol(buf);
+                if (count > 0) {
+                    char count_buf[32];
+                    format_count(count, count_buf, sizeof(count_buf));
+                    printf("   %sCommits:%s  %s\n", CLR(cfg, COLOR_GREY), RST(cfg), count_buf);
+                }
+            }
+            pclose(fp);
+        }
+
+        /* Latest tag */
+        snprintf(cmd, sizeof(cmd), "git -C '%s' describe --tags --abbrev=0 2>/dev/null", git_root);
+        fp = popen(cmd, "r");
+        if (fp) {
+            char buf[128];
+            if (fgets(buf, sizeof(buf), fp)) {
+                buf[strcspn(buf, "\n")] = '\0';
+                if (buf[0]) {
+                    printf("   %sTag:%s      %s\n", CLR(cfg, COLOR_GREY), RST(cfg), buf);
+                }
+            }
+            pclose(fp);
+        }
+
+        /* Remote URL */
+        snprintf(cmd, sizeof(cmd), "git -C '%s' remote get-url origin 2>/dev/null", git_root);
+        fp = popen(cmd, "r");
+        if (fp) {
+            char buf[512];
+            if (fgets(buf, sizeof(buf), fp)) {
+                buf[strcspn(buf, "\n")] = '\0';
+                if (buf[0]) {
+                    printf("   %sRemote:%s   %s\n", CLR(cfg, COLOR_GREY), RST(cfg), buf);
+                }
+            }
+            pclose(fp);
+        }
+
+        /* Dirty status */
+        GitSummary summary = git_get_dir_summary(ctx->git, git_root);
+        if (summary.modified || summary.untracked || summary.staged || summary.deleted) {
+            printf("   %sStatus:%s   ", CLR(cfg, COLOR_GREY), RST(cfg));
+            int first = 1;
+            if (summary.staged) {
+                printf("%s%d staged%s", CLR(cfg, COLOR_GREEN), summary.staged, RST(cfg));
+                first = 0;
+            }
+            if (summary.modified) {
+                printf("%s%d modified%s", first ? "" : ", ", summary.modified, RST(cfg));
+                first = 0;
+            }
+            if (summary.deleted) {
+                printf("%s%d deleted%s", first ? "" : ", ", summary.deleted, RST(cfg));
+                first = 0;
+            }
+            if (summary.untracked) {
+                printf("%s%d untracked%s", first ? "" : ", ", summary.untracked, RST(cfg));
+            }
+            printf("\n");
+        }
+    }
+
+    printf("\n");
 }

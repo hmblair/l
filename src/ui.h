@@ -43,6 +43,7 @@ typedef struct {
     int long_format_explicit;
     int expand_all;
     int list_mode;
+    int summary_mode;
     int no_icons;
     int sort_reverse;
     int git_only;
@@ -232,6 +233,7 @@ void compute_diff_widths(TreeNode **trees, int tree_count, GitCache *gits,
                          int *add_width, int *del_width, const Config *cfg);
 void print_tree_node(const TreeNode *node, int depth, PrintContext *ctx);
 void print_entry(const FileEntry *fe, int depth, int has_visible_children, const PrintContext *ctx);
+void print_summary(const TreeNode *node, PrintContext *ctx);
 
 /* Dynamically expand a directory node that wasn't fully loaded */
 void tree_expand_node(TreeNode *node, Column *cols, GitCache *git,

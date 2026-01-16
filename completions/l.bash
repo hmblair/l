@@ -17,7 +17,7 @@ _l() {
     # Complete options
     if [[ "$cur" == -* ]]; then
         opts="-a -l --long -s --short -t --tree -d --depth -p --path
-              -e --expand-all --list --no-icons -c --color-all -g
+              -e --expand-all --list --summary --no-icons -c --color-all -g
               -f --filter -i --interactive -S -T -N -r
               -h --help --version --daemon"
         COMPREPLY=( $(compgen -W "$opts" -- "$cur") )

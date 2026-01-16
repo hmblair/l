@@ -53,6 +53,7 @@ static void print_usage(void) {
     printf("  -p, --path      Show ancestry from ~ (or /) to target\n");
     printf("  -e, --expand-all  Expand all directories (ignore skip list)\n");
     printf("  --list          Flat list output (no tree structure)\n");
+    printf("  --summary       Show summary info for file/directory\n");
     printf("  --no-icons      Hide file/folder/git icons\n");
     printf("  -c, --color-all   Don't gray out gitignored files\n");
     printf("  -g              Show only git-modified/untracked files (implies -at)\n");
@@ -197,6 +198,7 @@ static void parse_args(int argc, char **argv, Config *cfg,
             else if (MATCH_LONG("path"))       { cfg->show_ancestry = 1; }
             else if (MATCH_LONG("expand-all")) { cfg->expand_all = 1; }
             else if (MATCH_LONG("list"))       { cfg->list_mode = 1; }
+            else if (MATCH_LONG("summary"))    { cfg->summary_mode = 1; }
             else if (MATCH_LONG("no-icons"))   { cfg->no_icons = 1; }
             else if (MATCH_LONG("color-all")) { cfg->color_all = 1; }
             else if (MATCH_LONG("interactive")) { cfg->interactive = 1; }
@@ -287,6 +289,7 @@ int main(int argc, char **argv) {
         .long_format_explicit = 0,
         .expand_all = 0,
         .list_mode = 0,
+        .summary_mode = 0,
         .no_icons = 0,
         .sort_reverse = 0,
         .git_only = 0,
@@ -460,7 +463,11 @@ int main(int argc, char **argv) {
                 .diff_add_width = diff_add_width,
                 .diff_del_width = diff_del_width
             };
-            print_tree_node(trees[i], 0, &ctx);
+            if (cfg.summary_mode) {
+                print_summary(trees[i], &ctx);
+            } else {
+                print_tree_node(trees[i], 0, &ctx);
+            }
         }
     }
 
