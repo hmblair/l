@@ -682,14 +682,12 @@ static int get_image_megapixels(const char *path) {
         height = h < 0 ? -h : h;  /* Height can be negative (top-down DIB) */
     }
     /* HEIC/HEIF: ftyp box with heic/mif1 brand, dimensions in ispe box */
-    else if (n >= 12 && memcmp(header + 4, "ftyp", 4) == 0) {
-        /* Check for HEIC-compatible brands */
-        int is_heic = (memcmp(header + 8, "heic", 4) == 0 ||
-                       memcmp(header + 8, "mif1", 4) == 0 ||
-                       memcmp(header + 8, "msf1", 4) == 0 ||
-                       memcmp(header + 8, "heix", 4) == 0);
-        if (is_heic) {
-            /* Navigate box structure to find ispe box */
+    else if (n >= 12 && memcmp(header + 4, "ftyp", 4) == 0 &&
+             (memcmp(header + 8, "heic", 4) == 0 ||
+              memcmp(header + 8, "mif1", 4) == 0 ||
+              memcmp(header + 8, "msf1", 4) == 0 ||
+              memcmp(header + 8, "heix", 4) == 0)) {
+        /* Navigate box structure to find ispe box */
             fseek(f, 0, SEEK_SET);
             unsigned char box[8];
             while (fread(box, 1, 8, f) == 8) {
@@ -748,6 +746,148 @@ static int get_image_megapixels(const char *path) {
                 }
                 fseek(f, size - 8, SEEK_CUR);
             }
+    }
+    /* TIFF-based RAW formats: CR2, NEF, ARW, DNG, ORF, RW2, PEF, SRW, etc.
+     * TIFF header: "II" (little-endian) or "MM" (big-endian) + magic 42 */
+    else if ((header[0] == 'I' && header[1] == 'I' && header[2] == 0x2A && header[3] == 0x00) ||
+             (header[0] == 'M' && header[1] == 'M' && header[2] == 0x00 && header[3] == 0x2A)) {
+        int little_endian = (header[0] == 'I');
+
+        #define TIFF_READ16(buf, off) (little_endian ? \
+            ((buf)[off] | ((buf)[(off)+1] << 8)) : \
+            (((buf)[off] << 8) | (buf)[(off)+1]))
+        #define TIFF_READ32(buf, off) (little_endian ? \
+            ((buf)[off] | ((buf)[(off)+1] << 8) | ((buf)[(off)+2] << 16) | ((buf)[(off)+3] << 24)) : \
+            (((buf)[off] << 24) | ((buf)[(off)+1] << 16) | ((buf)[(off)+2] << 8) | (buf)[(off)+3]))
+
+        uint32_t ifd_offsets[32];
+        int ifd_count = 0;
+        ifd_offsets[ifd_count++] = TIFF_READ32(header, 4);
+
+        /* Traverse IFDs to find largest dimensions (RAW files have multiple IFDs) */
+        while (ifd_count > 0 && ifd_count < 32) {
+            uint32_t ifd_offset = ifd_offsets[--ifd_count];
+            if (ifd_offset == 0 || ifd_offset > 100000000) continue;
+
+            fseek(f, ifd_offset, SEEK_SET);
+            unsigned char ifd_header[2];
+            if (fread(ifd_header, 1, 2, f) != 2) continue;
+
+            int entry_count = TIFF_READ16(ifd_header, 0);
+            if (entry_count <= 0 || entry_count > 1000) continue;
+
+            int cur_width = 0, cur_height = 0;
+            long entry_pos = ftell(f);
+
+            for (int i = 0; i < entry_count; i++) {
+                fseek(f, entry_pos + i * 12, SEEK_SET);
+                unsigned char entry[12];
+                if (fread(entry, 1, 12, f) != 12) break;
+
+                uint16_t tag = TIFF_READ16(entry, 0);
+                uint16_t type = TIFF_READ16(entry, 2);
+                uint32_t count = TIFF_READ32(entry, 4);
+                uint32_t value_offset = TIFF_READ32(entry, 8);
+
+                /* For SHORT (type 3), value is at different position based on endianness */
+                uint32_t value = value_offset;
+                if (type == 3 && count == 1) {
+                    value = little_endian ? TIFF_READ16(entry, 8) : (value_offset >> 16);
+                }
+
+                if (tag == 0x0100) cur_width = value;       /* ImageWidth */
+                else if (tag == 0x0101) cur_height = value; /* ImageLength */
+                else if (tag == 0x014A && ifd_count < 30) { /* SubIFDs */
+                    if (count == 1) {
+                        ifd_offsets[ifd_count++] = value_offset;
+                    } else {
+                        /* Multiple SubIFD offsets stored at value_offset */
+                        long saved = ftell(f);
+                        fseek(f, value_offset, SEEK_SET);
+                        for (uint32_t j = 0; j < count && ifd_count < 30; j++) {
+                            unsigned char off_buf[4];
+                            if (fread(off_buf, 1, 4, f) != 4) break;
+                            ifd_offsets[ifd_count++] = TIFF_READ32(off_buf, 0);
+                        }
+                        fseek(f, saved, SEEK_SET);
+                    }
+                }
+                else if (tag == 0x8769 && ifd_count < 30) { /* EXIF IFD */
+                    ifd_offsets[ifd_count++] = value_offset;
+                }
+            }
+
+            /* Keep largest dimensions found */
+            if (cur_width > width) width = cur_width;
+            if (cur_height > height) height = cur_height;
+
+            /* Read next IFD offset */
+            fseek(f, entry_pos + entry_count * 12, SEEK_SET);
+            unsigned char next_ifd[4];
+            if (fread(next_ifd, 1, 4, f) == 4) {
+                uint32_t next = TIFF_READ32(next_ifd, 0);
+                if (next != 0 && next < 100000000 && ifd_count < 30) {
+                    ifd_offsets[ifd_count++] = next;
+                }
+            }
+        }
+        #undef TIFF_READ16
+        #undef TIFF_READ32
+    }
+    /* CR3 (Canon RAW v3): ISOBMFF container with 'crx ' brand
+     * Dimensions are in tkhd (track header) boxes inside moov > trak */
+    else if (n >= 12 && memcmp(header + 4, "ftyp", 4) == 0 &&
+             memcmp(header + 8, "crx ", 4) == 0) {
+        fseek(f, 0, SEEK_SET);
+        unsigned char box[8];
+        while (fread(box, 1, 8, f) == 8) {
+            uint32_t size = (box[0] << 24) | (box[1] << 16) | (box[2] << 8) | box[3];
+            if (size < 8) break;
+
+            if (memcmp(box + 4, "moov", 4) == 0) {
+                long moov_end = ftell(f) - 8 + size;
+                while (ftell(f) < moov_end && fread(box, 1, 8, f) == 8) {
+                    uint32_t trak_size = (box[0] << 24) | (box[1] << 16) | (box[2] << 8) | box[3];
+                    if (trak_size < 8) break;
+
+                    if (memcmp(box + 4, "trak", 4) == 0) {
+                        long trak_end = ftell(f) - 8 + trak_size;
+                        /* Search for tkhd inside trak */
+                        while (ftell(f) < trak_end && fread(box, 1, 8, f) == 8) {
+                            uint32_t inner_size = (box[0] << 24) | (box[1] << 16) | (box[2] << 8) | box[3];
+                            if (inner_size < 8) break;
+
+                            if (memcmp(box + 4, "tkhd", 4) == 0) {
+                                /* tkhd: version(1) + flags(3) + times... + width(4) + height(4) at end
+                                 * Width/height are 16.16 fixed point */
+                                unsigned char tkhd[92];
+                                size_t tkhd_size = inner_size - 8;
+                                if (tkhd_size > sizeof(tkhd)) tkhd_size = sizeof(tkhd);
+                                if (fread(tkhd, 1, tkhd_size, f) >= 84) {
+                                    int version = tkhd[0];
+                                    size_t off = (version == 1) ? 84 : 76;
+                                    if (off + 8 <= tkhd_size) {
+                                        uint32_t w = (tkhd[off] << 24) | (tkhd[off+1] << 16) |
+                                                     (tkhd[off+2] << 8) | tkhd[off+3];
+                                        uint32_t h = (tkhd[off+4] << 24) | (tkhd[off+5] << 16) |
+                                                     (tkhd[off+6] << 8) | tkhd[off+7];
+                                        w >>= 16; h >>= 16; /* 16.16 fixed point */
+                                        if ((int)w > width) width = w;
+                                        if ((int)h > height) height = h;
+                                    }
+                                }
+                                break;
+                            }
+                            fseek(f, inner_size - 8, SEEK_CUR);
+                        }
+                        fseek(f, trak_end, SEEK_SET);
+                    } else {
+                        fseek(f, trak_size - 8, SEEK_CUR);
+                    }
+                }
+                break;
+            }
+            fseek(f, size - 8, SEEK_CUR);
         }
     }
 
