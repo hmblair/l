@@ -307,7 +307,7 @@ int get_image_megapixels(const char *path) {
                 /* For SHORT (type 3), value is at different position based on endianness */
                 uint32_t value = value_offset;
                 if (type == 3 && count == 1) {
-                    value = little_endian ? TIFF_READ16(entry, 8) : (value_offset >> 16);
+                    value = little_endian ? (uint32_t)TIFF_READ16(entry, 8) : (value_offset >> 16);
                 }
 
                 if (tag == 0x0100) cur_width = value;       /* ImageWidth */
