@@ -895,6 +895,213 @@ int get_pdf_page_count(const char *path) {
 }
 
 /* ============================================================================
+ * File Type Name Detection
+ * ============================================================================ */
+
+#include <ctype.h>
+
+/* Check shebang line for interpreter type */
+static const char *get_type_from_shebang(const char *path, const Shebangs *sb) {
+    if (!sb || sb->count == 0) return NULL;
+
+    FILE *f = fopen(path, "r");
+    if (!f) return NULL;
+
+    char line[256];
+    const char *result = NULL;
+
+    if (fgets(line, sizeof(line), f) && line[0] == '#' && line[1] == '!') {
+        char *interp = line + 2;
+        while (*interp == ' ') interp++;
+
+        /* Handle /usr/bin/env interpreter */
+        if (strncmp(interp, "/usr/bin/env", 12) == 0) {
+            interp += 12;
+            while (*interp == ' ') interp++;
+        } else {
+            /* Get basename of interpreter path */
+            char *slash = strrchr(interp, '/');
+            if (slash) interp = slash + 1;
+        }
+
+        /* Trim trailing whitespace/newline */
+        char *end = interp;
+        while (*end && !isspace((unsigned char)*end)) end++;
+        *end = '\0';
+
+        /* Lookup in config.toml shebangs */
+        result = shebangs_lookup(sb, interp);
+    }
+
+    fclose(f);
+    return result;
+}
+
+const char *get_file_type_name(const char *path, const FileTypes *ft,
+                                const Shebangs *sb) {
+    const char *ext = strrchr(path, '.');
+    const char *basename = strrchr(path, '/');
+    basename = basename ? basename + 1 : path;
+
+    /* Special filenames (not extension-based) */
+    if (strcmp(basename, "Makefile") == 0 || strcmp(basename, "makefile") == 0 ||
+        strcmp(basename, "GNUmakefile") == 0) return "Makefile";
+    if (strcmp(basename, "CMakeLists.txt") == 0) return "CMake";
+    if (strcmp(basename, "Dockerfile") == 0) return "Dockerfile";
+    if (strcmp(basename, "Jenkinsfile") == 0) return "Jenkinsfile";
+    if (strcmp(basename, "Vagrantfile") == 0) return "Vagrantfile";
+
+    /* Extension-based lookup from config.toml */
+    if (ft && ft->count > 0) {
+        const char *type = filetypes_lookup(ft, path);
+        if (type) return type;
+    }
+
+    /* No extension - try shebang */
+    if (!ext || ext < basename || ext == basename) {
+        return get_type_from_shebang(path, sb);
+    }
+
+    return NULL;
+}
+
+/* ============================================================================
+ * Type Statistics
+ * ============================================================================ */
+
+/* Include ui.h for FileEntry and TreeNode definitions */
+#include "ui.h"
+
+void type_stats_init(TypeStats *stats) {
+    memset(stats, 0, sizeof(*stats));
+}
+
+void type_stats_add(TypeStats *stats, const char *type_name,
+                    int lines, ContentType content_type) {
+    if (!type_name) type_name = "Other";
+
+    stats->total_files++;
+
+    /* Only count lines for text content */
+    int has_lines = (content_type == CONTENT_TEXT && lines > 0);
+    if (has_lines) {
+        stats->total_lines += lines;
+    }
+
+    /* Find existing entry */
+    for (int i = 0; i < stats->count; i++) {
+        if (strcmp(stats->entries[i].name, type_name) == 0) {
+            stats->entries[i].file_count++;
+            if (has_lines) {
+                stats->entries[i].line_count += lines;
+                stats->entries[i].has_lines = 1;
+            }
+            return;
+        }
+    }
+
+    /* Add new entry */
+    if (stats->count < MAX_TYPE_STATS) {
+        stats->entries[stats->count].name = type_name;
+        stats->entries[stats->count].file_count = 1;
+        stats->entries[stats->count].line_count = has_lines ? lines : 0;
+        stats->entries[stats->count].has_lines = has_lines;
+        stats->count++;
+    }
+}
+
+static void type_stats_from_tree_recursive(TypeStats *stats, const TreeNode *node,
+                                            const FileTypes *ft, const Shebangs *sb,
+                                            int show_hidden) {
+    const FileEntry *fe = &node->entry;
+
+    /* Skip hidden files if not showing them */
+    if (!show_hidden && fe->name[0] == '.') return;
+
+    /* Skip ignored files (.git, gitignored, etc.) */
+    if (fe->is_ignored) return;
+
+    /* Process files */
+    if (fe->type == FTYPE_FILE || fe->type == FTYPE_EXEC ||
+        fe->type == FTYPE_SYMLINK || fe->type == FTYPE_SYMLINK_EXEC) {
+        const char *type_name = get_file_type_name(fe->path, ft, sb);
+        type_stats_add(stats, type_name, fe->line_count, fe->content_type);
+    }
+
+    /* Recurse into children */
+    for (size_t i = 0; i < node->child_count; i++) {
+        type_stats_from_tree_recursive(stats, &node->children[i], ft, sb, show_hidden);
+    }
+}
+
+void type_stats_from_tree(TypeStats *stats, const TreeNode *node,
+                          const FileTypes *ft, const Shebangs *sb,
+                          int show_hidden) {
+    type_stats_init(stats);
+    type_stats_from_tree_recursive(stats, node, ft, sb, show_hidden);
+}
+
+static int type_stat_cmp(const void *a, const void *b) {
+    const TypeStat *ta = a, *tb = b;
+    /* Sort by line count descending, then by file count */
+    if (tb->line_count > ta->line_count) return 1;
+    if (tb->line_count < ta->line_count) return -1;
+    if (tb->file_count > ta->file_count) return 1;
+    if (tb->file_count < ta->file_count) return -1;
+    return 0;
+}
+
+void type_stats_sort(TypeStats *stats) {
+    qsort(stats->entries, stats->count, sizeof(TypeStat), type_stat_cmp);
+}
+
+/* ============================================================================
+ * Content Metadata Computation
+ * ============================================================================ */
+
+void fileinfo_compute_content(struct FileEntry *fe, int do_line_count, int do_media_info) {
+    if (!fe || !fe->path) return;
+
+    /* Try media info first if requested */
+    if (do_media_info) {
+        int mp = get_image_megapixels(fe->path);
+        if (mp >= 0) {
+            fe->line_count = mp;
+            fe->content_type = CONTENT_IMAGE;
+            return;
+        }
+
+        int dur = get_audio_duration(fe->path);
+        if (dur >= 0) {
+            fe->line_count = dur;
+            fe->content_type = CONTENT_AUDIO;
+            return;
+        }
+
+        int pages = get_pdf_page_count(fe->path);
+        if (pages >= 0) {
+            fe->line_count = pages;
+            fe->content_type = CONTENT_PDF;
+            return;
+        }
+    }
+
+    /* Try text line count if requested */
+    if (do_line_count) {
+        int lines = count_file_lines(fe->path);
+        if (lines >= 0) {
+            fe->line_count = lines;
+            fe->content_type = CONTENT_TEXT;
+            return;
+        }
+    }
+
+    /* Binary or unknown */
+    fe->line_count = -1;
+    fe->content_type = CONTENT_BINARY;
+}
+
+/* ============================================================================
  * Line Counting
  * ============================================================================ */
 

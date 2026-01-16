@@ -516,7 +516,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                         collapsed_toggle(&collapsed, current->node->entry.path);
                     } else if (current->node->child_count == 0) {
                         /* Not loaded yet - dynamically expand */
-                        tree_expand_node(current->node, ctx->columns, ctx->git,
+                        tree_expand_node_from_config(current->node, ctx->columns, ctx->git,
                                          ctx->cfg, ctx->icons);
                     } else {
                         /* Already expanded, nothing to do */
@@ -545,7 +545,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                         collapsed_toggle(&collapsed, current->node->entry.path);
                     } else {
                         /* No children loaded - dynamically expand */
-                        tree_expand_node(current->node, ctx->columns, ctx->git,
+                        tree_expand_node_from_config(current->node, ctx->columns, ctx->git,
                                          ctx->cfg, ctx->icons);
                         if (current->node->child_count == 0) {
                             /* Still no children (empty dir) - nothing to do */

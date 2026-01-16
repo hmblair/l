@@ -53,6 +53,7 @@ COMMON_OBJS = $(SRCDIR)/common.o
 CACHE_CLIENT_OBJS = $(SRCDIR)/cache.o
 CACHE_DAEMON_OBJS = $(SRCDIR)/cache_daemon.o
 GIT_OBJS = $(SRCDIR)/git.o
+TREE_OBJS = $(SRCDIR)/tree.o
 UI_OBJS = $(SRCDIR)/ui.o $(SRCDIR)/icons.o $(SRCDIR)/fileinfo.o
 DAEMON_OBJS = $(SRCDIR)/daemon.o
 SELECT_OBJS = $(SRCDIR)/select.o
@@ -63,7 +64,7 @@ all: $(BINDIR)/l $(BINDIR)/l-cached $(BINDIR)/cl
 $(BINDIR):
 	mkdir -p $(BINDIR)
 
-$(BINDIR)/l: $(SRCDIR)/l.o $(COMMON_OBJS) $(CACHE_CLIENT_OBJS) $(GIT_OBJS) $(UI_OBJS) $(DAEMON_OBJS) $(SELECT_OBJS) | $(BINDIR)
+$(BINDIR)/l: $(SRCDIR)/l.o $(COMMON_OBJS) $(CACHE_CLIENT_OBJS) $(GIT_OBJS) $(TREE_OBJS) $(UI_OBJS) $(DAEMON_OBJS) $(SELECT_OBJS) | $(BINDIR)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
 $(BINDIR)/l-cached: $(SRCDIR)/ld.o $(COMMON_OBJS) $(CACHE_DAEMON_OBJS) | $(BINDIR)
@@ -83,6 +84,9 @@ $(SRCDIR)/cache_daemon.o: $(SRCDIR)/cache_daemon.c $(SRCDIR)/cache.h $(SRCDIR)/c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(SRCDIR)/git.o: $(SRCDIR)/git.c $(SRCDIR)/git.h $(SRCDIR)/common.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(SRCDIR)/tree.o: $(SRCDIR)/tree.c $(SRCDIR)/tree.h $(SRCDIR)/fileinfo.h $(SRCDIR)/git.h $(SRCDIR)/cache.h $(SRCDIR)/common.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(SRCDIR)/icons.o: $(SRCDIR)/icons.c $(SRCDIR)/icons.h $(SRCDIR)/common.h

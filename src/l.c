@@ -198,7 +198,9 @@ static void parse_args(int argc, char **argv, Config *cfg,
             else if (MATCH_LONG("path"))       { cfg->show_ancestry = 1; }
             else if (MATCH_LONG("expand-all")) { cfg->expand_all = 1; }
             else if (MATCH_LONG("list"))       { cfg->list_mode = 1; }
-            else if (MATCH_LONG("summary"))    { cfg->summary_mode = 1; }
+            else if (MATCH_LONG("summary"))    { cfg->summary_mode = 1;
+                                                 cfg->max_depth = L_MAX_DEPTH;
+                                                 cfg->long_format = 1; }
             else if (MATCH_LONG("no-icons"))   { cfg->no_icons = 1; }
             else if (MATCH_LONG("color-all")) { cfg->color_all = 1; }
             else if (MATCH_LONG("interactive")) { cfg->interactive = 1; }
@@ -301,7 +303,8 @@ int main(int argc, char **argv) {
         .cwd = "",
         .home = "",
         .script_dir = "",
-        .grep_pattern = NULL
+        .grep_pattern = NULL,
+        .compute = COMPUTE_NONE
     };
 
     /* Initialize environment paths */
@@ -337,6 +340,15 @@ int main(int argc, char **argv) {
         if (path_is_network_fs(check_path)) {
             cfg.long_format = 0;
         }
+    }
+
+    /* Set compute options based on mode */
+    if (cfg.summary_mode) {
+        cfg.compute = COMPUTE_SUMMARY;
+    } else if (cfg.long_format) {
+        cfg.compute = COMPUTE_LONG;
+    } else {
+        cfg.compute = COMPUTE_BASIC;
     }
 
     /* Load icons */
@@ -389,9 +401,9 @@ int main(int argc, char **argv) {
     for (int i = 0; i < dir_count; i++) {
         git_cache_init(&gits[i]);
         if (cfg.show_ancestry) {
-            trees[i] = build_ancestry_tree(dirs[i], cfg.long_format ? cols : NULL, &gits[i], &cfg, &icons);
+            trees[i] = build_ancestry_tree_from_config(dirs[i], cfg.long_format ? cols : NULL, &gits[i], &cfg, &icons);
         } else {
-            trees[i] = build_tree(dirs[i], cfg.long_format ? cols : NULL, &gits[i], &cfg, &icons);
+            trees[i] = build_tree_from_config(dirs[i], cfg.long_format ? cols : NULL, &gits[i], &cfg, &icons);
         }
     }
 
