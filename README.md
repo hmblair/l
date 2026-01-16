@@ -67,6 +67,7 @@ l [options] [path...]
 | `-f, --filter PATTERN` | Filter files matching pattern (implies `-at`) |
 | `-c, --color-all` | Don't gray out gitignored files |
 | `--list` | Flat list output (no tree structure) |
+| `--summary` | Show detailed summary for file/directory |
 | `--no-icons` | Hide icons |
 | `--daemon` | Manage size caching daemon |
 | `--version` | Show version |
@@ -131,6 +132,47 @@ Features:
 - Configurable via `~/.cache/l/config`
 
 The daemon is managed via launchd on macOS and systemd on Linux, storing its cache in `~/.cache/l/sizes.db`.
+
+## Configuration
+
+`l` reads configuration from `config.toml`, searched in order:
+1. Same directory as the binary (development)
+2. `~/.config/l/config.toml` (installed)
+3. `/usr/local/share/l/config.toml` (system-wide)
+
+### Sections
+
+**`[icons]`** - Nerd Font icons for file types and UI elements:
+```toml
+[icons]
+default = ""
+closed_directory = ""
+open_directory = ""
+executable = ""
+git_modified = ""
+```
+
+**`[extensions]`** - Icons for specific file extensions:
+```toml
+[extensions]
+jpg,png,gif,webp,bmp,ico = ""
+mp3,wav,flac,ogg,m4a,m4b = "󰝚"
+mp4,mkv,avi,mov,webm = "󰿎"
+```
+
+**`[filetypes]`** - File type names for `--summary` output:
+```toml
+[filetypes]
+c = "C source"
+h = "C header"
+cpp,cc,cxx = "C++ source"
+cu = "CUDA source"
+py = "Python"
+rs = "Rust"
+go = "Go"
+```
+
+Comma-separated extensions map to the same value. Custom entries override built-in defaults.
 
 ## License
 
