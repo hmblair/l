@@ -2021,20 +2021,61 @@ void print_summary(const TreeNode *node, PrintContext *ctx) {
     const FileEntry *fe = &node->entry;
     const Config *cfg = ctx->cfg;
     int is_dir = (fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR);
+    int is_cwd = (strcmp(fe->path, cfg->cwd) == 0);
+    int is_hidden = (fe->name[0] == '.');
 
-    /* Icon and name */
-    const char *icon = "";
-    if (!cfg->no_icons) {
-        int is_cwd = (strcmp(fe->path, cfg->cwd) == 0);
-        int is_locked = (fe->type == FTYPE_DIR && access(fe->path, R_OK) != 0);
-        icon = get_icon(ctx->icons, fe->type, is_cwd, is_locked, 0, fe->name);
+    /* First line: match short mode output (icon + name + git branch for repos) */
+    int is_locked = (fe->type == FTYPE_DIR && access(fe->path, R_OK) != 0);
+    const char *color = get_file_color(fe->type, is_cwd, fe->is_ignored, cfg);
+    const char *style = is_hidden ? CLR(cfg, STYLE_ITALIC) : "";
+
+    /* Git status summary for directories (like collapsed dirs in tree view) */
+    if (is_dir && !cfg->no_icons) {
+        char abs_path[PATH_MAX];
+        get_realpath(fe->path, abs_path, cfg);
+        GitSummary gs = git_get_dir_summary(ctx->git, abs_path);
+        if (gs.modified) {
+            printf("%s%d %s%s ", CLR(cfg, COLOR_RED), gs.modified, ctx->icons->git_modified, RST(cfg));
+        }
+        if (gs.untracked) {
+            printf("%s%d %s%s ", CLR(cfg, COLOR_RED), gs.untracked, ctx->icons->git_untracked, RST(cfg));
+        }
+        if (gs.staged) {
+            printf("%s%d %s%s ", CLR(cfg, COLOR_YELLOW), gs.staged, ctx->icons->git_staged, RST(cfg));
+        }
+        if (gs.deleted) {
+            printf("%s%d %s%s ", CLR(cfg, COLOR_RED), gs.deleted, ctx->icons->git_deleted, RST(cfg));
+        }
     }
 
-    const char *color = get_file_color(fe->type, 0, fe->is_ignored, cfg);
-    const char *name = fe->name;
-    const char *suffix = is_dir ? "/" : "";
+    if (!cfg->no_icons) {
+        int is_binary = (fe->file_count < 0 && fe->line_count == -1);
+        printf("%s%s%s ", color, get_icon(ctx->icons, fe->type, is_cwd, is_locked, is_binary, fe->name), RST(cfg));
+    }
+    printf("%s%s%s%s", color, style, fe->name, RST(cfg));
 
-    printf(" %s%s%s%s%s\n", CLR(cfg, color), icon, name, suffix, RST(cfg));
+    /* Git branch and upstream for git repo roots */
+    if (is_dir && fe->is_git_root) {
+        char *branch = git_get_branch(fe->path);
+        if (branch) {
+            char local_hash[64], remote_hash[64];
+            char local_ref[128], remote_ref[128];
+            snprintf(local_ref, sizeof(local_ref), "refs/heads/%s", branch);
+            snprintf(remote_ref, sizeof(remote_ref), "refs/remotes/origin/%s", branch);
+            git_read_ref(fe->path, local_ref, local_hash, sizeof(local_hash));
+            int has_upstream = git_read_ref(fe->path, remote_ref, remote_hash, sizeof(remote_hash));
+            if (has_upstream) {
+                int out_of_sync = strcmp(local_hash, remote_hash) != 0;
+                const char *cloud_color = out_of_sync ? COLOR_RED : COLOR_GREY;
+                printf(" %s%s%s%s %s%s%s", CLR(cfg, COLOR_GREY), CLR(cfg, STYLE_ITALIC), branch, RST(cfg),
+                       CLR(cfg, cloud_color), ctx->icons->git_upstream, RST(cfg));
+            } else {
+                printf(" %s%s%s%s", CLR(cfg, COLOR_GREY), CLR(cfg, STYLE_ITALIC), branch, RST(cfg));
+            }
+            free(branch);
+        }
+    }
+    printf("\n");
 
     /* Type (files only) */
     if (!is_dir) {
