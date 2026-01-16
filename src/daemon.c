@@ -556,10 +556,17 @@ static void action_refresh(const char *binary_path) {
         return;
     }
 
-    /* Send SIGUSR1 to trigger immediate refresh */
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "pkill -USR1 -f l-cached 2>/dev/null");
-    if (system(cmd) == 0) {
+    /* Get daemon PID and send SIGUSR1 to trigger immediate refresh */
+    pid_t pid = 0;
+    FILE *fp = popen("pgrep -x l-cached", "r");
+    if (fp) {
+        char buf[32];
+        if (fgets(buf, sizeof(buf), fp))
+            pid = (pid_t)atoi(buf);
+        pclose(fp);
+    }
+
+    if (pid > 0 && kill(pid, SIGUSR1) == 0) {
         printf("%sRefresh triggered%s\n", COLOR_GREEN, COLOR_RESET);
     } else {
         printf("%sFailed to signal daemon%s\n", COLOR_RED, COLOR_RESET);

@@ -524,7 +524,8 @@ static char *resolve_symlink(const char *path) {
         size_t dir_len = strlen(dir);
         size_t target_len = strlen(target);
         if (dir_len + target_len < PATH_MAX) {
-            snprintf(abs_target, PATH_MAX, "%s%s", dir, target);
+            memcpy(abs_target, dir, dir_len);
+            memcpy(abs_target + dir_len, target, target_len + 1);
             return xstrdup(abs_target);
         }
     }
