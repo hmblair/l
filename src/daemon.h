@@ -10,8 +10,12 @@
 
 #include "common.h"
 
-/* Launchd service label */
-#define DAEMON_LABEL "com.l.cached"
+/* Service names */
+#ifdef __APPLE__
+#define DAEMON_LABEL "com.l.cached"      /* launchd label */
+#else
+#define DAEMON_LABEL "l-cached"          /* systemd service name */
+#endif
 
 /* Run the daemon management interface */
 void daemon_run(const char *binary_path);

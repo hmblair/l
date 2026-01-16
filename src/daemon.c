@@ -147,10 +147,15 @@ static int menu_run(MenuItem *items, int count, const char *binary_path) {
  * Path Helpers
  * ============================================================================ */
 
-static void get_plist_path(char *buf, size_t len) {
+static void get_service_path(char *buf, size_t len) {
     const char *home = getenv("HOME");
+#ifdef __APPLE__
     snprintf(buf, len, "%s/Library/LaunchAgents/%s.plist",
              home ? home : "/tmp", DAEMON_LABEL);
+#else
+    snprintf(buf, len, "%s/.config/systemd/user/%s.service",
+             home ? home : "/tmp", DAEMON_LABEL);
+#endif
 }
 
 static void get_cache_path(char *buf, size_t len) {
@@ -168,42 +173,59 @@ static void get_status_path(char *buf, size_t len) {
 }
 
 /* ============================================================================
- * Launchd Management
+ * Service Management (launchd on macOS, systemd on Linux)
  * ============================================================================ */
 
 static int daemon_is_installed(void) {
-    char plist_path[PATH_MAX];
-    get_plist_path(plist_path, sizeof(plist_path));
-    return access(plist_path, F_OK) == 0;
+    char service_path[PATH_MAX];
+    get_service_path(service_path, sizeof(service_path));
+    return access(service_path, F_OK) == 0;
 }
 
 static int daemon_is_running(void) {
+#ifdef __APPLE__
     char cmd[256];
     snprintf(cmd, sizeof(cmd), "launchctl list %s >/dev/null 2>&1", DAEMON_LABEL);
     return system(cmd) == 0;
+#else
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "systemctl --user is-active --quiet %s 2>/dev/null", DAEMON_LABEL);
+    return system(cmd) == 0;
+#endif
 }
 
-static void daemon_create_plist(const char *binary_path) {
-    char plist_path[PATH_MAX];
-    get_plist_path(plist_path, sizeof(plist_path));
+static void daemon_create_service(const char *binary_path) {
+    char service_path[PATH_MAX];
+    get_service_path(service_path, sizeof(service_path));
 
     /* Ensure directory exists */
     char dir[PATH_MAX];
-    snprintf(dir, sizeof(dir), "%s/Library/LaunchAgents", getenv("HOME"));
+    const char *home = getenv("HOME");
+#ifdef __APPLE__
+    snprintf(dir, sizeof(dir), "%s/Library/LaunchAgents", home ? home : "/tmp");
+#else
+    snprintf(dir, sizeof(dir), "%s/.config/systemd/user", home ? home : "/tmp");
+    /* Create parent directories */
+    char parent[PATH_MAX];
+    snprintf(parent, sizeof(parent), "%s/.config", home ? home : "/tmp");
+    mkdir(parent, 0755);
+    snprintf(parent, sizeof(parent), "%s/.config/systemd", home ? home : "/tmp");
+    mkdir(parent, 0755);
+#endif
     mkdir(dir, 0755);
 
     char log_path[PATH_MAX];
     get_log_path(log_path, sizeof(log_path));
 
-    const char *home = getenv("HOME");
-    const char *user = getenv("USER");
-
-    FILE *f = fopen(plist_path, "w");
+    FILE *f = fopen(service_path, "w");
     if (!f) {
-        fprintf(stderr, "%sError:%s Cannot create plist: %s\n",
-                COLOR_RED, COLOR_RESET, plist_path);
+        fprintf(stderr, "%sError:%s Cannot create service file: %s\n",
+                COLOR_RED, COLOR_RESET, service_path);
         return;
     }
+
+#ifdef __APPLE__
+    const char *user = getenv("USER");
 
     fprintf(f, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     fprintf(f, "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
@@ -231,31 +253,63 @@ static void daemon_create_plist(const char *binary_path) {
     fprintf(f, "  </dict>\n");
     fprintf(f, "</dict>\n");
     fprintf(f, "</plist>\n");
+#else
+    /* systemd user service unit file */
+    fprintf(f, "[Unit]\n");
+    fprintf(f, "Description=l directory size cache daemon\n");
+    fprintf(f, "\n");
+    fprintf(f, "[Service]\n");
+    fprintf(f, "Type=simple\n");
+    fprintf(f, "ExecStart=%s\n", binary_path);
+    fprintf(f, "Restart=always\n");
+    fprintf(f, "RestartSec=5\n");
+    fprintf(f, "StandardOutput=append:%s\n", log_path);
+    fprintf(f, "StandardError=append:%s\n", log_path);
+    fprintf(f, "Environment=HOME=%s\n", home ? home : "");
+    fprintf(f, "\n");
+    fprintf(f, "[Install]\n");
+    fprintf(f, "WantedBy=default.target\n");
+#endif
     fclose(f);
 }
 
 static void daemon_load(void) {
-    char plist_path[PATH_MAX];
-    get_plist_path(plist_path, sizeof(plist_path));
+#ifdef __APPLE__
+    char service_path[PATH_MAX];
+    get_service_path(service_path, sizeof(service_path));
 
     char cmd[PATH_MAX + 64];
-    snprintf(cmd, sizeof(cmd), "launchctl load -w '%s' 2>/dev/null", plist_path);
+    snprintf(cmd, sizeof(cmd), "launchctl load -w '%s' 2>/dev/null", service_path);
     (void)system(cmd);
+#else
+    /* Reload systemd user daemon and enable+start the service */
+    (void)system("systemctl --user daemon-reload 2>/dev/null");
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "systemctl --user enable --now %s 2>/dev/null", DAEMON_LABEL);
+    (void)system(cmd);
+#endif
 }
 
 static void daemon_unload(void) {
-    char plist_path[PATH_MAX];
-    get_plist_path(plist_path, sizeof(plist_path));
+#ifdef __APPLE__
+    char service_path[PATH_MAX];
+    get_service_path(service_path, sizeof(service_path));
 
     char cmd[PATH_MAX + 64];
-    snprintf(cmd, sizeof(cmd), "launchctl unload '%s' 2>/dev/null", plist_path);
+    snprintf(cmd, sizeof(cmd), "launchctl unload '%s' 2>/dev/null", service_path);
     (void)system(cmd);
+#else
+    /* Stop and disable the systemd user service */
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "systemctl --user disable --now %s 2>/dev/null", DAEMON_LABEL);
+    (void)system(cmd);
+#endif
 }
 
-static void daemon_remove_plist(void) {
-    char plist_path[PATH_MAX];
-    get_plist_path(plist_path, sizeof(plist_path));
-    unlink(plist_path);
+static void daemon_remove_service(void) {
+    char service_path[PATH_MAX];
+    get_service_path(service_path, sizeof(service_path));
+    unlink(service_path);
 }
 
 /* ============================================================================
@@ -429,7 +483,7 @@ static void action_start(const char *binary_path) {
     }
 
     if (!daemon_is_installed()) {
-        daemon_create_plist(binary_path);
+        daemon_create_service(binary_path);
     }
     daemon_load();
 
@@ -451,7 +505,7 @@ static void action_stop(const char *binary_path) {
     }
 
     daemon_unload();
-    daemon_remove_plist();
+    daemon_remove_service();
     printf("%sStopped and uninstalled%s\n", COLOR_GREEN, COLOR_RESET);
 }
 
