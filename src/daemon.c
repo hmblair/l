@@ -127,7 +127,7 @@ static off_t cache_get_size(void);
 /* Line offset from bottom of status to cache count line (set by print_status) */
 static int g_cache_count_line = 0;
 
-static void refresh_cache_count(int menu_count) {
+static void refresh_cache_line(int menu_count, int show_scanning) {
     int count = cache_get_count();
 
     /* Move up from menu to the cache line, update count, move back */
@@ -135,15 +135,33 @@ static void refresh_cache_count(int menu_count) {
     printf("\033[s");  /* Save cursor */
     printf("\033[%dA", lines_up);  /* Move up */
     printf("\r\033[K");  /* Clear line */
-    printf("  %s●%s Cache     %s%d%s entries %s(scanning...)%s",
-           COLOR_GREEN, COLOR_RESET, COLOR_WHITE, count, COLOR_RESET,
-           COLOR_GREY, COLOR_RESET);
+
+    if (show_scanning) {
+        printf("  %s●%s Cache     %s%d%s entries %s(scanning...)%s",
+               COLOR_GREEN, COLOR_RESET, COLOR_WHITE, count, COLOR_RESET,
+               COLOR_GREY, COLOR_RESET);
+    } else {
+        off_t size = cache_get_size();
+        char size_buf[32];
+        if (size >= 1024 * 1024) {
+            snprintf(size_buf, sizeof(size_buf), "%.1fM", (double)size / (1024 * 1024));
+        } else if (size >= 1024) {
+            snprintf(size_buf, sizeof(size_buf), "%lldK", (long long)size / 1024);
+        } else {
+            snprintf(size_buf, sizeof(size_buf), "%lldB", (long long)size);
+        }
+        printf("  %s●%s Cache     %s%d%s entries %s(%s)%s",
+               COLOR_GREEN, COLOR_RESET, COLOR_WHITE, count, COLOR_RESET,
+               COLOR_GREY, size_buf, COLOR_RESET);
+    }
+
     printf("\033[u");  /* Restore cursor */
     fflush(stdout);
 }
 
 static int menu_run(MenuItem *items, int count, const char *binary_path) {
     int selected = 0;
+    int was_scanning = is_daemon_scanning();
 
     /* Print initial empty lines */
     for (int i = 0; i < count; i++) printf("\n");
@@ -153,14 +171,17 @@ static int menu_run(MenuItem *items, int count, const char *binary_path) {
 
     while (1) {
         /* Use 200ms timeout when scanning to allow status refresh */
-        int timeout = is_daemon_scanning() ? 200 : 0;
+        int scanning = is_daemon_scanning();
+        int timeout = scanning ? 200 : (was_scanning ? 1 : 0);
         KeyPress key = term_read_key(timeout);
 
-        if (key == KEY_NONE && timeout > 0) {
-            /* Timeout while scanning - refresh cache count */
-            refresh_cache_count(count);
+        if (key == KEY_NONE && (scanning || was_scanning)) {
+            /* Refresh cache line - show size when scan completes */
+            refresh_cache_line(count, scanning);
+            was_scanning = scanning;
             continue;
         }
+        was_scanning = scanning;
 
         switch (key) {
             case KEY_UP:
