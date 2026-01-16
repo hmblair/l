@@ -119,7 +119,7 @@ Features:
 - Skips network filesystems automatically
 - Shows status (scanning/idle) and PID
 
-The daemon is managed via launchd on macOS and stores its cache in `~/.cache/l/sizes.db`.
+The daemon is managed via launchd on macOS and systemd on Linux, storing its cache in `~/.cache/l/sizes.db`.
 
 ## License
 
