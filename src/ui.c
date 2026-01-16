@@ -2116,22 +2116,26 @@ void print_summary(const TreeNode *node, PrintContext *ctx) {
     const char *color = get_file_color(fe->type, is_cwd, fe->is_ignored, cfg);
     const char *style = is_hidden ? CLR(cfg, STYLE_ITALIC) : "";
 
-    /* Git status summary for directories (like collapsed dirs in tree view) */
+    /* Git status summary for directories (only if inside a git repo) */
     if (is_dir && !cfg->no_icons) {
         char abs_path[PATH_MAX];
         get_realpath(fe->path, abs_path, cfg);
-        GitSummary gs = git_get_dir_summary(ctx->git, abs_path);
-        if (gs.modified) {
-            printf("%s%d %s%s ", CLR(cfg, COLOR_RED), gs.modified, ctx->icons->git_modified, RST(cfg));
-        }
-        if (gs.untracked) {
-            printf("%s%d %s%s ", CLR(cfg, COLOR_RED), gs.untracked, ctx->icons->git_untracked, RST(cfg));
-        }
-        if (gs.staged) {
-            printf("%s%d %s%s ", CLR(cfg, COLOR_YELLOW), gs.staged, ctx->icons->git_staged, RST(cfg));
-        }
-        if (gs.deleted) {
-            printf("%s%d %s%s ", CLR(cfg, COLOR_RED), gs.deleted, ctx->icons->git_deleted, RST(cfg));
+        char git_root[PATH_MAX];
+        /* Only show git status if this directory is inside a git repo */
+        if (git_find_root(abs_path, git_root, sizeof(git_root))) {
+            GitSummary gs = git_get_dir_summary(ctx->git, abs_path);
+            if (gs.modified) {
+                printf("%s%d %s%s ", CLR(cfg, COLOR_RED), gs.modified, ctx->icons->git_modified, RST(cfg));
+            }
+            if (gs.untracked) {
+                printf("%s%d %s%s ", CLR(cfg, COLOR_RED), gs.untracked, ctx->icons->git_untracked, RST(cfg));
+            }
+            if (gs.staged) {
+                printf("%s%d %s%s ", CLR(cfg, COLOR_YELLOW), gs.staged, ctx->icons->git_staged, RST(cfg));
+            }
+            if (gs.deleted) {
+                printf("%s%d %s%s ", CLR(cfg, COLOR_RED), gs.deleted, ctx->icons->git_deleted, RST(cfg));
+            }
         }
     }
 
