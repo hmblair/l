@@ -573,6 +573,14 @@ static int find_in_path(const char *name, char *result) {
 }
 
 void daemon_run(const char *binary_path) {
+    /* Interactive menu requires a TTY */
+    if (!isatty(STDIN_FILENO)) {
+        fprintf(stderr, "%sError:%s --daemon requires an interactive terminal\n",
+                COLOR_RED, COLOR_RESET);
+        fprintf(stderr, "Use: --daemon start | stop | status | refresh | clear\n");
+        exit(1);
+    }
+
     /* Resolve to find actual binary location */
     char resolved_path[PATH_MAX];
     int found = 0;
