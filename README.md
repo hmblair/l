@@ -10,6 +10,8 @@ Enhanced directory listing with tree view, icons, and git integration.
 - Interactive selection mode with vim-like navigation
 - Background daemon for caching directory sizes
 - Long format with size, line count, and modification time
+- Image dimensions and megapixels (JPEG, PNG, TIFF, WebP, BMP)
+- Audio/video duration (M4B, M4A, MP4, MOV)
 - Configurable depth limiting, filtering, and sorting
 
 ## Installation
@@ -113,11 +115,18 @@ The size caching daemon (`l-cached`) runs in the background to pre-calculate dir
 l --daemon           # Interactive daemon management
 ```
 
+The interactive menu provides:
+- **Start/Stop daemon** - manage the background process
+- **Refresh now** - trigger an immediate scan
+- **Clear cache** - remove all cached entries (restarts daemon)
+- **Configure** - adjust scan interval and minimum file threshold
+
 Features:
-- Scans from `/` every 30 minutes
-- Caches directories with 1000+ files
+- Scans from `/` periodically (default: every 30 minutes)
+- Caches directories above file threshold (default: 1000+ files)
 - Skips network filesystems automatically
-- Shows status (scanning/idle) and PID
+- Live cache entry count display during scanning
+- Configurable via `~/.cache/l/config`
 
 The daemon is managed via launchd on macOS and systemd on Linux, storing its cache in `~/.cache/l/sizes.db`.
 
