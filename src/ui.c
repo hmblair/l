@@ -1254,6 +1254,12 @@ TreeNode *build_tree(const char *path, Column *cols,
                               strcmp(root->entry.name, ".git") == 0 ||
                               (in_git_repo && git_path_in_ignored(git, abs_path, git_root));
 
+    /* Mark if this directory is itself a git repo root */
+    if ((type == FTYPE_DIR || type == FTYPE_SYMLINK_DIR) &&
+        in_git_repo && strcmp(abs_path, git_root) == 0) {
+        root->entry.is_git_root = 1;
+    }
+
     if (cfg->long_format && cols) {
         columns_update_widths(cols, &root->entry, icons);
     }
