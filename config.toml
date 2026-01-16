@@ -112,6 +112,7 @@ org = "Org"
 # Build/Project
 make = "Makefile"
 cmake = "CMake"
+in = "CMake template"
 gradle = "Gradle"
 lock = "Lock file"
 
