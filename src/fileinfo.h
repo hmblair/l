@@ -16,10 +16,11 @@ FileType detect_file_type(const char *path, struct stat *st, char **symlink_targ
 const char *get_file_color(FileType type, int is_cwd, int is_ignored, int is_tty, int color_all);
 
 /* ============================================================================
- * Line Counting and Image Parsing
+ * Line Counting and Media Parsing
  * ============================================================================ */
 
 int count_file_lines(const char *path);
 int get_image_megapixels(const char *path);
+int get_audio_duration(const char *path);
 
 #endif /* L_FILEINFO_H */

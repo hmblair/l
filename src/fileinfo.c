@@ -416,6 +416,117 @@ int get_image_megapixels(const char *path) {
 }
 
 /* ============================================================================
+ * Audio Duration Parsing
+ * ============================================================================ */
+
+/* Check if file has an audio/video extension that uses ISOBMFF container */
+static int has_isobmff_audio_extension(const char *path) {
+    const char *dot = strrchr(path, '/');
+    dot = dot ? strrchr(dot, '.') : strrchr(path, '.');
+    if (!dot) return 0;
+    dot++;
+
+    static const char *exts[] = {
+        "m4b", "m4a", "mp4", "m4v", "mov", "3gp", "3g2",
+        "aac",  /* AAC in ADTS container won't work, but .aac could be ISOBMFF */
+        NULL
+    };
+    for (const char **e = exts; *e; e++) {
+        if (strcasecmp(dot, *e) == 0) return 1;
+    }
+    return 0;
+}
+
+/* Get audio/video duration from ISOBMFF container (M4B, M4A, MP4, MOV, etc.)
+ * Returns duration in seconds, or -1 on failure. */
+int get_audio_duration(const char *path) {
+    if (!has_isobmff_audio_extension(path)) return -1;
+
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+
+    unsigned char header[12];
+    if (fread(header, 1, 12, f) < 12) {
+        fclose(f);
+        return -1;
+    }
+
+    /* Verify ftyp box */
+    if (memcmp(header + 4, "ftyp", 4) != 0) {
+        fclose(f);
+        return -1;
+    }
+
+    /* Skip past ftyp box */
+    uint32_t ftyp_size = (header[0] << 24) | (header[1] << 16) | (header[2] << 8) | header[3];
+    if (ftyp_size < 8) {
+        fclose(f);
+        return -1;
+    }
+    fseek(f, ftyp_size, SEEK_SET);
+
+    /* Search for moov box */
+    unsigned char box[8];
+    while (fread(box, 1, 8, f) == 8) {
+        uint32_t size = (box[0] << 24) | (box[1] << 16) | (box[2] << 8) | box[3];
+        if (size < 8) break;
+
+        if (memcmp(box + 4, "moov", 4) == 0) {
+            long moov_end = ftell(f) - 8 + size;
+
+            /* Search within moov for mvhd */
+            while (ftell(f) < moov_end && fread(box, 1, 8, f) == 8) {
+                uint32_t inner_size = (box[0] << 24) | (box[1] << 16) | (box[2] << 8) | box[3];
+                if (inner_size < 8) break;
+
+                if (memcmp(box + 4, "mvhd", 4) == 0) {
+                    /* mvhd box found - read version to determine layout */
+                    unsigned char mvhd[28];
+                    if (fread(mvhd, 1, 28, f) < 20) break;
+
+                    int version = mvhd[0];
+                    uint32_t timescale;
+                    uint64_t duration;
+
+                    if (version == 0) {
+                        /* Version 0: 4-byte fields
+                         * [0] version, [1-3] flags
+                         * [4-7] creation_time, [8-11] modification_time
+                         * [12-15] timescale, [16-19] duration */
+                        timescale = (mvhd[12] << 24) | (mvhd[13] << 16) | (mvhd[14] << 8) | mvhd[15];
+                        duration = (mvhd[16] << 24) | (mvhd[17] << 16) | (mvhd[18] << 8) | mvhd[19];
+                    } else {
+                        /* Version 1: 8-byte time fields
+                         * [0] version, [1-3] flags
+                         * [4-11] creation_time, [12-19] modification_time
+                         * [20-23] timescale, [24-31] duration */
+                        timescale = (mvhd[20] << 24) | (mvhd[21] << 16) | (mvhd[22] << 8) | mvhd[23];
+                        duration = ((uint64_t)mvhd[24] << 56) | ((uint64_t)mvhd[25] << 48) |
+                                   ((uint64_t)mvhd[26] << 40) | ((uint64_t)mvhd[27] << 32);
+                        /* Need to read 4 more bytes for full duration */
+                        unsigned char dur_rest[4];
+                        if (fread(dur_rest, 1, 4, f) == 4) {
+                            duration |= (dur_rest[0] << 24) | (dur_rest[1] << 16) |
+                                        (dur_rest[2] << 8) | dur_rest[3];
+                        }
+                    }
+
+                    fclose(f);
+                    if (timescale == 0) return -1;
+                    return (int)(duration / timescale);
+                }
+                fseek(f, inner_size - 8, SEEK_CUR);
+            }
+            break;
+        }
+        fseek(f, size - 8, SEEK_CUR);
+    }
+
+    fclose(f);
+    return -1;
+}
+
+/* ============================================================================
  * Line Counting
  * ============================================================================ */
 

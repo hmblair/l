@@ -181,6 +181,17 @@ static void col_format_lines(const FileEntry *fe, const Icons *icons, char *buf,
         } else {
             snprintf(buf, len, "%.1fM", mp);
         }
+    } else if (fe->is_audio && fe->line_count >= 0) {
+        /* line_count holds duration in seconds */
+        int secs = fe->line_count;
+        int hours = secs / 3600;
+        int mins = (secs % 3600) / 60;
+        int s = secs % 60;
+        if (hours > 0) {
+            snprintf(buf, len, "%d:%02d:%02d", hours, mins, s);
+        } else {
+            snprintf(buf, len, "%d:%02d", mins, s);
+        }
     } else if (fe->line_count >= 1000000) {
         double m = fe->line_count / 1000000.0;
         snprintf(buf, len, m < 10 ? "%.1fM" : "%.0fM", m);
@@ -306,6 +317,8 @@ const char *get_count_icon(const FileEntry *fe, const Icons *icons) {
         return icons->count_files;
     } else if (fe->is_image && fe->line_count >= 0) {
         return icons->count_pixels;
+    } else if (fe->is_audio && fe->line_count >= 0) {
+        return icons->count_duration;
     } else if (fe->line_count >= 0) {
         return icons->count_lines;
     }
@@ -455,7 +468,13 @@ int read_directory(const char *dir_path, FileList *list, const Config *cfg) {
                     fe->line_count = mp;
                     fe->is_image = 1;
                 } else {
-                    fe->line_count = count_file_lines(fe->path);
+                    int dur = get_audio_duration(fe->path);
+                    if (dur >= 0) {
+                        fe->line_count = dur;
+                        fe->is_audio = 1;
+                    } else {
+                        fe->line_count = count_file_lines(fe->path);
+                    }
                 }
             }
         }
@@ -785,7 +804,13 @@ TreeNode *build_tree(const char *path, Column *cols,
             root->entry.line_count = mp;
             root->entry.is_image = 1;
         } else {
-            root->entry.line_count = count_file_lines(abs_path);
+            int dur = get_audio_duration(abs_path);
+            if (dur >= 0) {
+                root->entry.line_count = dur;
+                root->entry.is_audio = 1;
+            } else {
+                root->entry.line_count = count_file_lines(abs_path);
+            }
         }
     }
 

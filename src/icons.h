@@ -64,6 +64,7 @@ typedef struct Icons {
     char count_files[L_MAX_ICON_LEN];
     char count_lines[L_MAX_ICON_LEN];
     char count_pixels[L_MAX_ICON_LEN];
+    char count_duration[L_MAX_ICON_LEN];
     char cursor[L_MAX_ICON_LEN];
     ExtIcon ext_icons[L_MAX_EXT_ICONS];
     int ext_count;
