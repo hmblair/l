@@ -349,6 +349,11 @@ int main(int argc, char **argv) {
     filetypes_init(&filetypes);
     filetypes_load(&filetypes, cfg.script_dir);
 
+    /* Load shebangs */
+    Shebangs shebangs;
+    shebangs_init(&shebangs);
+    shebangs_load(&shebangs, cfg.script_dir);
+
     /* Load size cache */
     cache_load();
 
@@ -359,6 +364,14 @@ int main(int argc, char **argv) {
             fprintf(stderr, "%sError:%s '%s' does not exist\n",
                     CLR(&cfg, COLOR_RED), RST(&cfg), dirs[i]);
             return 1;
+        }
+    }
+
+    /* Auto-enable summary mode for single file arguments */
+    if (dir_count == 1) {
+        struct stat st;
+        if (stat(dirs[0], &st) == 0 && S_ISREG(st.st_mode)) {
+            cfg.summary_mode = 1;
         }
     }
 
@@ -410,6 +423,7 @@ int main(int argc, char **argv) {
             .git = &gits[0],
             .icons = &icons,
             .filetypes = &filetypes,
+            .shebangs = &shebangs,
             .cfg = &cfg,
             .columns = cfg.long_format ? cols : NULL,
             .continuation = continuation,
@@ -464,6 +478,7 @@ int main(int argc, char **argv) {
                 .git = &gits[i],
                 .icons = &icons,
                 .filetypes = &filetypes,
+                .shebangs = &shebangs,
                 .cfg = &cfg,
                 .columns = cfg.long_format ? cols : NULL,
                 .continuation = continuation,

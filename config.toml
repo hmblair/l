@@ -72,9 +72,7 @@ v = "V"
 cr = "Crystal"
 
 # Shell scripts
-sh = "Shell script"
-bash = "Bash script"
-zsh = "Zsh script"
+sh,bash,zsh = "Shell script"
 fish = "Fish script"
 ps1 = "PowerShell"
 
@@ -98,6 +96,9 @@ ini = "INI"
 conf,cfg = "Config"
 env = "Environment"
 sql = "SQL"
+
+# Scientific data
+cif,pdb = "Molecular structure"
 
 # Documentation
 md,markdown = "Markdown"
@@ -143,4 +144,20 @@ log = "Log file"
 db = "Database"
 pdf = "PDF"
 plist = "Property list"
+
+[shebangs]
+# Interpreter to file type mapping (for files without extensions)
+sh,bash,zsh = "Shell script"
+fish = "Fish script"
+python,python2,python3 = "Python"
+node,nodejs = "JavaScript"
+ruby = "Ruby"
+perl = "Perl"
+php = "PHP"
+lua = "Lua"
+awk,gawk,nawk,mawk = "AWK"
+sed = "Sed script"
+tclsh,wish = "Tcl"
+expect = "Expect"
+osascript = "AppleScript"
 

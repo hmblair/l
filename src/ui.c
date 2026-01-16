@@ -1407,7 +1407,7 @@ static void print_tree_children(const TreeNode *parent, int depth, PrintContext 
 
 /* Extension to file type name mapping */
 /* Check shebang line for interpreter type */
-static const char *get_type_from_shebang(const char *path) {
+static const char *get_type_from_shebang(const char *path, const Shebangs *sb) {
     FILE *f = fopen(path, "r");
     if (!f) return NULL;
 
@@ -1434,10 +1434,18 @@ static const char *get_type_from_shebang(const char *path) {
         while (*end && !isspace((unsigned char)*end)) end++;
         *end = '\0';
 
-        /* Map interpreter to type */
-        if (strcmp(interp, "sh") == 0) result = "Shell script";
-        else if (strcmp(interp, "bash") == 0) result = "Bash script";
-        else if (strcmp(interp, "zsh") == 0) result = "Zsh script";
+        /* Try loaded shebangs first */
+        if (sb && sb->count > 0) {
+            result = shebangs_lookup(sb, interp);
+            if (result) {
+                fclose(f);
+                return result;
+            }
+        }
+
+        /* Fallback: hardcoded defaults */
+        if (strcmp(interp, "sh") == 0 || strcmp(interp, "bash") == 0 ||
+            strcmp(interp, "zsh") == 0) result = "Shell script";
         else if (strcmp(interp, "fish") == 0) result = "Fish script";
         else if (strcmp(interp, "python") == 0 || strcmp(interp, "python3") == 0 ||
                  strcmp(interp, "python2") == 0) result = "Python";
@@ -1458,7 +1466,8 @@ static const char *get_type_from_shebang(const char *path) {
     return result;
 }
 
-static const char *get_file_type_name(const char *path, const FileTypes *ft) {
+static const char *get_file_type_name(const char *path, const FileTypes *ft,
+                                       const Shebangs *sb) {
     /* Try loaded file types first */
     if (ft && ft->count > 0) {
         const char *type = filetypes_lookup(ft, path);
@@ -1469,9 +1478,17 @@ static const char *get_file_type_name(const char *path, const FileTypes *ft) {
     const char *basename = strrchr(path, '/');
     basename = basename ? basename + 1 : path;
 
+    /* Special filenames (check before extension) */
+    if (strcmp(basename, "Makefile") == 0 || strcmp(basename, "makefile") == 0 ||
+        strcmp(basename, "GNUmakefile") == 0) return "Makefile";
+    if (strcmp(basename, "CMakeLists.txt") == 0) return "CMake";
+    if (strcmp(basename, "Dockerfile") == 0) return "Dockerfile";
+    if (strcmp(basename, "Jenkinsfile") == 0) return "Jenkinsfile";
+    if (strcmp(basename, "Vagrantfile") == 0) return "Vagrantfile";
+
     /* No extension or extension at start of basename - try shebang */
     if (!ext || ext < basename || ext == basename) {
-        return get_type_from_shebang(path);
+        return get_type_from_shebang(path, sb);
     }
     ext++;  /* skip the dot */
 
@@ -1516,9 +1533,8 @@ static const char *get_file_type_name(const char *path, const FileTypes *ft) {
     if (strcasecmp(ext, "cr") == 0) return "Crystal";
 
     /* Shell scripts */
-    if (strcasecmp(ext, "sh") == 0) return "Shell script";
-    if (strcasecmp(ext, "bash") == 0) return "Bash script";
-    if (strcasecmp(ext, "zsh") == 0) return "Zsh script";
+    if (strcasecmp(ext, "sh") == 0 || strcasecmp(ext, "bash") == 0 ||
+        strcasecmp(ext, "zsh") == 0) return "Shell script";
     if (strcasecmp(ext, "fish") == 0) return "Fish script";
     if (strcasecmp(ext, "ps1") == 0) return "PowerShell";
 
@@ -1551,7 +1567,7 @@ static const char *get_file_type_name(const char *path, const FileTypes *ft) {
     if (strcasecmp(ext, "org") == 0) return "Org";
 
     /* Build/Project */
-    if (strcasecmp(ext, "make") == 0 || strcmp(path, "Makefile") == 0) return "Makefile";
+    if (strcasecmp(ext, "make") == 0) return "Makefile";
     if (strcasecmp(ext, "cmake") == 0) return "CMake";
     if (strcasecmp(ext, "gradle") == 0) return "Gradle";
     if (strcasecmp(ext, "lock") == 0) return "Lock file";
@@ -1611,7 +1627,7 @@ static void lang_stats_add(LangStats *stats, const char *name, int lines) {
 
     /* Find existing entry */
     for (int i = 0; i < stats->count; i++) {
-        if (stats->entries[i].name == name) {  /* pointer comparison OK - static strings */
+        if (strcmp(stats->entries[i].name, name) == 0) {
             stats->entries[i].lines += lines;
             return;
         }
@@ -1635,7 +1651,9 @@ static int lang_stat_cmp(const void *a, const void *b) {
 /* Recursively count lines by language in a directory, skipping gitignored files */
 static void count_dir_lines_by_lang(const char *path, int show_hidden,
                                     GitCache *git, const char *git_root,
-                                    const FileTypes *ft, LangStats *stats) {
+                                    int in_git_repo,
+                                    const FileTypes *ft, const Shebangs *sb,
+                                    LangStats *stats) {
     DIR *dir = opendir(path);
     if (!dir) return;
 
@@ -1664,12 +1682,14 @@ static void count_dir_lines_by_lang(const char *path, int show_hidden,
         if (S_ISREG(st.st_mode)) {
             int lines = count_file_lines(full_path);
             if (lines > 0) {
-                const char *type = get_file_type_name(full_path, ft);
+                const char *type = get_file_type_name(full_path, ft, sb);
                 if (!type) type = "Other";
                 lang_stats_add(stats, type, lines);
             }
         } else if (S_ISDIR(st.st_mode)) {
-            count_dir_lines_by_lang(full_path, show_hidden, git, git_root, ft, stats);
+            /* Skip nested git repos (submodules) */
+            if (in_git_repo && path_is_git_root(full_path)) continue;
+            count_dir_lines_by_lang(full_path, show_hidden, git, git_root, in_git_repo, ft, sb, stats);
         }
     }
 
@@ -1741,9 +1761,21 @@ void print_summary(const TreeNode *node, PrintContext *ctx) {
     }
     printf("\n");
 
+    /* Full path (show both symlink and target for symlinks) */
+    if (fe->symlink_target) {
+        char link_path[PATH_MAX];
+        get_abspath(fe->path, link_path, cfg);
+        printf("   %sPath:%s     %s\n", CLR(cfg, COLOR_GREY), RST(cfg), link_path);
+        printf("   %sTarget:%s   %s\n", CLR(cfg, COLOR_GREY), RST(cfg), fe->symlink_target);
+    } else {
+        char full_path[PATH_MAX];
+        get_realpath(fe->path, full_path, cfg);
+        printf("   %sPath:%s     %s\n", CLR(cfg, COLOR_GREY), RST(cfg), full_path);
+    }
+
     /* Type (files only) */
     if (!is_dir) {
-        const char *type_name = get_file_type_name(fe->path, ctx->filetypes);
+        const char *type_name = get_file_type_name(fe->path, ctx->filetypes, ctx->shebangs);
         if (type_name) {
             printf("   %sType:%s     %s\n", CLR(cfg, COLOR_GREY), RST(cfg), type_name);
         }
@@ -1765,8 +1797,9 @@ void print_summary(const TreeNode *node, PrintContext *ctx) {
     if (is_dir) {
         LangStats stats = {0};
         char git_root[PATH_MAX];
-        const char *root_ptr = git_find_root(fe->path, git_root, sizeof(git_root)) ? git_root : NULL;
-        count_dir_lines_by_lang(fe->path, cfg->show_hidden, ctx->git, root_ptr, ctx->filetypes, &stats);
+        int in_git_repo = git_find_root(fe->path, git_root, sizeof(git_root));
+        const char *root_ptr = in_git_repo ? git_root : NULL;
+        count_dir_lines_by_lang(fe->path, cfg->show_hidden, ctx->git, root_ptr, in_git_repo, ctx->filetypes, ctx->shebangs, &stats);
         if (stats.total > 0) {
             char total_buf[32];
             format_count(stats.total, total_buf, sizeof(total_buf));

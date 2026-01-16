@@ -41,6 +41,7 @@ typedef struct {
 /* Extension to file type name mapping */
 #define L_MAX_FILETYPE_NAME 32
 #define L_MAX_FILETYPES 256
+#define L_MAX_SHEBANGS 64
 
 typedef struct {
     char ext[L_MAX_EXT_LEN];
@@ -51,6 +52,17 @@ typedef struct {
     FileTypeMapping mappings[L_MAX_FILETYPES];
     int count;
 } FileTypes;
+
+/* Shebang interpreter to file type name mapping */
+typedef struct {
+    char interp[L_MAX_EXT_LEN];
+    char name[L_MAX_FILETYPE_NAME];
+} ShebangMapping;
+
+typedef struct {
+    ShebangMapping mappings[L_MAX_SHEBANGS];
+    int count;
+} Shebangs;
 
 /* Icons configuration */
 typedef struct Icons {
@@ -103,5 +115,10 @@ const char *get_ext_icon(const Icons *icons, const char *name);
 void filetypes_init(FileTypes *ft);
 void filetypes_load(FileTypes *ft, const char *script_dir);
 const char *filetypes_lookup(const FileTypes *ft, const char *path);
+
+/* Shebang functions */
+void shebangs_init(Shebangs *sb);
+void shebangs_load(Shebangs *sb, const char *script_dir);
+const char *shebangs_lookup(const Shebangs *sb, const char *interp);
 
 #endif /* L_ICONS_H */

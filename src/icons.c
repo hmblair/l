@@ -278,3 +278,68 @@ const char *filetypes_lookup(const FileTypes *ft, const char *path) {
     }
     return NULL;
 }
+
+/* ============================================================================
+ * Shebang Functions
+ * ============================================================================ */
+
+void shebangs_init(Shebangs *sb) {
+    memset(sb, 0, sizeof(Shebangs));
+}
+
+void shebangs_load(Shebangs *sb, const char *script_dir) {
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/%s", script_dir, L_CONFIG_FILE);
+
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+
+    char line[L_TOML_LINE_MAX];
+    char key[64], value[L_MAX_FILETYPE_NAME];
+    int in_shebangs = 0;
+
+    while (fgets(line, sizeof(line), f)) {
+        const char *p = line;
+        while (*p && isspace(*p)) p++;
+        if (*p == '[') {
+            in_shebangs = (strncmp(p, "[shebangs]", 10) == 0);
+            continue;
+        }
+
+        if (!in_shebangs) continue;
+        if (!parse_toml_line(line, key, sizeof(key), value, sizeof(value)))
+            continue;
+
+        /* Parse comma-separated interpreters */
+        char *interp_list = key;
+        char *interp;
+        while ((interp = strsep(&interp_list, ",")) != NULL) {
+            while (*interp && isspace(*interp)) interp++;
+            char *end = interp + strlen(interp) - 1;
+            while (end > interp && isspace(*end)) *end-- = '\0';
+
+            if (*interp && sb->count < L_MAX_SHEBANGS) {
+                size_t interp_len = strlen(interp);
+                size_t name_len = strlen(value);
+                if (interp_len >= L_MAX_EXT_LEN) interp_len = L_MAX_EXT_LEN - 1;
+                if (name_len >= L_MAX_FILETYPE_NAME) name_len = L_MAX_FILETYPE_NAME - 1;
+                memcpy(sb->mappings[sb->count].interp, interp, interp_len);
+                sb->mappings[sb->count].interp[interp_len] = '\0';
+                memcpy(sb->mappings[sb->count].name, value, name_len);
+                sb->mappings[sb->count].name[name_len] = '\0';
+                sb->count++;
+            }
+        }
+    }
+
+    fclose(f);
+}
+
+const char *shebangs_lookup(const Shebangs *sb, const char *interp) {
+    for (int i = 0; i < sb->count; i++) {
+        if (strcmp(interp, sb->mappings[i].interp) == 0) {
+            return sb->mappings[i].name;
+        }
+    }
+    return NULL;
+}
