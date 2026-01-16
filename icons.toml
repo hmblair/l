@@ -22,7 +22,7 @@ readonly = ""
 count_files = ""
 count_lines = "󰍜"
 count_pixels = "󰹑"
-count_duration = "󱑂"
+count_duration = ""
 cursor = "❯"
 [extensions]
 jpg,png,fig,webp,bpm,ico = ""
