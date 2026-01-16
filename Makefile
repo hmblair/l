@@ -13,7 +13,7 @@ BINDIR = bin
 
 CC = cc
 CFLAGS = -O2 -Wall -Wextra -std=c99 -DVERSION=\"$(VERSION)\"
-LIBS = -lsqlite3 -lpthread
+LIBS = -lsqlite3 -lpthread -lz
 
 # OpenMP support (use homebrew clang on macOS)
 UNAME := $(shell uname)

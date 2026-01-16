@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <strings.h>
+#include <zlib.h>
 
 /* ============================================================================
  * Symlink Resolution
@@ -683,11 +684,124 @@ static int has_pdf_extension(const char *path) {
     return strcasecmp(ext, ".pdf") == 0;
 }
 
+/* Search buffer for /Type /Pages objects and extract /Count values.
+ * Returns the maximum count found, or -1 if none found. */
+static int pdf_search_pages_count(const char *data, size_t size) {
+    int page_count = -1;
+
+    for (size_t i = 0; i + 20 < size; i++) {
+        if (data[i] == '/' && memcmp(data + i, "/Type", 5) == 0) {
+            size_t j = i + 5;
+            /* Skip whitespace */
+            while (j < size && (data[j] == ' ' || data[j] == '\r' || data[j] == '\n'))
+                j++;
+            if (j + 6 < size && memcmp(data + j, "/Pages", 6) == 0) {
+                /* Verify it's not /Page (single page) by checking next char */
+                if (j + 6 < size && (data[j+6] == ' ' || data[j+6] == '/' ||
+                    data[j+6] == '>' || data[j+6] == '\r' || data[j+6] == '\n')) {
+                    /* Found /Type /Pages - find object boundaries (<< and >>) */
+                    size_t obj_start = i;
+                    while (obj_start > 1 && !(data[obj_start-1] == '<' && data[obj_start-2] == '<'))
+                        obj_start--;
+                    if (obj_start >= 2) obj_start -= 2;
+
+                    size_t obj_end = j + 6;
+                    while (obj_end + 1 < size && !(data[obj_end] == '>' && data[obj_end+1] == '>'))
+                        obj_end++;
+
+                    /* Search for /Count within object boundaries */
+                    for (size_t k = obj_start; k + 7 < obj_end; k++) {
+                        if (data[k] == '/' && memcmp(data + k, "/Count", 6) == 0) {
+                            size_t m = k + 6;
+                            while (m < obj_end && (data[m] == ' ' || data[m] == '\r' || data[m] == '\n'))
+                                m++;
+                            if (m < obj_end && data[m] >= '0' && data[m] <= '9') {
+                                int count = 0;
+                                while (m < obj_end && data[m] >= '0' && data[m] <= '9') {
+                                    count = count * 10 + (data[m] - '0');
+                                    m++;
+                                }
+                                if (count > page_count) {
+                                    page_count = count;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return page_count;
+}
+
+/* Decompress a FlateDecode stream using zlib.
+ * Returns decompressed data (caller must free), or NULL on failure.
+ * Sets *out_size to the decompressed size. */
+static char *pdf_inflate(const unsigned char *src, size_t src_len, size_t *out_size) {
+    /* Start with 4x the compressed size, grow if needed */
+    size_t dst_capacity = src_len * 4;
+    if (dst_capacity < 4096) dst_capacity = 4096;
+    if (dst_capacity > 16 * 1024 * 1024) dst_capacity = 16 * 1024 * 1024; /* Cap at 16MB */
+
+    char *dst = malloc(dst_capacity);
+    if (!dst) return NULL;
+
+    z_stream strm = {0};
+    strm.next_in = (Bytef *)src;
+    strm.avail_in = src_len;
+    strm.next_out = (Bytef *)dst;
+    strm.avail_out = dst_capacity;
+
+    if (inflateInit(&strm) != Z_OK) {
+        free(dst);
+        return NULL;
+    }
+
+    int ret = inflate(&strm, Z_FINISH);
+    if (ret != Z_STREAM_END && ret != Z_OK && ret != Z_BUF_ERROR) {
+        inflateEnd(&strm);
+        free(dst);
+        return NULL;
+    }
+
+    /* If buffer was too small, try once more with larger buffer */
+    if (ret == Z_BUF_ERROR || strm.avail_in > 0) {
+        inflateEnd(&strm);
+        dst_capacity *= 4;
+        if (dst_capacity > 64 * 1024 * 1024) { /* Hard limit 64MB */
+            free(dst);
+            return NULL;
+        }
+        char *new_dst = realloc(dst, dst_capacity);
+        if (!new_dst) { free(dst); return NULL; }
+        dst = new_dst;
+
+        strm = (z_stream){0};
+        strm.next_in = (Bytef *)src;
+        strm.avail_in = src_len;
+        strm.next_out = (Bytef *)dst;
+        strm.avail_out = dst_capacity;
+
+        if (inflateInit(&strm) != Z_OK) { free(dst); return NULL; }
+        ret = inflate(&strm, Z_FINISH);
+        if (ret != Z_STREAM_END) {
+            inflateEnd(&strm);
+            free(dst);
+            return NULL;
+        }
+    }
+
+    *out_size = strm.total_out;
+    inflateEnd(&strm);
+    return dst;
+}
+
 /* Get page count from PDF file.
  * Returns page count, or -1 on failure.
  *
  * PDFs store page count in the document catalog's /Pages dictionary.
- * We search for /Type /Pages followed by /Count N to find it.
+ * Modern PDFs often compress objects in ObjStm streams with FlateDecode.
  */
 int get_pdf_page_count(const char *path) {
     if (!has_pdf_extension(path)) return -1;
@@ -701,7 +815,6 @@ int get_pdf_page_count(const char *path) {
         return -1;
     }
 
-    /* Map the file for searching */
     size_t size = (size_t)st.st_size;
     char *data = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
     close(fd);
@@ -714,46 +827,63 @@ int get_pdf_page_count(const char *path) {
         return -1;
     }
 
-    int page_count = -1;
+    /* First try uncompressed search */
+    int page_count = pdf_search_pages_count(data, size);
 
-    /* Search for /Type /Pages (or /Type/Pages) and find /Count in same object */
-    for (size_t i = 0; i + 20 < size; i++) {
-        if (data[i] == '/' && memcmp(data + i, "/Type", 5) == 0) {
-            size_t j = i + 5;
-            /* Skip whitespace */
-            while (j < size && (data[j] == ' ' || data[j] == '\r' || data[j] == '\n'))
-                j++;
-            if (j + 6 < size && memcmp(data + j, "/Pages", 6) == 0) {
-                /* Found /Type /Pages - find object boundaries (<< and >>) */
-                size_t obj_start = i;
-                while (obj_start > 1 && !(data[obj_start-1] == '<' && data[obj_start-2] == '<'))
-                    obj_start--;
-                if (obj_start >= 2) obj_start -= 2;
+    /* If not found, search inside compressed object streams */
+    if (page_count < 0) {
+        /* Look for ObjStm with FlateDecode */
+        for (size_t i = 0; i + 30 < size && page_count < 0; i++) {
+            /* Find "stream" keyword after an ObjStm dictionary */
+            if (memcmp(data + i, "stream", 6) == 0 &&
+                (data[i+6] == '\r' || data[i+6] == '\n')) {
+                /* Look backwards for << /Type /ObjStm ... /Filter /FlateDecode ... /Length N >> */
+                size_t dict_start = (i > 512) ? i - 512 : 0;
+                int is_objstm = 0;
+                int has_flate = 0;
+                size_t length = 0;
 
-                size_t obj_end = j + 6;
-                while (obj_end + 1 < size && !(data[obj_end] == '>' && data[obj_end+1] == '>'))
-                    obj_end++;
-
-                /* Search for /Count within object boundaries */
-                for (size_t k = obj_start; k + 7 < obj_end; k++) {
-                    if (data[k] == '/' && memcmp(data + k, "/Count", 6) == 0) {
-                        size_t m = k + 6;
-                        /* Skip whitespace */
-                        while (m < obj_end && (data[m] == ' ' || data[m] == '\r' || data[m] == '\n'))
-                            m++;
-                        /* Parse number */
-                        if (m < obj_end && data[m] >= '0' && data[m] <= '9') {
-                            int count = 0;
-                            while (m < obj_end && data[m] >= '0' && data[m] <= '9') {
-                                count = count * 10 + (data[m] - '0');
-                                m++;
-                            }
-                            /* Take the largest /Count we find (root Pages object) */
-                            if (count > page_count) {
-                                page_count = count;
+                for (size_t j = dict_start; j < i; j++) {
+                    if (memcmp(data + j, "/Type", 5) == 0) {
+                        size_t k = j + 5;
+                        while (k < i && (data[k] == ' ' || data[k] == '/')) k++;
+                        if (k + 6 <= i && memcmp(data + k - 1, "/ObjStm", 7) == 0)
+                            is_objstm = 1;
+                    }
+                    if (memcmp(data + j, "/Filter", 7) == 0) {
+                        size_t k = j + 7;
+                        while (k < i && data[k] == ' ') k++;
+                        if (k + 12 <= i && memcmp(data + k, "/FlateDecode", 12) == 0)
+                            has_flate = 1;
+                    }
+                    if (memcmp(data + j, "/Length", 7) == 0) {
+                        size_t k = j + 7;
+                        while (k < i && (data[k] == ' ' || data[k] == '\r' || data[k] == '\n')) k++;
+                        if (k < i && data[k] >= '0' && data[k] <= '9') {
+                            length = 0;
+                            while (k < i && data[k] >= '0' && data[k] <= '9') {
+                                length = length * 10 + (data[k] - '0');
+                                k++;
                             }
                         }
-                        break;
+                    }
+                }
+
+                if (is_objstm && has_flate && length > 0 && length < size - i) {
+                    /* Skip past "stream\r\n" or "stream\n" */
+                    size_t stream_start = i + 6;
+                    if (data[stream_start] == '\r') stream_start++;
+                    if (data[stream_start] == '\n') stream_start++;
+
+                    if (stream_start + length <= size) {
+                        size_t decompressed_size;
+                        char *decompressed = pdf_inflate((unsigned char *)data + stream_start,
+                                                         length, &decompressed_size);
+                        if (decompressed) {
+                            int count = pdf_search_pages_count(decompressed, decompressed_size);
+                            if (count > page_count) page_count = count;
+                            free(decompressed);
+                        }
                     }
                 }
             }
