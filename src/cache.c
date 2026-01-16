@@ -300,5 +300,6 @@ DirStats get_dir_stats_cached(const char *path) {
     if (cache_lookup_wrapper(lookup_path, &size, &count)) {
         return (DirStats){size, count};
     }
-    return dir_stats_get(path, cache_lookup_wrapper);
+    /* Use resolved path so subdirectory cache lookups match stored paths */
+    return dir_stats_get(lookup_path, cache_lookup_wrapper);
 }
