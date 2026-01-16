@@ -1814,9 +1814,67 @@ static void print_tree_children(const TreeNode *parent, int depth, PrintContext 
  * ============================================================================ */
 
 /* Extension to file type name mapping */
+/* Check shebang line for interpreter type */
+static const char *get_type_from_shebang(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) return NULL;
+
+    char line[256];
+    const char *result = NULL;
+
+    if (fgets(line, sizeof(line), f) && line[0] == '#' && line[1] == '!') {
+        /* Extract interpreter name from shebang */
+        char *interp = line + 2;
+        while (*interp == ' ') interp++;  /* skip leading spaces */
+
+        /* Handle /usr/bin/env interpreter */
+        if (strncmp(interp, "/usr/bin/env", 12) == 0) {
+            interp += 12;
+            while (*interp == ' ') interp++;
+        } else {
+            /* Get basename of interpreter path */
+            char *slash = strrchr(interp, '/');
+            if (slash) interp = slash + 1;
+        }
+
+        /* Trim trailing whitespace/newline */
+        char *end = interp;
+        while (*end && !isspace((unsigned char)*end)) end++;
+        *end = '\0';
+
+        /* Map interpreter to type */
+        if (strcmp(interp, "sh") == 0) result = "Shell script";
+        else if (strcmp(interp, "bash") == 0) result = "Bash script";
+        else if (strcmp(interp, "zsh") == 0) result = "Zsh script";
+        else if (strcmp(interp, "fish") == 0) result = "Fish script";
+        else if (strcmp(interp, "python") == 0 || strcmp(interp, "python3") == 0 ||
+                 strcmp(interp, "python2") == 0) result = "Python";
+        else if (strcmp(interp, "node") == 0 || strcmp(interp, "nodejs") == 0) result = "JavaScript";
+        else if (strcmp(interp, "ruby") == 0) result = "Ruby";
+        else if (strcmp(interp, "perl") == 0) result = "Perl";
+        else if (strcmp(interp, "php") == 0) result = "PHP";
+        else if (strcmp(interp, "lua") == 0) result = "Lua";
+        else if (strcmp(interp, "awk") == 0 || strcmp(interp, "gawk") == 0 ||
+                 strcmp(interp, "nawk") == 0 || strcmp(interp, "mawk") == 0) result = "AWK";
+        else if (strcmp(interp, "sed") == 0) result = "Sed script";
+        else if (strcmp(interp, "tclsh") == 0 || strcmp(interp, "wish") == 0) result = "Tcl";
+        else if (strcmp(interp, "expect") == 0) result = "Expect";
+        else if (strcmp(interp, "osascript") == 0) result = "AppleScript";
+    }
+
+    fclose(f);
+    return result;
+}
+
 static const char *get_file_type_name(const char *path) {
     const char *ext = strrchr(path, '.');
-    if (!ext || ext == path) return NULL;
+    const char *basename = strrchr(path, '/');
+    basename = basename ? basename + 1 : path;
+
+    /* No extension or extension at start of basename - try shebang */
+    if (!ext || ext < basename || ext == basename) {
+        return get_type_from_shebang(path);
+    }
     ext++;  /* skip the dot */
 
     /* Common programming languages */
