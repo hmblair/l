@@ -321,10 +321,10 @@ void icons_init_defaults(Icons *icons) {
 }
 
 static const struct { const char *key; size_t offset; } icon_keys[] = {
-    { "default",        offsetof(Icons, default_icon) },
-    { "directory",      offsetof(Icons, directory) },
-    { "current_dir",    offsetof(Icons, current_dir) },
-    { "locked_dir",     offsetof(Icons, locked_dir) },
+    { "default",           offsetof(Icons, default_icon) },
+    { "closed_directory",  offsetof(Icons, closed_directory) },
+    { "open_directory",    offsetof(Icons, open_directory) },
+    { "locked_dir",        offsetof(Icons, locked_dir) },
     { "file",           offsetof(Icons, file) },
     { "binary",         offsetof(Icons, binary) },
     { "executable",     offsetof(Icons, executable) },
@@ -460,12 +460,12 @@ const char *get_ext_icon(const Icons *icons, const char *name) {
     return NULL;
 }
 
-const char *get_icon(const Icons *icons, FileType type, int is_cwd,
+const char *get_icon(const Icons *icons, FileType type, int is_expanded,
                      int is_locked, int is_binary, const char *name) {
     switch (type) {
         case FTYPE_DIR:
             if (is_locked) return icons->locked_dir;
-            return is_cwd ? icons->current_dir : icons->directory;
+            return is_expanded ? icons->open_directory : icons->closed_directory;
         case FTYPE_FILE: {
             const char *ext_icon = get_ext_icon(icons, name);
             if (ext_icon) return ext_icon;
@@ -1030,6 +1030,9 @@ static void build_tree_children(TreeNode *parent, int depth, Column *cols,
     if (depth >= cfg->max_depth) return;
     if (access(parent->entry.path, R_OK) != 0) return;
 
+    /* Mark parent as expanded since we're about to show its children */
+    parent->was_expanded = 1;
+
     FileList list;
     file_list_init(&list);
 
@@ -1231,6 +1234,7 @@ void tree_expand_node(TreeNode *node, Column *cols, GitCache *git,
     free(is_git_repo_root);
     free(is_submodule);
     free(list.entries);  /* entries are moved to children, only free array */
+    node->was_expanded = 1;
 }
 
 TreeNode *build_tree(const char *path, Column *cols,
@@ -1487,6 +1491,7 @@ TreeNode *build_ancestry_tree(const char *path, Column *cols, GitCache *git,
         current->children = xmalloc(sizeof(TreeNode));
         current->child_count = 1;
         current->children[0] = *child;
+        current->was_expanded = 1;
 
         /* Free the temporary node structure (but not its contents) */
         free(child);
@@ -1561,7 +1566,7 @@ static void print_prefix(int depth, int *continuation, const Config *cfg) {
     printf("%s", COLOR_RESET);
 }
 
-void print_entry(const FileEntry *fe, int depth, int has_visible_children, const PrintContext *ctx) {
+void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visible_children, const PrintContext *ctx) {
     char abs_path[PATH_MAX];
     get_realpath(fe->path, abs_path, ctx->cfg);
 
@@ -1680,7 +1685,9 @@ void print_entry(const FileEntry *fe, int depth, int has_visible_children, const
 
     if (!ctx->cfg->no_icons) {
         int is_binary = (fe->file_count < 0 && fe->line_count == -1);
-        printf("%s%s%s ", color, get_icon(ctx->icons, fe->type, is_cwd, is_locked, is_binary, fe->name), RST(ctx->cfg));
+        int is_dir = (fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR);
+        int is_expanded = is_dir ? was_expanded : 0;
+        printf("%s%s%s ", color, get_icon(ctx->icons, fe->type, is_expanded, is_locked, is_binary, fe->name), RST(ctx->cfg));
     }
 
     const char *bold = ctx->selected ? CLR(ctx->cfg, STYLE_BOLD) : "";
@@ -1764,7 +1771,7 @@ void print_tree_node(const TreeNode *node, int depth, PrintContext *ctx) {
                 }
             }
 
-            print_entry(&child->entry, depth, has_visible_children, ctx);
+            print_entry(&child->entry, depth, child->was_expanded, has_visible_children, ctx);
 
             if (child->child_count > 0) {
                 print_tree_children(child, depth, ctx);
@@ -1788,7 +1795,7 @@ void print_tree_node(const TreeNode *node, int depth, PrintContext *ctx) {
         }
     }
 
-    print_entry(&node->entry, depth, has_visible_children, ctx);
+    print_entry(&node->entry, depth, node->was_expanded, has_visible_children, ctx);
 
     if (node->child_count > 0) {
         print_tree_children(node, depth, ctx);
@@ -1832,7 +1839,7 @@ static void print_tree_children(const TreeNode *parent, int depth, PrintContext 
             }
         }
 
-        print_entry(&child->entry, depth + 1, has_visible_children, ctx);
+        print_entry(&child->entry, depth + 1, child->was_expanded, has_visible_children, ctx);
 
         if (child->child_count > 0) {
             print_tree_children(child, depth + 1, ctx);
@@ -2145,7 +2152,7 @@ void print_summary(const TreeNode *node, PrintContext *ctx) {
 
     if (!cfg->no_icons) {
         int is_binary = (fe->file_count < 0 && fe->line_count == -1);
-        printf("%s%s%s ", color, get_icon(ctx->icons, fe->type, is_cwd, is_locked, is_binary, fe->name), RST(cfg));
+        printf("%s%s%s ", color, get_icon(ctx->icons, fe->type, node->was_expanded, is_locked, is_binary, fe->name), RST(cfg));
     }
     printf("%s%s%s%s", color, style, fe->name, RST(cfg));
 

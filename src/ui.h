@@ -72,8 +72,8 @@ typedef struct Icons {
     char symlink_exec[L_MAX_ICON_LEN];
     char symlink_file[L_MAX_ICON_LEN];
     char symlink_broken[L_MAX_ICON_LEN];
-    char directory[L_MAX_ICON_LEN];
-    char current_dir[L_MAX_ICON_LEN];
+    char closed_directory[L_MAX_ICON_LEN];
+    char open_directory[L_MAX_ICON_LEN];
     char locked_dir[L_MAX_ICON_LEN];
     char executable[L_MAX_ICON_LEN];
     char device[L_MAX_ICON_LEN];
@@ -128,6 +128,7 @@ typedef struct TreeNode {
     size_t child_count;
     int has_git_status;
     int matches_grep;
+    int was_expanded;  /* 1 if we attempted to show children (even if empty) */
 } TreeNode;
 
 /* Column formatter function type */
@@ -171,7 +172,7 @@ typedef struct {
 
 void icons_init_defaults(Icons *icons);
 void icons_load(Icons *icons, const char *script_dir);
-const char *get_icon(const Icons *icons, FileType type, int is_cwd,
+const char *get_icon(const Icons *icons, FileType type, int is_expanded,
                      int is_locked, int is_binary, const char *name);
 const char *get_ext_icon(const Icons *icons, const char *name);
 const char *get_count_icon(const FileEntry *fe, const Icons *icons);
@@ -232,7 +233,7 @@ void columns_recalculate_visible(Column *cols, TreeNode **trees, int tree_count,
 void compute_diff_widths(TreeNode **trees, int tree_count, GitCache *gits,
                          int *add_width, int *del_width, const Config *cfg);
 void print_tree_node(const TreeNode *node, int depth, PrintContext *ctx);
-void print_entry(const FileEntry *fe, int depth, int has_visible_children, const PrintContext *ctx);
+void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visible_children, const PrintContext *ctx);
 void print_summary(const TreeNode *node, PrintContext *ctx);
 
 /* Dynamically expand a directory node that wasn't fully loaded */

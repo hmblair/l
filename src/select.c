@@ -360,7 +360,7 @@ static void render_line(SelectState *state, int index, int is_selected,
     line_ctx.selected = is_selected;
 
     /* Call the real print_entry */
-    print_entry(&item->node->entry, item->depth, has_visible, &line_ctx);
+    print_entry(&item->node->entry, item->depth, item->node->was_expanded, has_visible, &line_ctx);
 }
 
 static void render_view(SelectState *state, PrintContext *ctx, CollapsedSet *collapsed) {
