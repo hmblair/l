@@ -1325,6 +1325,13 @@ static TreeNode *build_ancestor_node(const char *path, Column *cols,
         node->entry.file_count = stats.file_count;
     }
 
+    /* Check if this directory is a git repo root */
+    if (type == FTYPE_DIR || type == FTYPE_SYMLINK_DIR) {
+        if (path_is_git_root(path)) {
+            node->entry.is_git_root = 1;
+        }
+    }
+
     if (cfg->long_format && cols) {
         columns_update_widths(cols, &node->entry, icons);
     }
