@@ -104,6 +104,17 @@ char *git_get_branch(const char *repo_path);
  * Returns 1 if found, 0 otherwise */
 int git_read_ref(const char *repo_path, const char *ref_name, char *hash, size_t hash_len);
 
+/* Branch info with upstream status */
+typedef struct {
+    char *branch;      /* Branch name (caller must free), NULL if not on branch */
+    int has_upstream;  /* 1 if origin/<branch> exists */
+    int out_of_sync;   /* 1 if local and remote hashes differ */
+} GitBranchInfo;
+
+/* Get branch info including upstream sync status.
+ * Returns 1 if on a branch, 0 otherwise. Caller must free info->branch. */
+int git_get_branch_info(const char *repo_path, GitBranchInfo *info);
+
 /* ============================================================================
  * Shell Escape (for non-libgit2 fallback)
  * ============================================================================ */

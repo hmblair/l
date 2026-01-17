@@ -395,6 +395,31 @@ char *git_get_branch(const char *repo_path) {
     return branch;
 }
 
+int git_get_branch_info(const char *repo_path, GitBranchInfo *info) {
+    info->branch = NULL;
+    info->has_upstream = 0;
+    info->out_of_sync = 0;
+
+    char *branch = git_get_branch(repo_path);
+    if (!branch) return 0;
+
+    info->branch = branch;
+
+    char local_hash[64], remote_hash[64];
+    char local_ref[128], remote_ref[128];
+    snprintf(local_ref, sizeof(local_ref), "refs/heads/%s", branch);
+    snprintf(remote_ref, sizeof(remote_ref), "refs/remotes/origin/%s", branch);
+
+    git_read_ref(repo_path, local_ref, local_hash, sizeof(local_hash));
+    info->has_upstream = git_read_ref(repo_path, remote_ref, remote_hash, sizeof(remote_hash));
+
+    if (info->has_upstream) {
+        info->out_of_sync = (strcmp(local_hash, remote_hash) != 0);
+    }
+
+    return 1;
+}
+
 /* ============================================================================
  * Shell Escape (for non-libgit2 fallback)
  * ============================================================================ */

@@ -594,22 +594,15 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
     }
 
     if (is_dir && fe->is_git_root) {
-        char *branch = git_get_branch(fe->path);
-        if (branch) {
-            char local_hash[64], remote_hash[64];
-            char local_ref[128], remote_ref[128];
-            snprintf(local_ref, sizeof(local_ref), "refs/heads/%s", branch);
-            snprintf(remote_ref, sizeof(remote_ref), "refs/remotes/origin/%s", branch);
-            git_read_ref(fe->path, local_ref, local_hash, sizeof(local_hash));
-            int has_upstream = git_read_ref(fe->path, remote_ref, remote_hash, sizeof(remote_hash));
-            if (has_upstream) {
-                int out_of_sync = strcmp(local_hash, remote_hash) != 0;
-                const char *cloud_color = out_of_sync ? COLOR_RED : COLOR_GREY;
-                printf(" %s%s%s%s %s%s%s", CLR(ctx->cfg, COLOR_GREY), CLR(ctx->cfg, STYLE_ITALIC), branch, RST(ctx->cfg), CLR(ctx->cfg, cloud_color), ctx->icons->git_upstream, RST(ctx->cfg));
+        GitBranchInfo gi;
+        if (git_get_branch_info(fe->path, &gi)) {
+            if (gi.has_upstream) {
+                const char *cloud_color = gi.out_of_sync ? COLOR_RED : COLOR_GREY;
+                printf(" %s%s%s%s %s%s%s", CLR(ctx->cfg, COLOR_GREY), CLR(ctx->cfg, STYLE_ITALIC), gi.branch, RST(ctx->cfg), CLR(ctx->cfg, cloud_color), ctx->icons->git_upstream, RST(ctx->cfg));
             } else {
-                printf(" %s%s%s%s", CLR(ctx->cfg, COLOR_GREY), CLR(ctx->cfg, STYLE_ITALIC), branch, RST(ctx->cfg));
+                printf(" %s%s%s%s", CLR(ctx->cfg, COLOR_GREY), CLR(ctx->cfg, STYLE_ITALIC), gi.branch, RST(ctx->cfg));
             }
-            free(branch);
+            free(gi.branch);
         }
     }
 
@@ -791,23 +784,16 @@ void print_summary(const TreeNode *node, PrintContext *ctx) {
 
     /* Git branch and upstream for git repo roots */
     if (is_dir && fe->is_git_root) {
-        char *branch = git_get_branch(fe->path);
-        if (branch) {
-            char local_hash[64], remote_hash[64];
-            char local_ref[128], remote_ref[128];
-            snprintf(local_ref, sizeof(local_ref), "refs/heads/%s", branch);
-            snprintf(remote_ref, sizeof(remote_ref), "refs/remotes/origin/%s", branch);
-            git_read_ref(fe->path, local_ref, local_hash, sizeof(local_hash));
-            int has_upstream = git_read_ref(fe->path, remote_ref, remote_hash, sizeof(remote_hash));
-            if (has_upstream) {
-                int out_of_sync = strcmp(local_hash, remote_hash) != 0;
-                const char *cloud_color = out_of_sync ? COLOR_RED : COLOR_GREY;
-                printf(" %s%s%s%s %s%s%s", CLR(cfg, COLOR_GREY), CLR(cfg, STYLE_ITALIC), branch, RST(cfg),
+        GitBranchInfo gi;
+        if (git_get_branch_info(fe->path, &gi)) {
+            if (gi.has_upstream) {
+                const char *cloud_color = gi.out_of_sync ? COLOR_RED : COLOR_GREY;
+                printf(" %s%s%s%s %s%s%s", CLR(cfg, COLOR_GREY), CLR(cfg, STYLE_ITALIC), gi.branch, RST(cfg),
                        CLR(cfg, cloud_color), ctx->icons->git_upstream, RST(cfg));
             } else {
-                printf(" %s%s%s%s", CLR(cfg, COLOR_GREY), CLR(cfg, STYLE_ITALIC), branch, RST(cfg));
+                printf(" %s%s%s%s", CLR(cfg, COLOR_GREY), CLR(cfg, STYLE_ITALIC), gi.branch, RST(cfg));
             }
-            free(branch);
+            free(gi.branch);
         }
     }
     printf("\n");
