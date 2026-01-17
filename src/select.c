@@ -346,11 +346,13 @@ static void render_line(SelectState *state, int index, int is_selected,
     /* Copy continuation state into context */
     memcpy(ctx->continuation, item->continuation, L_MAX_DEPTH * sizeof(int));
 
-    /* Adjust has_visible_children based on collapsed state */
+    /* Adjust has_visible_children and is_expanded based on collapsed state */
     int has_visible = item->has_visible_children;
+    int is_expanded = item->node->was_expanded;
     if (node_is_directory(item->node) && collapsed_contains(collapsed, item->node->entry.path)) {
         /* Show as having children even when collapsed (so we can expand) */
         has_visible = (item->node->child_count > 0);
+        is_expanded = 0;  /* Show closed icon when collapsed */
     }
 
     /* Create a modified context with the line prefix */
@@ -360,7 +362,7 @@ static void render_line(SelectState *state, int index, int is_selected,
     line_ctx.selected = is_selected;
 
     /* Call the real print_entry */
-    print_entry(&item->node->entry, item->depth, item->node->was_expanded, has_visible, &line_ctx);
+    print_entry(&item->node->entry, item->depth, is_expanded, has_visible, &line_ctx);
 }
 
 static void render_view(SelectState *state, PrintContext *ctx, CollapsedSet *collapsed) {
