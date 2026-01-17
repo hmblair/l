@@ -741,38 +741,50 @@ static void print_tree_children(const TreeNode *parent, int depth, PrintContext 
  * ============================================================================ */
 
 /* Print summary for a single file or directory */
-void print_summary(const TreeNode *node, PrintContext *ctx) {
-    const FileEntry *fe = &node->entry;
+void print_summary(TreeNode *node, PrintContext *ctx) {
+    FileEntry *fe = &node->entry;
     const Config *cfg = ctx->cfg;
     int is_dir = (fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR);
     int is_cwd = (strcmp(fe->path, cfg->cwd) == 0);
     int is_hidden = (fe->name[0] == '.');
 
-    /* First line: match short mode output (icon + name + git branch for repos) */
+    /* Compute extended data if not already done */
+    if (is_dir && !fe->has_type_stats) {
+        fileinfo_compute_type_stats(fe, node, ctx->filetypes, ctx->shebangs, cfg->show_hidden);
+    }
+
+    char abs_path[PATH_MAX];
+    get_realpath(fe->path, abs_path, cfg);
+    char git_root[PATH_MAX];
+    int in_git_repo = git_find_root(abs_path, git_root, sizeof(git_root));
+
+    if (is_dir && in_git_repo && !fe->has_git_dir_status) {
+        fileinfo_compute_git_dir_status(fe, ctx->git);
+    }
+
+    if (is_dir && fe->is_git_root && !fe->has_git_repo_info) {
+        fileinfo_compute_git_repo_info(fe, ctx->git);
+    }
+
+    /* First line: icon + name + git branch for repos */
     int is_locked = (fe->type == FTYPE_DIR && access(fe->path, R_OK) != 0);
     const char *color = get_file_color(fe->type, is_cwd, fe->is_ignored, cfg->is_tty, cfg->color_all);
     const char *style = is_hidden ? CLR(cfg, STYLE_ITALIC) : "";
 
     /* Git status summary for directories (only if inside a git repo) */
-    if (is_dir && !cfg->no_icons) {
-        char abs_path[PATH_MAX];
-        get_realpath(fe->path, abs_path, cfg);
-        char git_root[PATH_MAX];
-        /* Only show git status if this directory is inside a git repo */
-        if (git_find_root(abs_path, git_root, sizeof(git_root))) {
-            GitSummary gs = git_get_dir_summary(ctx->git, abs_path);
-            if (gs.modified) {
-                printf("%s%d %s%s ", CLR(cfg, COLOR_RED), gs.modified, ctx->icons->git_modified, RST(cfg));
-            }
-            if (gs.untracked) {
-                printf("%s%d %s%s ", CLR(cfg, COLOR_RED), gs.untracked, ctx->icons->git_untracked, RST(cfg));
-            }
-            if (gs.staged) {
-                printf("%s%d %s%s ", CLR(cfg, COLOR_YELLOW), gs.staged, ctx->icons->git_staged, RST(cfg));
-            }
-            if (gs.deleted) {
-                printf("%s%d %s%s ", CLR(cfg, COLOR_RED), gs.deleted, ctx->icons->git_deleted, RST(cfg));
-            }
+    if (is_dir && !cfg->no_icons && fe->has_git_dir_status) {
+        GitSummary *gs = &fe->git_dir_status;
+        if (gs->modified) {
+            printf("%s%d %s%s ", CLR(cfg, COLOR_RED), gs->modified, ctx->icons->git_modified, RST(cfg));
+        }
+        if (gs->untracked) {
+            printf("%s%d %s%s ", CLR(cfg, COLOR_RED), gs->untracked, ctx->icons->git_untracked, RST(cfg));
+        }
+        if (gs->staged) {
+            printf("%s%d %s%s ", CLR(cfg, COLOR_YELLOW), gs->staged, ctx->icons->git_staged, RST(cfg));
+        }
+        if (gs->deleted) {
+            printf("%s%d %s%s ", CLR(cfg, COLOR_RED), gs->deleted, ctx->icons->git_deleted, RST(cfg));
         }
     }
 
@@ -783,17 +795,13 @@ void print_summary(const TreeNode *node, PrintContext *ctx) {
     printf("%s%s%s%s", color, style, fe->name, RST(cfg));
 
     /* Git branch and upstream for git repo roots */
-    if (is_dir && fe->is_git_root) {
-        GitBranchInfo gi;
-        if (git_get_branch_info(fe->path, &gi)) {
-            if (gi.has_upstream) {
-                const char *cloud_color = gi.out_of_sync ? COLOR_RED : COLOR_GREY;
-                printf(" %s%s%s%s %s%s%s", CLR(cfg, COLOR_GREY), CLR(cfg, STYLE_ITALIC), gi.branch, RST(cfg),
-                       CLR(cfg, cloud_color), ctx->icons->git_upstream, RST(cfg));
-            } else {
-                printf(" %s%s%s%s", CLR(cfg, COLOR_GREY), CLR(cfg, STYLE_ITALIC), gi.branch, RST(cfg));
-            }
-            free(gi.branch);
+    if (fe->has_git_repo_info && fe->branch) {
+        if (fe->has_upstream) {
+            const char *cloud_color = fe->out_of_sync ? COLOR_RED : COLOR_GREY;
+            printf(" %s%s%s%s %s%s%s", CLR(cfg, COLOR_GREY), CLR(cfg, STYLE_ITALIC), fe->branch, RST(cfg),
+                   CLR(cfg, cloud_color), ctx->icons->git_upstream, RST(cfg));
+        } else {
+            printf(" %s%s%s%s", CLR(cfg, COLOR_GREY), CLR(cfg, STYLE_ITALIC), fe->branch, RST(cfg));
         }
     }
     printf("\n");
@@ -832,35 +840,32 @@ void print_summary(const TreeNode *node, PrintContext *ctx) {
 
     /* Line count */
     if (is_dir) {
-        /* Compute type stats from the already-built tree */
-        TypeStats stats;
-        type_stats_from_tree(&stats, node, ctx->filetypes, ctx->shebangs, cfg->show_hidden);
-        if (stats.total_lines > 0) {
+        if (fe->has_type_stats) {
             char total_buf[32];
-            format_count(stats.total_lines, total_buf, sizeof(total_buf));
+            format_count(fe->type_stats.total_lines, total_buf, sizeof(total_buf));
             printf("   %sLines:%s    %s\n", CLR(cfg, COLOR_GREY), RST(cfg), total_buf);
             /* Sort by line count descending */
-            type_stats_sort(&stats);
+            type_stats_sort(&fe->type_stats);
             /* Calculate alignment widths */
             int max_name_len = 0;
             int max_count_len = 0;
-            for (int i = 0; i < stats.count; i++) {
-                if (!stats.entries[i].has_lines) continue;
-                int len = (int)strlen(stats.entries[i].name);
+            for (int i = 0; i < fe->type_stats.count; i++) {
+                if (!fe->type_stats.entries[i].has_lines) continue;
+                int len = (int)strlen(fe->type_stats.entries[i].name);
                 if (len > max_name_len) max_name_len = len;
                 char tmp[32];
-                format_count(stats.entries[i].line_count, tmp, sizeof(tmp));
+                format_count(fe->type_stats.entries[i].line_count, tmp, sizeof(tmp));
                 int clen = (int)strlen(tmp);
                 if (clen > max_count_len) max_count_len = clen;
             }
             /* Show breakdown (text files with line counts only) */
-            for (int i = 0; i < stats.count; i++) {
-                if (!stats.entries[i].has_lines) continue;
+            for (int i = 0; i < fe->type_stats.count; i++) {
+                if (!fe->type_stats.entries[i].has_lines) continue;
                 char line_buf[32];
-                format_count(stats.entries[i].line_count, line_buf, sizeof(line_buf));
+                format_count(fe->type_stats.entries[i].line_count, line_buf, sizeof(line_buf));
                 printf("     %s%s:%s %*s\n", CLR(cfg, COLOR_GREY),
-                       stats.entries[i].name, RST(cfg),
-                       (int)(max_name_len - strlen(stats.entries[i].name) + max_count_len + 1),
+                       fe->type_stats.entries[i].name, RST(cfg),
+                       (int)(max_name_len - strlen(fe->type_stats.entries[i].name) + max_count_len + 1),
                        line_buf);
             }
         }
@@ -884,92 +889,49 @@ void print_summary(const TreeNode *node, PrintContext *ctx) {
     printf("   %sModified:%s %s\n", CLR(cfg, COLOR_GREY), RST(cfg), time_buf);
 
     /* Git info (for git repositories) */
-    char git_root[PATH_MAX];
-    if (is_dir && git_find_root(fe->path, git_root, sizeof(git_root)) &&
-        strcmp(fe->path, git_root) == 0) {
-
+    if (fe->has_git_repo_info) {
         printf("\n");
 
         /* Branch */
-        char *branch = git_get_branch(git_root);
-        if (branch) {
-            /* Get commit hash */
-            char hash[64] = "";
-            char ref[128];
-            snprintf(ref, sizeof(ref), "refs/heads/%s", branch);
-            git_read_ref(git_root, ref, hash, sizeof(hash));
-            hash[7] = '\0';  /* Short hash */
-
+        if (fe->branch) {
             printf("   %sBranch:%s   %s %s(%s)%s\n", CLR(cfg, COLOR_GREY), RST(cfg),
-                   branch, CLR(cfg, COLOR_GREY), hash, RST(cfg));
-            free(branch);
+                   fe->branch, CLR(cfg, COLOR_GREY), fe->short_hash, RST(cfg));
         }
 
         /* Commit count */
-        char cmd[PATH_MAX + 64];
-        snprintf(cmd, sizeof(cmd), "git -C '%s' rev-list --count HEAD 2>/dev/null", git_root);
-        FILE *fp = popen(cmd, "r");
-        if (fp) {
-            char buf[32];
-            if (fgets(buf, sizeof(buf), fp)) {
-                buf[strcspn(buf, "\n")] = '\0';
-                long count = atol(buf);
-                if (count > 0) {
-                    char count_buf[32];
-                    format_count(count, count_buf, sizeof(count_buf));
-                    printf("   %sCommits:%s  %s\n", CLR(cfg, COLOR_GREY), RST(cfg), count_buf);
-                }
-            }
-            pclose(fp);
+        if (fe->commit_count[0]) {
+            printf("   %sCommits:%s  %s\n", CLR(cfg, COLOR_GREY), RST(cfg), fe->commit_count);
         }
 
         /* Latest tag */
-        snprintf(cmd, sizeof(cmd), "git -C '%s' describe --tags --abbrev=0 2>/dev/null", git_root);
-        fp = popen(cmd, "r");
-        if (fp) {
-            char buf[128];
-            if (fgets(buf, sizeof(buf), fp)) {
-                buf[strcspn(buf, "\n")] = '\0';
-                if (buf[0]) {
-                    printf("   %sTag:%s      %s\n", CLR(cfg, COLOR_GREY), RST(cfg), buf);
-                }
-            }
-            pclose(fp);
+        if (fe->tag) {
+            printf("   %sTag:%s      %s\n", CLR(cfg, COLOR_GREY), RST(cfg), fe->tag);
         }
 
         /* Remote URL */
-        snprintf(cmd, sizeof(cmd), "git -C '%s' remote get-url origin 2>/dev/null", git_root);
-        fp = popen(cmd, "r");
-        if (fp) {
-            char buf[512];
-            if (fgets(buf, sizeof(buf), fp)) {
-                buf[strcspn(buf, "\n")] = '\0';
-                if (buf[0]) {
-                    printf("   %sRemote:%s   %s\n", CLR(cfg, COLOR_GREY), RST(cfg), buf);
-                }
-            }
-            pclose(fp);
+        if (fe->remote) {
+            printf("   %sRemote:%s   %s\n", CLR(cfg, COLOR_GREY), RST(cfg), fe->remote);
         }
 
         /* Dirty status */
-        GitSummary summary = git_get_dir_summary(ctx->git, git_root);
-        if (summary.modified || summary.untracked || summary.staged || summary.deleted) {
+        GitSummary *summary = &fe->repo_status;
+        if (summary->modified || summary->untracked || summary->staged || summary->deleted) {
             printf("   %sStatus:%s   ", CLR(cfg, COLOR_GREY), RST(cfg));
             int first = 1;
-            if (summary.staged) {
-                printf("%s%d staged%s", CLR(cfg, COLOR_GREEN), summary.staged, RST(cfg));
+            if (summary->staged) {
+                printf("%s%d staged%s", CLR(cfg, COLOR_GREEN), summary->staged, RST(cfg));
                 first = 0;
             }
-            if (summary.modified) {
-                printf("%s%d modified%s", first ? "" : ", ", summary.modified, RST(cfg));
+            if (summary->modified) {
+                printf("%s%d modified%s", first ? "" : ", ", summary->modified, RST(cfg));
                 first = 0;
             }
-            if (summary.deleted) {
-                printf("%s%d deleted%s", first ? "" : ", ", summary.deleted, RST(cfg));
+            if (summary->deleted) {
+                printf("%s%d deleted%s", first ? "" : ", ", summary->deleted, RST(cfg));
                 first = 0;
             }
-            if (summary.untracked) {
-                printf("%s%d untracked%s", first ? "" : ", ", summary.untracked, RST(cfg));
+            if (summary->untracked) {
+                printf("%s%d untracked%s", first ? "" : ", ", summary->untracked, RST(cfg));
             }
             printf("\n");
         }

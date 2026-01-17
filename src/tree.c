@@ -28,6 +28,9 @@ void file_list_add(FileList *list, FileEntry *entry) {
 void file_entry_free(FileEntry *entry) {
     free(entry->path);
     free(entry->symlink_target);
+    free(entry->branch);
+    free(entry->tag);
+    free(entry->remote);
 }
 
 void file_list_free(FileList *list) {

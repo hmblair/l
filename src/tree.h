@@ -15,41 +15,69 @@
  * ============================================================================ */
 
 typedef struct {
-    unsigned int sizes : 1;        /* Compute file/directory sizes */
-    unsigned int file_counts : 1;  /* Compute file counts for directories */
-    unsigned int line_counts : 1;  /* Compute line counts for text files */
-    unsigned int media_info : 1;   /* Parse images/audio/PDF for metadata */
-    unsigned int git_status : 1;   /* Populate git status */
-    unsigned int git_diff : 1;     /* Compute git diff stats (lines added/removed) */
+    unsigned int sizes : 1;         /* Compute file/directory sizes */
+    unsigned int file_counts : 1;   /* Compute file counts for directories */
+    unsigned int line_counts : 1;   /* Compute line counts for text files */
+    unsigned int media_info : 1;    /* Parse images/audio/PDF for metadata */
+    unsigned int git_status : 1;    /* Populate git status */
+    unsigned int git_diff : 1;      /* Compute git diff stats (lines added/removed) */
+    unsigned int type_stats : 1;    /* Compute line breakdown by file type (dirs) */
+    unsigned int git_repo_info : 1; /* Compute git repo info (branch, tag, remote) */
 } ComputeOpts;
 
 /* Preset configurations */
-#define COMPUTE_NONE     ((ComputeOpts){0, 0, 0, 0, 0, 0})
-#define COMPUTE_BASIC    ((ComputeOpts){1, 1, 0, 0, 1, 0})  /* sizes, counts, git status */
-#define COMPUTE_LONG     ((ComputeOpts){1, 1, 1, 1, 1, 1})  /* everything */
-#define COMPUTE_SUMMARY  ((ComputeOpts){1, 1, 1, 1, 1, 0})  /* sizes, counts, lines, media, git status */
+#define COMPUTE_NONE     ((ComputeOpts){0, 0, 0, 0, 0, 0, 0, 0})
+#define COMPUTE_BASIC    ((ComputeOpts){1, 1, 0, 0, 1, 0, 0, 0})  /* sizes, counts, git status */
+#define COMPUTE_LONG     ((ComputeOpts){1, 1, 1, 1, 1, 1, 0, 0})  /* + lines, media, diff */
+#define COMPUTE_SUMMARY  ((ComputeOpts){1, 1, 1, 1, 1, 0, 1, 1})  /* + type_stats, repo_info */
 
 /* ============================================================================
  * File Entry - Represents a single filesystem entry
  * ============================================================================ */
 
 typedef struct FileEntry {
-    char *path;
-    char *name;
-    char *symlink_target;
+    /* --- Identity --- */
+    char *path;                  /* Display path (may be relative) */
+    char *name;                  /* Filename component */
+    char *symlink_target;        /* Target if symlink, NULL otherwise */
+    FileType type;               /* Detected file type (C, Python, etc.) */
+
+    /* --- Basic metadata --- */
     mode_t mode;
-    off_t size;
-    long file_count;
-    time_t mtime;
-    ContentType content_type;
-    int line_count;
-    int word_count;
-    int is_ignored;
-    int is_git_root;
-    char git_status[3];
-    int diff_added;
-    int diff_removed;
-    FileType type;
+    off_t size;                  /* File size or directory total */
+    time_t mtime;                /* Last modification time */
+    long file_count;             /* Number of files (directories only) */
+
+    /* --- Content analysis --- */
+    ContentType content_type;    /* text/binary/image/etc. */
+    int line_count;              /* -1 if not computed */
+    int word_count;              /* -1 if not computed */
+
+    /* --- Type statistics (directories only, requires type_stats) --- */
+    TypeStats type_stats;        /* Line breakdown by file type */
+    int has_type_stats;          /* 1 if type_stats is valid */
+
+    /* --- Git file status --- */
+    int is_ignored;              /* In .gitignore */
+    int is_git_root;             /* Is a git repository root */
+    char git_status[3];          /* Two-char status (e.g., "M ", " M") */
+    int diff_added;              /* Lines added */
+    int diff_removed;            /* Lines removed */
+
+    /* --- Git directory status (aggregated from children) --- */
+    GitSummary git_dir_status;   /* Aggregated status for directory contents */
+    int has_git_dir_status;      /* 1 if git_dir_status is valid */
+
+    /* --- Git repository info (git roots only, requires git_repo_info) --- */
+    char *branch;                /* Current branch name */
+    char *tag;                   /* Latest tag, if any */
+    char *remote;                /* Remote URL */
+    char short_hash[8];          /* Abbreviated commit hash */
+    char commit_count[32];       /* Number of commits */
+    int has_upstream;            /* 1 if origin/<branch> exists */
+    int out_of_sync;             /* 1 if local and remote differ */
+    GitSummary repo_status;      /* Repo-wide dirty status */
+    int has_git_repo_info;       /* 1 if repo info fields are valid */
 } FileEntry;
 
 /* ============================================================================

@@ -93,4 +93,27 @@ void type_stats_from_tree(TypeStats *stats, const struct TreeNode *node,
 /* Sort type stats by line count descending (text files first) */
 void type_stats_sort(TypeStats *stats);
 
+/* ============================================================================
+ * FileEntry Compute Functions
+ * ============================================================================ */
+
+#include "git.h"
+
+/* Compute type statistics for a directory.
+ * Populates fe->type_stats and sets fe->has_type_stats = 1.
+ * Requires: node is a fully-expanded directory tree. */
+void fileinfo_compute_type_stats(struct FileEntry *fe, const struct TreeNode *node,
+                                  const FileTypes *ft, const Shebangs *sb,
+                                  int show_hidden);
+
+/* Compute git repository info for a git root.
+ * Populates fe->branch, fe->tag, fe->remote, fe->short_hash, fe->commit_count,
+ * fe->has_upstream, fe->out_of_sync, fe->repo_status, and sets fe->has_git_repo_info = 1.
+ * Requires: fe->is_git_root is true. */
+void fileinfo_compute_git_repo_info(struct FileEntry *fe, GitCache *git);
+
+/* Compute git directory status (aggregated from children).
+ * Populates fe->git_dir_status and sets fe->has_git_dir_status = 1. */
+void fileinfo_compute_git_dir_status(struct FileEntry *fe, GitCache *git);
+
 #endif /* L_FILEINFO_H */

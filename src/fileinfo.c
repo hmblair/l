@@ -1201,3 +1201,100 @@ int count_file_words(const char *path) {
 
     return count > INT_MAX ? INT_MAX : (int)count;
 }
+
+/* ============================================================================
+ * FileEntry Compute Functions
+ * ============================================================================ */
+
+#include "tree.h"
+
+void fileinfo_compute_type_stats(struct FileEntry *fe, const struct TreeNode *node,
+                                  const FileTypes *ft, const Shebangs *sb,
+                                  int show_hidden) {
+    type_stats_from_tree(&fe->type_stats, node, ft, sb, show_hidden);
+    fe->has_type_stats = (fe->type_stats.total_lines > 0);
+}
+
+void fileinfo_compute_git_dir_status(struct FileEntry *fe, GitCache *git) {
+    fe->git_dir_status = git_get_dir_summary(git, fe->path);
+    fe->has_git_dir_status = 1;
+}
+
+/* Helper to format count with K/M suffixes */
+static void format_count_local(long count, char *buf, size_t len) {
+    if (count >= 1000000) {
+        snprintf(buf, len, "%.1fM", count / 1000000.0);
+    } else if (count >= 1000) {
+        snprintf(buf, len, "%.1fK", count / 1000.0);
+    } else {
+        snprintf(buf, len, "%ld", count);
+    }
+}
+
+void fileinfo_compute_git_repo_info(struct FileEntry *fe, GitCache *git) {
+    if (!fe->is_git_root) return;
+
+    /* Branch and upstream status */
+    GitBranchInfo gi;
+    if (git_get_branch_info(fe->path, &gi)) {
+        fe->branch = gi.branch;  /* Takes ownership */
+        fe->has_upstream = gi.has_upstream;
+        fe->out_of_sync = gi.out_of_sync;
+
+        /* Get short hash */
+        char hash[64] = "";
+        char ref[128];
+        snprintf(ref, sizeof(ref), "refs/heads/%s", fe->branch);
+        if (git_read_ref(fe->path, ref, hash, sizeof(hash))) {
+            snprintf(fe->short_hash, sizeof(fe->short_hash), "%.7s", hash);
+        }
+    }
+
+    /* Commit count */
+    char cmd[PATH_MAX + 64];
+    snprintf(cmd, sizeof(cmd), "git -C '%s' rev-list --count HEAD 2>/dev/null", fe->path);
+    FILE *fp = popen(cmd, "r");
+    if (fp) {
+        char buf[32];
+        if (fgets(buf, sizeof(buf), fp)) {
+            buf[strcspn(buf, "\n")] = '\0';
+            long count = atol(buf);
+            if (count > 0) {
+                format_count_local(count, fe->commit_count, sizeof(fe->commit_count));
+            }
+        }
+        pclose(fp);
+    }
+
+    /* Latest tag */
+    snprintf(cmd, sizeof(cmd), "git -C '%s' describe --tags --abbrev=0 2>/dev/null", fe->path);
+    fp = popen(cmd, "r");
+    if (fp) {
+        char tag_buf[128];
+        if (fgets(tag_buf, sizeof(tag_buf), fp)) {
+            tag_buf[strcspn(tag_buf, "\n")] = '\0';
+            if (tag_buf[0]) {
+                fe->tag = xstrdup(tag_buf);
+            }
+        }
+        pclose(fp);
+    }
+
+    /* Remote URL */
+    snprintf(cmd, sizeof(cmd), "git -C '%s' remote get-url origin 2>/dev/null", fe->path);
+    fp = popen(cmd, "r");
+    if (fp) {
+        char remote_buf[512];
+        if (fgets(remote_buf, sizeof(remote_buf), fp)) {
+            remote_buf[strcspn(remote_buf, "\n")] = '\0';
+            if (remote_buf[0]) {
+                fe->remote = xstrdup(remote_buf);
+            }
+        }
+        pclose(fp);
+    }
+
+    /* Repo status */
+    fe->repo_status = git_get_dir_summary(git, fe->path);
+    fe->has_git_repo_info = 1;
+}

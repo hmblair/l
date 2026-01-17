@@ -102,7 +102,7 @@ int node_is_visible(const TreeNode *node, const Config *cfg);
 void print_tree_node(const TreeNode *node, int depth, PrintContext *ctx);
 void print_entry(const FileEntry *fe, int depth, int was_expanded,
                  int has_visible_children, const PrintContext *ctx);
-void print_summary(const TreeNode *node, PrintContext *ctx);
+void print_summary(TreeNode *node, PrintContext *ctx);
 
 /* ============================================================================
  * Git Status Indicator
