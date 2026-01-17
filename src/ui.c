@@ -986,10 +986,11 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
     }
 
     /* Modified time */
-    char time_buf[64];
+    char time_buf[64], rel_buf[32];
     struct tm *tm = localtime(&fe->mtime);
     strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M", tm);
-    card_add(&card, "%sModified:%s %s", CLR(cfg, COLOR_GREY), RST(cfg), time_buf);
+    format_relative_time(fe->mtime, rel_buf, sizeof(rel_buf));
+    card_add(&card, "%sModified:%s %s (%s)", CLR(cfg, COLOR_GREY), RST(cfg), time_buf, rel_buf);
 
     /* Git info (for git repositories) */
     if (fe->has_git_repo_info) {
