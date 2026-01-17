@@ -1043,11 +1043,11 @@ void type_stats_from_tree(TypeStats *stats, const TreeNode *node,
 
 static int type_stat_cmp(const void *a, const void *b) {
     const TypeStat *ta = a, *tb = b;
-    /* Sort by line count descending, then by file count */
-    if (tb->line_count > ta->line_count) return 1;
-    if (tb->line_count < ta->line_count) return -1;
+    /* Sort by file count descending, then by line count */
     if (tb->file_count > ta->file_count) return 1;
     if (tb->file_count < ta->file_count) return -1;
+    if (tb->line_count > ta->line_count) return 1;
+    if (tb->line_count < ta->line_count) return -1;
     return 0;
 }
 
@@ -1212,7 +1212,7 @@ void fileinfo_compute_type_stats(struct FileEntry *fe, const struct TreeNode *no
                                   const FileTypes *ft, const Shebangs *sb,
                                   int show_hidden) {
     type_stats_from_tree(&fe->type_stats, node, ft, sb, show_hidden);
-    fe->has_type_stats = (fe->type_stats.total_lines > 0);
+    fe->has_type_stats = (fe->type_stats.total_files > 0);
 }
 
 void fileinfo_compute_git_dir_status(struct FileEntry *fe, GitCache *git) {

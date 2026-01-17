@@ -832,9 +832,10 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
     int is_cwd = (strcmp(fe->path, cfg->cwd) == 0);
     int is_hidden = (fe->name[0] == '.');
 
-    /* Compute extended data if not already done */
+    /* Compute extended data if not already done.
+     * Summary mode always counts all files (including hidden) to match file_count. */
     if (is_dir && !fe->has_type_stats) {
-        fileinfo_compute_type_stats(fe, node, ctx->filetypes, ctx->shebangs, cfg->show_hidden);
+        fileinfo_compute_type_stats(fe, node, ctx->filetypes, ctx->shebangs, 1);
     }
 
     char abs_path[PATH_MAX];
@@ -904,43 +905,74 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
     format_size(fe->size, size_buf, sizeof(size_buf));
     card_add(&card, "%sSize:%s     %s", CLR(cfg, COLOR_GREY), RST(cfg), size_buf);
 
-    /* File count (directories only) */
-    if (is_dir && fe->file_count >= 0) {
+    /* File type breakdown table (directories only) */
+    if (is_dir && fe->has_type_stats && fe->type_stats.count > 0) {
+        type_stats_sort(&fe->type_stats);
+
+        /* Calculate column widths */
+        int max_name_len = 0, max_files_len = 0, max_lines_len = 0;
+        for (int i = 0; i < fe->type_stats.count; i++) {
+            TypeStat *ts = &fe->type_stats.entries[i];
+            int nlen = (int)strlen(ts->name);
+            if (nlen > max_name_len) max_name_len = nlen;
+            char tmp[32];
+            format_count(ts->file_count, tmp, sizeof(tmp));
+            int flen = (int)strlen(tmp);
+            if (flen > max_files_len) max_files_len = flen;
+            if (ts->has_lines) {
+                format_count(ts->line_count, tmp, sizeof(tmp));
+                int llen = (int)strlen(tmp);
+                if (llen > max_lines_len) max_lines_len = llen;
+            }
+        }
+        /* Check totals width and ensure headers fit */
+        char tmp[32];
+        format_count(fe->type_stats.total_files, tmp, sizeof(tmp));
+        if ((int)strlen(tmp) > max_files_len) max_files_len = (int)strlen(tmp);
+        format_count(fe->type_stats.total_lines, tmp, sizeof(tmp));
+        if ((int)strlen(tmp) > max_lines_len) max_lines_len = (int)strlen(tmp);
+        if (max_files_len < 5) max_files_len = 5;  /* At least "Files" */
+        if (max_lines_len < 5) max_lines_len = 5;  /* At least "Lines" */
+
+        /* Header */
+        card_add(&card, "%s%*s  %*s  %*s%s", CLR(cfg, COLOR_GREY),
+                 max_name_len, "", max_files_len, "Files", max_lines_len, "Lines", RST(cfg));
+
+        /* Per-type rows */
+        for (int i = 0; i < fe->type_stats.count; i++) {
+            TypeStat *ts = &fe->type_stats.entries[i];
+            char files_buf[32], lines_buf[32];
+            format_count(ts->file_count, files_buf, sizeof(files_buf));
+            if (ts->has_lines) {
+                format_count(ts->line_count, lines_buf, sizeof(lines_buf));
+            } else {
+                snprintf(lines_buf, sizeof(lines_buf), "-");
+            }
+            card_add(&card, "%s%-*s%s  %*s  %*s",
+                     CLR(cfg, COLOR_GREY), max_name_len, ts->name, RST(cfg),
+                     max_files_len, files_buf, max_lines_len, lines_buf);
+        }
+
+        /* Total row */
+        char total_files[32], total_lines[32];
+        format_count(fe->type_stats.total_files, total_files, sizeof(total_files));
+        if (fe->type_stats.total_lines > 0) {
+            format_count(fe->type_stats.total_lines, total_lines, sizeof(total_lines));
+        } else {
+            snprintf(total_lines, sizeof(total_lines), "-");
+        }
+        card_add(&card, "%s%-*s  %*s  %*s%s", CLR(cfg, COLOR_GREY),
+                 max_name_len, "Total", max_files_len, total_files,
+                 max_lines_len, total_lines, RST(cfg));
+    } else if (is_dir && fe->file_count >= 0) {
+        /* Fallback: just show file count if no type stats */
         char count_buf[32];
         format_count(fe->file_count, count_buf, sizeof(count_buf));
         card_add(&card, "%sFiles:%s    %s", CLR(cfg, COLOR_GREY), RST(cfg), count_buf);
     }
 
-    /* Line count */
-    if (is_dir) {
-        if (fe->has_type_stats) {
-            char total_buf[32];
-            format_count(fe->type_stats.total_lines, total_buf, sizeof(total_buf));
-            card_add(&card, "%sLines:%s    %s", CLR(cfg, COLOR_GREY), RST(cfg), total_buf);
-
-            /* Sort and show breakdown */
-            type_stats_sort(&fe->type_stats);
-            int max_name_len = 0, max_count_len = 0;
-            for (int i = 0; i < fe->type_stats.count; i++) {
-                if (!fe->type_stats.entries[i].has_lines) continue;
-                int len = (int)strlen(fe->type_stats.entries[i].name);
-                if (len > max_name_len) max_name_len = len;
-                char tmp[32];
-                format_count(fe->type_stats.entries[i].line_count, tmp, sizeof(tmp));
-                int clen = (int)strlen(tmp);
-                if (clen > max_count_len) max_count_len = clen;
-            }
-            for (int i = 0; i < fe->type_stats.count; i++) {
-                if (!fe->type_stats.entries[i].has_lines) continue;
-                char line_buf[32];
-                format_count(fe->type_stats.entries[i].line_count, line_buf, sizeof(line_buf));
-                card_add(&card, "  %s%s:%s %*s", CLR(cfg, COLOR_GREY),
-                         fe->type_stats.entries[i].name, RST(cfg),
-                         (int)(max_name_len - strlen(fe->type_stats.entries[i].name) + max_count_len + 1),
-                         line_buf);
-            }
-        }
-    } else if (fe->line_count >= 0 && fe->content_type == CONTENT_TEXT) {
+    /* Single file stats */
+    if (!is_dir && fe->line_count >= 0 && fe->content_type == CONTENT_TEXT) {
         char line_buf[32];
         format_count(fe->line_count, line_buf, sizeof(line_buf));
         card_add(&card, "%sLines:%s    %s", CLR(cfg, COLOR_GREY), RST(cfg), line_buf);
