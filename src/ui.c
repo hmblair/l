@@ -10,6 +10,7 @@
 #include <time.h>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <stdarg.h>
 
 /* ============================================================================
  * Path Wrappers (using Config)
@@ -737,8 +738,91 @@ static void print_tree_children(const TreeNode *parent, int depth, PrintContext 
 }
 
 /* ============================================================================
- * Summary Mode
+ * Summary Mode - Card Layout
  * ============================================================================ */
+
+#define MAX_CARD_LINES 64
+#define MAX_CARD_LINE_LEN 512
+
+typedef struct {
+    char lines[MAX_CARD_LINES][MAX_CARD_LINE_LEN];
+    int visible_lens[MAX_CARD_LINES];  /* Length without ANSI codes */
+    int count;
+    int max_width;
+} Card;
+
+static void card_init(Card *card) {
+    card->count = 0;
+    card->max_width = 0;
+}
+
+/* Calculate visible length (excluding ANSI escape sequences) */
+static int visible_strlen(const char *s) {
+    int len = 0;
+    int in_escape = 0;
+    for (; *s; s++) {
+        if (*s == '\033') {
+            in_escape = 1;
+        } else if (in_escape) {
+            if (*s == 'm') in_escape = 0;
+        } else {
+            /* Handle UTF-8: count codepoints, not bytes */
+            if ((*s & 0xC0) != 0x80) len++;
+        }
+    }
+    return len;
+}
+
+static void card_add(Card *card, const char *fmt, ...) {
+    if (card->count >= MAX_CARD_LINES) return;
+
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(card->lines[card->count], MAX_CARD_LINE_LEN, fmt, args);
+    va_end(args);
+
+    /* Remove trailing newline if present */
+    int len = strlen(card->lines[card->count]);
+    if (len > 0 && card->lines[card->count][len - 1] == '\n') {
+        card->lines[card->count][len - 1] = '\0';
+    }
+
+    card->visible_lens[card->count] = visible_strlen(card->lines[card->count]);
+    if (card->visible_lens[card->count] > card->max_width) {
+        card->max_width = card->visible_lens[card->count];
+    }
+    card->count++;
+}
+
+static void card_add_empty(Card *card) {
+    if (card->count >= MAX_CARD_LINES) return;
+    card->lines[card->count][0] = '\0';
+    card->visible_lens[card->count] = 0;
+    card->count++;
+}
+
+static void card_print(const Card *card, const Config *cfg) {
+    int width = card->max_width + 4;  /* 2 padding + 2 border chars */
+    if (width < 20) width = 20;
+
+    /* Top border */
+    printf("%s┌", CLR(cfg, COLOR_GREY));
+    for (int i = 0; i < width - 2; i++) printf("─");
+    printf("┐%s\n", RST(cfg));
+
+    /* Content lines */
+    for (int i = 0; i < card->count; i++) {
+        int padding = width - 4 - card->visible_lens[i];
+        printf("%s│%s %s", CLR(cfg, COLOR_GREY), RST(cfg), card->lines[i]);
+        for (int j = 0; j < padding; j++) printf(" ");
+        printf(" %s│%s\n", CLR(cfg, COLOR_GREY), RST(cfg));
+    }
+
+    /* Bottom border */
+    printf("%s└", CLR(cfg, COLOR_GREY));
+    for (int i = 0; i < width - 2; i++) printf("─");
+    printf("┘%s\n", RST(cfg));
+}
 
 /* Print summary for a single file or directory */
 void print_summary(TreeNode *node, PrintContext *ctx) {
@@ -766,76 +850,65 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
         fileinfo_compute_git_repo_info(fe, ctx->git);
     }
 
-    /* First line: icon + name + git branch for repos */
+    Card card;
+    card_init(&card);
+
+    /* Header line: icon + name */
     int is_locked = (fe->type == FTYPE_DIR && access(fe->path, R_OK) != 0);
     const char *color = get_file_color(fe->type, is_cwd, fe->is_ignored, cfg->is_tty, cfg->color_all);
     const char *style = is_hidden ? CLR(cfg, STYLE_ITALIC) : "";
+    int is_binary = (fe->file_count < 0 && fe->line_count == -1);
+    const char *icon = cfg->no_icons ? "" : get_icon(ctx->icons, fe->type, node->was_expanded, is_locked, is_binary, fe->name);
+    const char *icon_space = cfg->no_icons ? "" : " ";
 
-    /* Git status summary for directories (only if inside a git repo) */
-    if (is_dir && !cfg->no_icons && fe->has_git_dir_status) {
-        GitSummary *gs = &fe->git_dir_status;
-        if (gs->modified) {
-            printf("%s%d %s%s ", CLR(cfg, COLOR_RED), gs->modified, ctx->icons->git_modified, RST(cfg));
-        }
-        if (gs->untracked) {
-            printf("%s%d %s%s ", CLR(cfg, COLOR_RED), gs->untracked, ctx->icons->git_untracked, RST(cfg));
-        }
-        if (gs->staged) {
-            printf("%s%d %s%s ", CLR(cfg, COLOR_YELLOW), gs->staged, ctx->icons->git_staged, RST(cfg));
-        }
-        if (gs->deleted) {
-            printf("%s%d %s%s ", CLR(cfg, COLOR_RED), gs->deleted, ctx->icons->git_deleted, RST(cfg));
-        }
-    }
-
-    if (!cfg->no_icons) {
-        int is_binary = (fe->file_count < 0 && fe->line_count == -1);
-        printf("%s%s%s ", color, get_icon(ctx->icons, fe->type, node->was_expanded, is_locked, is_binary, fe->name), RST(cfg));
-    }
-    printf("%s%s%s%s", color, style, fe->name, RST(cfg));
-
-    /* Git branch and upstream for git repo roots */
     if (fe->has_git_repo_info && fe->branch) {
         if (fe->has_upstream) {
             const char *cloud_color = fe->out_of_sync ? COLOR_RED : COLOR_GREY;
-            printf(" %s%s%s%s %s%s%s", CLR(cfg, COLOR_GREY), CLR(cfg, STYLE_ITALIC), fe->branch, RST(cfg),
-                   CLR(cfg, cloud_color), ctx->icons->git_upstream, RST(cfg));
+            card_add(&card, "%s%s%s%s%s%s%s %s%s%s%s %s%s%s",
+                     color, icon, icon_space, style, fe->name, RST(cfg), "",
+                     CLR(cfg, COLOR_GREY), CLR(cfg, STYLE_ITALIC), fe->branch, RST(cfg),
+                     CLR(cfg, cloud_color), ctx->icons->git_upstream, RST(cfg));
         } else {
-            printf(" %s%s%s%s", CLR(cfg, COLOR_GREY), CLR(cfg, STYLE_ITALIC), fe->branch, RST(cfg));
+            card_add(&card, "%s%s%s%s%s%s%s %s%s%s%s",
+                     color, icon, icon_space, style, fe->name, RST(cfg), "",
+                     CLR(cfg, COLOR_GREY), CLR(cfg, STYLE_ITALIC), fe->branch, RST(cfg));
         }
+    } else {
+        card_add(&card, "%s%s%s%s%s%s", color, icon, icon_space, style, fe->name, RST(cfg));
     }
-    printf("\n");
 
-    /* Full path (show both symlink and target for symlinks) */
+    card_add_empty(&card);
+
+    /* Path */
     if (fe->symlink_target) {
         char link_path[PATH_MAX];
         get_abspath(fe->path, link_path, cfg);
-        printf("   %sPath:%s     %s\n", CLR(cfg, COLOR_GREY), RST(cfg), link_path);
-        printf("   %sTarget:%s   %s\n", CLR(cfg, COLOR_GREY), RST(cfg), fe->symlink_target);
+        card_add(&card, "%sPath:%s     %s", CLR(cfg, COLOR_GREY), RST(cfg), link_path);
+        card_add(&card, "%sTarget:%s   %s", CLR(cfg, COLOR_GREY), RST(cfg), fe->symlink_target);
     } else {
         char full_path[PATH_MAX];
         get_realpath(fe->path, full_path, cfg);
-        printf("   %sPath:%s     %s\n", CLR(cfg, COLOR_GREY), RST(cfg), full_path);
+        card_add(&card, "%sPath:%s     %s", CLR(cfg, COLOR_GREY), RST(cfg), full_path);
     }
 
     /* Type (files only) */
     if (!is_dir) {
         const char *type_name = get_file_type_name(fe->path, ctx->filetypes, ctx->shebangs);
         if (type_name) {
-            printf("   %sType:%s     %s\n", CLR(cfg, COLOR_GREY), RST(cfg), type_name);
+            card_add(&card, "%sType:%s     %s", CLR(cfg, COLOR_GREY), RST(cfg), type_name);
         }
     }
 
     /* Size */
     char size_buf[32];
     format_size(fe->size, size_buf, sizeof(size_buf));
-    printf("   %sSize:%s     %s\n", CLR(cfg, COLOR_GREY), RST(cfg), size_buf);
+    card_add(&card, "%sSize:%s     %s", CLR(cfg, COLOR_GREY), RST(cfg), size_buf);
 
     /* File count (directories only) */
     if (is_dir && fe->file_count >= 0) {
         char count_buf[32];
         format_count(fe->file_count, count_buf, sizeof(count_buf));
-        printf("   %sFiles:%s    %s\n", CLR(cfg, COLOR_GREY), RST(cfg), count_buf);
+        card_add(&card, "%sFiles:%s    %s", CLR(cfg, COLOR_GREY), RST(cfg), count_buf);
     }
 
     /* Line count */
@@ -843,12 +916,11 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
         if (fe->has_type_stats) {
             char total_buf[32];
             format_count(fe->type_stats.total_lines, total_buf, sizeof(total_buf));
-            printf("   %sLines:%s    %s\n", CLR(cfg, COLOR_GREY), RST(cfg), total_buf);
-            /* Sort by line count descending */
+            card_add(&card, "%sLines:%s    %s", CLR(cfg, COLOR_GREY), RST(cfg), total_buf);
+
+            /* Sort and show breakdown */
             type_stats_sort(&fe->type_stats);
-            /* Calculate alignment widths */
-            int max_name_len = 0;
-            int max_count_len = 0;
+            int max_name_len = 0, max_count_len = 0;
             for (int i = 0; i < fe->type_stats.count; i++) {
                 if (!fe->type_stats.entries[i].has_lines) continue;
                 int len = (int)strlen(fe->type_stats.entries[i].name);
@@ -858,84 +930,111 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
                 int clen = (int)strlen(tmp);
                 if (clen > max_count_len) max_count_len = clen;
             }
-            /* Show breakdown (text files with line counts only) */
             for (int i = 0; i < fe->type_stats.count; i++) {
                 if (!fe->type_stats.entries[i].has_lines) continue;
                 char line_buf[32];
                 format_count(fe->type_stats.entries[i].line_count, line_buf, sizeof(line_buf));
-                printf("     %s%s:%s %*s\n", CLR(cfg, COLOR_GREY),
-                       fe->type_stats.entries[i].name, RST(cfg),
-                       (int)(max_name_len - strlen(fe->type_stats.entries[i].name) + max_count_len + 1),
-                       line_buf);
+                card_add(&card, "  %s%s:%s %*s", CLR(cfg, COLOR_GREY),
+                         fe->type_stats.entries[i].name, RST(cfg),
+                         (int)(max_name_len - strlen(fe->type_stats.entries[i].name) + max_count_len + 1),
+                         line_buf);
             }
         }
     } else if (fe->line_count >= 0 && fe->content_type == CONTENT_TEXT) {
         char line_buf[32];
         format_count(fe->line_count, line_buf, sizeof(line_buf));
-        printf("   %sLines:%s    %s\n", CLR(cfg, COLOR_GREY), RST(cfg), line_buf);
+        card_add(&card, "%sLines:%s    %s", CLR(cfg, COLOR_GREY), RST(cfg), line_buf);
         if (fe->word_count >= 0) {
             char word_buf[32];
             format_count(fe->word_count, word_buf, sizeof(word_buf));
-            printf("   %sWords:%s    %s\n", CLR(cfg, COLOR_GREY), RST(cfg), word_buf);
+            card_add(&card, "%sWords:%s    %s", CLR(cfg, COLOR_GREY), RST(cfg), word_buf);
         }
     } else if (fe->line_count >= 0 && fe->content_type == CONTENT_PDF) {
-        printf("   %sPages:%s    %d\n", CLR(cfg, COLOR_GREY), RST(cfg), fe->line_count);
+        card_add(&card, "%sPages:%s    %d", CLR(cfg, COLOR_GREY), RST(cfg), fe->line_count);
     }
 
     /* Modified time */
     char time_buf[64];
     struct tm *tm = localtime(&fe->mtime);
     strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M", tm);
-    printf("   %sModified:%s %s\n", CLR(cfg, COLOR_GREY), RST(cfg), time_buf);
+    card_add(&card, "%sModified:%s %s", CLR(cfg, COLOR_GREY), RST(cfg), time_buf);
 
     /* Git info (for git repositories) */
     if (fe->has_git_repo_info) {
-        printf("\n");
+        card_add_empty(&card);
 
-        /* Branch */
         if (fe->branch) {
-            printf("   %sBranch:%s   %s %s(%s)%s\n", CLR(cfg, COLOR_GREY), RST(cfg),
-                   fe->branch, CLR(cfg, COLOR_GREY), fe->short_hash, RST(cfg));
+            card_add(&card, "%sBranch:%s   %s %s(%s)%s", CLR(cfg, COLOR_GREY), RST(cfg),
+                     fe->branch, CLR(cfg, COLOR_GREY), fe->short_hash, RST(cfg));
         }
-
-        /* Commit count */
         if (fe->commit_count[0]) {
-            printf("   %sCommits:%s  %s\n", CLR(cfg, COLOR_GREY), RST(cfg), fe->commit_count);
+            card_add(&card, "%sCommits:%s  %s", CLR(cfg, COLOR_GREY), RST(cfg), fe->commit_count);
         }
-
-        /* Latest tag */
         if (fe->tag) {
-            printf("   %sTag:%s      %s\n", CLR(cfg, COLOR_GREY), RST(cfg), fe->tag);
+            card_add(&card, "%sTag:%s      %s", CLR(cfg, COLOR_GREY), RST(cfg), fe->tag);
         }
-
-        /* Remote URL */
         if (fe->remote) {
-            printf("   %sRemote:%s   %s\n", CLR(cfg, COLOR_GREY), RST(cfg), fe->remote);
+            card_add(&card, "%sRemote:%s   %s", CLR(cfg, COLOR_GREY), RST(cfg), fe->remote);
         }
 
         /* Dirty status */
         GitSummary *summary = &fe->repo_status;
         if (summary->modified || summary->untracked || summary->staged || summary->deleted) {
-            printf("   %sStatus:%s   ", CLR(cfg, COLOR_GREY), RST(cfg));
-            int first = 1;
+            char status_buf[128] = "";
+            int pos = 0;
             if (summary->staged) {
-                printf("%s%d staged%s", CLR(cfg, COLOR_GREEN), summary->staged, RST(cfg));
-                first = 0;
+                pos += snprintf(status_buf + pos, sizeof(status_buf) - pos,
+                                "%s%d staged%s", CLR(cfg, COLOR_GREEN), summary->staged, RST(cfg));
             }
             if (summary->modified) {
-                printf("%s%d modified%s", first ? "" : ", ", summary->modified, RST(cfg));
-                first = 0;
+                pos += snprintf(status_buf + pos, sizeof(status_buf) - pos,
+                                "%s%s%d modified%s", pos > 0 ? ", " : "",
+                                CLR(cfg, COLOR_RED), summary->modified, RST(cfg));
             }
             if (summary->deleted) {
-                printf("%s%d deleted%s", first ? "" : ", ", summary->deleted, RST(cfg));
-                first = 0;
+                pos += snprintf(status_buf + pos, sizeof(status_buf) - pos,
+                                "%s%s%d deleted%s", pos > 0 ? ", " : "",
+                                CLR(cfg, COLOR_RED), summary->deleted, RST(cfg));
             }
             if (summary->untracked) {
-                printf("%s%d untracked%s", first ? "" : ", ", summary->untracked, RST(cfg));
+                pos += snprintf(status_buf + pos, sizeof(status_buf) - pos,
+                                "%s%s%d untracked%s", pos > 0 ? ", " : "",
+                                CLR(cfg, COLOR_GREY), summary->untracked, RST(cfg));
             }
-            printf("\n");
+            card_add(&card, "%sStatus:%s   %s", CLR(cfg, COLOR_GREY), RST(cfg), status_buf);
         }
     }
 
+    /* Git status summary for directories inside a repo (but not repo root) */
+    if (is_dir && fe->has_git_dir_status && !fe->has_git_repo_info) {
+        GitSummary *gs = &fe->git_dir_status;
+        if (gs->modified || gs->untracked || gs->staged || gs->deleted) {
+            char status_buf[128] = "";
+            int pos = 0;
+            if (gs->staged) {
+                pos += snprintf(status_buf + pos, sizeof(status_buf) - pos,
+                                "%s%d staged%s", CLR(cfg, COLOR_GREEN), gs->staged, RST(cfg));
+            }
+            if (gs->modified) {
+                pos += snprintf(status_buf + pos, sizeof(status_buf) - pos,
+                                "%s%s%d modified%s", pos > 0 ? ", " : "",
+                                CLR(cfg, COLOR_RED), gs->modified, RST(cfg));
+            }
+            if (gs->deleted) {
+                pos += snprintf(status_buf + pos, sizeof(status_buf) - pos,
+                                "%s%s%d deleted%s", pos > 0 ? ", " : "",
+                                CLR(cfg, COLOR_RED), gs->deleted, RST(cfg));
+            }
+            if (gs->untracked) {
+                pos += snprintf(status_buf + pos, sizeof(status_buf) - pos,
+                                "%s%s%d untracked%s", pos > 0 ? ", " : "",
+                                CLR(cfg, COLOR_GREY), gs->untracked, RST(cfg));
+            }
+            card_add_empty(&card);
+            card_add(&card, "%sStatus:%s   %s", CLR(cfg, COLOR_GREY), RST(cfg), status_buf);
+        }
+    }
+
+    card_print(&card, cfg);
     printf("\n");
 }
