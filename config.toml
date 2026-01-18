@@ -143,6 +143,32 @@ dylib = "Dynamic library"
 dll = "DLL"
 exe = "Executable"
 
+# Graphics/Shaders
+glsl,frag,vert = "GLSL shader"
+
+# Apple/Objective-C
+mm,m = "Objective-C"
+
+# Python extensions
+pyi = "Python stub"
+ipynb = "Jupyter notebook"
+
+# Assembly
+S,s,asm = "Assembly"
+
+# Build systems
+bzl,bazel,BUILD = "Bazel"
+
+# Scripts
+bat,cmd = "Batch script"
+
+# ML/AI
+pt,pth = "PyTorch model"
+onnx = "ONNX model"
+
+# Testing
+expect = "Test expectation"
+
 # Other
 log = "Log file"
 db = "Database"
