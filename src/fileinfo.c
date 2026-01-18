@@ -1266,14 +1266,37 @@ void fileinfo_compute_git_repo_info(struct FileEntry *fe, GitCache *git) {
         pclose(fp);
     }
 
-    /* Latest tag */
-    snprintf(cmd, sizeof(cmd), "git -C '%s' describe --tags --abbrev=0 2>/dev/null", fe->path);
+    /* Latest tag with distance */
+    snprintf(cmd, sizeof(cmd), "git -C '%s' describe --tags 2>/dev/null", fe->path);
     fp = popen(cmd, "r");
     if (fp) {
-        char tag_buf[128];
+        char tag_buf[256];
         if (fgets(tag_buf, sizeof(tag_buf), fp)) {
             tag_buf[strcspn(tag_buf, "\n")] = '\0';
             if (tag_buf[0]) {
+                /* Format: tag-name or tag-name-N-gHASH */
+                /* Find the last two dashes to extract distance */
+                char *last_dash = strrchr(tag_buf, '-');
+                char *second_last = NULL;
+                if (last_dash && last_dash > tag_buf && last_dash[1] == 'g') {
+                    /* Looks like -gHASH suffix, find the distance before it */
+                    *last_dash = '\0';
+                    second_last = strrchr(tag_buf, '-');
+                    if (second_last && second_last > tag_buf) {
+                        char *endptr;
+                        long dist = strtol(second_last + 1, &endptr, 10);
+                        if (*endptr == '\0' && dist > 0) {
+                            /* Valid distance found */
+                            fe->tag_distance = (int)dist;
+                            *second_last = '\0';
+                        } else {
+                            /* Not a valid distance, restore */
+                            *last_dash = '-';
+                        }
+                    } else {
+                        *last_dash = '-';
+                    }
+                }
                 fe->tag = xstrdup(tag_buf);
             }
         }

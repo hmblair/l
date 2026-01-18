@@ -71,6 +71,7 @@ typedef struct FileEntry {
     /* --- Git repository info (git roots only, requires git_repo_info) --- */
     char *branch;                /* Current branch name */
     char *tag;                   /* Latest tag, if any */
+    int tag_distance;            /* Commits since tag (0 if at tag) */
     char *remote;                /* Remote URL */
     char short_hash[8];          /* Abbreviated commit hash */
     char commit_count[32];       /* Number of commits */

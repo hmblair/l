@@ -1004,7 +1004,12 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
             card_add(&card, "%sCommits:%s  %s", CLR(cfg, COLOR_GREY), RST(cfg), fe->commit_count);
         }
         if (fe->tag) {
-            card_add(&card, "%sTag:%s      %s", CLR(cfg, COLOR_GREY), RST(cfg), fe->tag);
+            if (fe->tag_distance > 0) {
+                card_add(&card, "%sTag:%s      %s %s(+%d)%s", CLR(cfg, COLOR_GREY), RST(cfg),
+                         fe->tag, CLR(cfg, COLOR_GREY), fe->tag_distance, RST(cfg));
+            } else {
+                card_add(&card, "%sTag:%s      %s", CLR(cfg, COLOR_GREY), RST(cfg), fe->tag);
+            }
         }
         if (fe->remote) {
             card_add(&card, "%sRemote:%s   %s", CLR(cfg, COLOR_GREY), RST(cfg), fe->remote);
