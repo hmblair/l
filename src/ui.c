@@ -936,6 +936,7 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
         if ((int)strlen(tmp) > max_files_len) max_files_len = (int)strlen(tmp);
         format_count(fe->type_stats.total_lines, tmp, sizeof(tmp));
         if ((int)strlen(tmp) > max_lines_len) max_lines_len = (int)strlen(tmp);
+        if (max_name_len < 5) max_name_len = 5;   /* At least "Total" */
         if (max_files_len < 5) max_files_len = 5;  /* At least "Files" */
         if (max_lines_len < 5) max_lines_len = 5;  /* At least "Lines" */
 
