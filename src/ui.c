@@ -346,7 +346,7 @@ TreeBuildOpts config_to_build_opts(const Config *cfg) {
     TreeBuildOpts opts = {
         .max_depth = cfg->max_depth,
         .show_hidden = cfg->show_hidden,
-        .skip_gitignored = 0,
+        .skip_gitignored = !cfg->expand_all,
         .sort_by = cfg->sort_by,
         .sort_reverse = cfg->sort_reverse,
         .cwd = cfg->cwd,

@@ -179,8 +179,34 @@ int node_is_directory(const TreeNode *node) {
  * Tree Building
  * ============================================================================ */
 
-static int should_skip_dir(const char *name, int is_ignored) {
-    if (is_ignored) return 1;
+/* Check if directory has a .gitignore containing a line with just "*" */
+static int has_ignore_all_gitignore(const char *dir_path) {
+    char gitignore_path[PATH_MAX];
+    snprintf(gitignore_path, sizeof(gitignore_path), "%s/.gitignore", dir_path);
+
+    FILE *fp = fopen(gitignore_path, "r");
+    if (!fp) return 0;
+
+    char line[256];
+    int found = 0;
+    while (fgets(line, sizeof(line), fp)) {
+        /* Strip trailing whitespace/newline */
+        size_t len = strlen(line);
+        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r' ||
+                          line[len-1] == ' ' || line[len-1] == '\t')) {
+            line[--len] = '\0';
+        }
+        if (strcmp(line, "*") == 0) {
+            found = 1;
+            break;
+        }
+    }
+    fclose(fp);
+    return found;
+}
+
+static int should_skip_dir(const char *name, int is_ignored, int skip_gitignored) {
+    if (is_ignored && skip_gitignored) return 1;
     if (strcmp(name, ".git") == 0) return 1;
     return 0;
 }
@@ -272,9 +298,28 @@ static void build_tree_children(TreeNode *parent, int depth,
                                    strcmp(child->entry.name, ".git") == 0 ||
                                    is_submodule[i];
 
-        if (node_is_directory(child) && !should_skip_dir(child->entry.name, child->entry.is_ignored)) {
+        /* Check if directory has .gitignore with "*" (ignores all contents) */
+        if (!child->entry.is_ignored && node_is_directory(child)) {
+            child->entry.is_ignored = has_ignore_all_gitignore(child->entry.path);
+        }
+
+        if (node_is_directory(child) && !should_skip_dir(child->entry.name, child->entry.is_ignored, opts->skip_gitignored)) {
             int child_in_git_repo = in_git_repo || is_git_repo_root[i];
             build_tree_children(child, depth + 1, opts, git, child_in_git_repo, child->entry.is_ignored);
+
+            /* Mark directory as ignored if all children are ignored */
+            if (!child->entry.is_ignored && child->child_count > 0) {
+                int all_ignored = 1;
+                for (size_t j = 0; j < child->child_count; j++) {
+                    if (!child->children[j].entry.is_ignored) {
+                        all_ignored = 0;
+                        break;
+                    }
+                }
+                if (all_ignored) {
+                    child->entry.is_ignored = 1;
+                }
+            }
 
             if (opts->compute.git_diff) {
                 child->entry.diff_removed = git_deleted_lines_direct(git, child->entry.path);
@@ -374,12 +419,31 @@ TreeNode *build_tree(const char *path, const TreeBuildOpts *opts,
                               strcmp(root->entry.name, ".git") == 0 ||
                               (in_git_repo && git_path_in_ignored(git, abs_path, git_root));
 
+    /* Check if directory has .gitignore with "*" (ignores all contents) */
+    if (!root->entry.is_ignored && is_dir) {
+        root->entry.is_ignored = has_ignore_all_gitignore(abs_path);
+    }
+
     if (is_dir && in_git_repo && strcmp(abs_path, git_root) == 0) {
         root->entry.is_git_root = 1;
     }
 
     if (is_dir) {
         build_tree_children(root, 0, opts, git, in_git_repo, root->entry.is_ignored);
+
+        /* Mark root as ignored if all children are ignored */
+        if (!root->entry.is_ignored && root->child_count > 0) {
+            int all_ignored = 1;
+            for (size_t i = 0; i < root->child_count; i++) {
+                if (!root->children[i].entry.is_ignored) {
+                    all_ignored = 0;
+                    break;
+                }
+            }
+            if (all_ignored) {
+                root->entry.is_ignored = 1;
+            }
+        }
 
         if (opts->show_hidden && root->child_count > 0 &&
             (opts->compute.sizes || opts->compute.file_counts)) {
