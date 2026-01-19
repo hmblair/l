@@ -887,9 +887,14 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
         card_add(&card, "%sPath:%s     %s", CLR(cfg, COLOR_GREY), RST(cfg), link_path);
         card_add(&card, "%sTarget:%s   %s", CLR(cfg, COLOR_GREY), RST(cfg), fe->symlink_target);
     } else {
-        char full_path[PATH_MAX];
-        get_realpath(fe->path, full_path, cfg);
-        card_add(&card, "%sPath:%s     %s", CLR(cfg, COLOR_GREY), RST(cfg), full_path);
+        char abs_path[PATH_MAX];
+        char real_path[PATH_MAX];
+        get_abspath(fe->path, abs_path, cfg);
+        get_realpath(fe->path, real_path, cfg);
+        card_add(&card, "%sPath:%s     %s", CLR(cfg, COLOR_GREY), RST(cfg), abs_path);
+        if (strcmp(abs_path, real_path) != 0) {
+            card_add(&card, "%sTarget:%s   %s", CLR(cfg, COLOR_GREY), RST(cfg), real_path);
+        }
     }
 
     /* Type (files only) */
