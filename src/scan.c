@@ -29,6 +29,52 @@ typedef struct {
 
 static ScanResult scan_impl(const char *path, dev_t root_dev, const ScanContext *ctx);
 
+/* Process subdirectories with OMP tasks, accumulating into result */
+static void scan_process_subdirs(char **subdirs, size_t subdir_count, dev_t root_dev,
+                                 const ScanContext *ctx, int skip_file_count,
+                                 ScanResult *result) {
+    if (subdir_count == 0) return;
+
+    ScanResult *sub_stats = malloc(subdir_count * sizeof(ScanResult));
+    if (sub_stats) {
+        for (size_t i = 0; i < subdir_count; i++) {
+            /* Check cache first if available */
+            off_t cached_size;
+            long cached_count;
+            if (ctx->cache_fn && ctx->cache_fn(subdirs[i], &cached_size, &cached_count)) {
+                sub_stats[i].size = cached_size;
+                sub_stats[i].file_count = cached_count;
+            } else {
+                #pragma omp task shared(sub_stats) firstprivate(i, root_dev, ctx)
+                sub_stats[i] = scan_impl(subdirs[i], root_dev, ctx);
+            }
+        }
+        #pragma omp taskwait
+
+        for (size_t i = 0; i < subdir_count; i++) {
+            if (sub_stats[i].size >= 0) result->size += sub_stats[i].size;
+            if (!skip_file_count && sub_stats[i].file_count >= 0)
+                result->file_count += sub_stats[i].file_count;
+            free(subdirs[i]);
+        }
+        free(sub_stats);
+    } else {
+        for (size_t i = 0; i < subdir_count; i++) free(subdirs[i]);
+    }
+    free(subdirs);
+}
+
+/* Finalize scan result: optionally store and handle skip_file_count */
+static void scan_finalize(const char *path, const ScanContext *ctx,
+                          int skip_file_count, ScanResult *result) {
+    if (ctx->store_fn && !skip_file_count &&
+        result->file_count >= ctx->threshold && strcmp(path, "/") != 0) {
+        #pragma omp critical
+        ctx->store_fn(path, result->size, result->file_count);
+    }
+    if (skip_file_count) result->file_count = -1;
+}
+
 ScanResult scan_directory(const char *path,
                           scan_store_fn store_fn,
                           scan_cache_fn cache_fn,
@@ -145,45 +191,8 @@ static ScanResult scan_impl(const char *path, dev_t root_dev, const ScanContext 
     free(attrBuf);
     close(dirfd);
 
-    /* Process subdirectories with OMP tasks */
-    ScanResult *sub_stats = NULL;
-    if (subdir_count > 0) {
-        sub_stats = malloc(subdir_count * sizeof(ScanResult));
-        if (sub_stats) {
-            for (size_t i = 0; i < subdir_count; i++) {
-                /* Check cache first if available */
-                off_t cached_size;
-                long cached_count;
-                if (ctx->cache_fn && ctx->cache_fn(subdirs[i], &cached_size, &cached_count)) {
-                    sub_stats[i].size = cached_size;
-                    sub_stats[i].file_count = cached_count;
-                } else {
-                    #pragma omp task shared(sub_stats) firstprivate(i, root_dev, ctx)
-                    sub_stats[i] = scan_impl(subdirs[i], root_dev, ctx);
-                }
-            }
-            #pragma omp taskwait
-
-            for (size_t i = 0; i < subdir_count; i++) {
-                if (sub_stats[i].size >= 0) result.size += sub_stats[i].size;
-                if (!skip_file_count && sub_stats[i].file_count >= 0)
-                    result.file_count += sub_stats[i].file_count;
-                free(subdirs[i]);
-            }
-            free(sub_stats);
-        } else {
-            for (size_t i = 0; i < subdir_count; i++) free(subdirs[i]);
-        }
-        free(subdirs);
-    }
-
-    if (ctx->store_fn && !skip_file_count &&
-        result.file_count >= ctx->threshold && strcmp(path, "/") != 0) {
-        #pragma omp critical
-        ctx->store_fn(path, result.size, result.file_count);
-    }
-
-    if (skip_file_count) result.file_count = -1;
+    scan_process_subdirs(subdirs, subdir_count, root_dev, ctx, skip_file_count, &result);
+    scan_finalize(path, ctx, skip_file_count, &result);
     return result;
 }
 
@@ -300,45 +309,8 @@ static ScanResult scan_impl(const char *path, dev_t root_dev, const ScanContext 
     }
     closedir(dir);
 
-    /* Process subdirectories with OMP tasks */
-    ScanResult *sub_stats = NULL;
-    if (subdir_count > 0) {
-        sub_stats = malloc(subdir_count * sizeof(ScanResult));
-        if (sub_stats) {
-            for (size_t i = 0; i < subdir_count; i++) {
-                /* Check cache first if available */
-                off_t cached_size;
-                long cached_count;
-                if (ctx->cache_fn && ctx->cache_fn(subdirs[i], &cached_size, &cached_count)) {
-                    sub_stats[i].size = cached_size;
-                    sub_stats[i].file_count = cached_count;
-                } else {
-                    #pragma omp task shared(sub_stats) firstprivate(i, root_dev, ctx)
-                    sub_stats[i] = scan_impl(subdirs[i], root_dev, ctx);
-                }
-            }
-            #pragma omp taskwait
-
-            for (size_t i = 0; i < subdir_count; i++) {
-                if (sub_stats[i].size >= 0) result.size += sub_stats[i].size;
-                if (!skip_file_count && sub_stats[i].file_count >= 0)
-                    result.file_count += sub_stats[i].file_count;
-                free(subdirs[i]);
-            }
-            free(sub_stats);
-        } else {
-            for (size_t i = 0; i < subdir_count; i++) free(subdirs[i]);
-        }
-        free(subdirs);
-    }
-
-    if (ctx->store_fn && !skip_file_count &&
-        result.file_count >= ctx->threshold && strcmp(path, "/") != 0) {
-        #pragma omp critical
-        ctx->store_fn(path, result.size, result.file_count);
-    }
-
-    if (skip_file_count) result.file_count = -1;
+    scan_process_subdirs(subdirs, subdir_count, root_dev, ctx, skip_file_count, &result);
+    scan_finalize(path, ctx, skip_file_count, &result);
     return result;
 }
 #endif

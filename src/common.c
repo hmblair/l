@@ -205,7 +205,8 @@ void path_get_abspath(const char *path, char *resolved, const char *cwd) {
 
     /* Rebuild path with bounds checking */
     if (depth == 0) {
-        strcpy(resolved, "/");
+        resolved[0] = '/';
+        resolved[1] = '\0';
     } else {
         size_t pos = 0;
         for (int i = 0; i < depth && pos < PATH_MAX - 1; i++) {
@@ -216,7 +217,10 @@ void path_get_abspath(const char *path, char *resolved, const char *cwd) {
             pos += comp_len;
         }
         resolved[pos] = '\0';
-        if (pos == 0) strcpy(resolved, "/");
+        if (pos == 0) {
+            resolved[0] = '/';
+            resolved[1] = '\0';
+        }
     }
 }
 

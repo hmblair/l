@@ -135,69 +135,41 @@ GitSummary git_get_dir_summary(GitCache *cache, const char *dir_path) {
     return summary;
 }
 
-int git_count_deleted_direct(GitCache *cache, const char *dir_path) {
+/* Internal: walk deleted entries under dir_path, accumulating count or lines */
+static int git_walk_deleted(GitCache *cache, const char *dir_path,
+                            int count_files, int direct_only) {
     if (!cache) return 0;
 
-    int count = 0;
+    int result = 0;
     size_t dir_len = strlen(dir_path);
 
     for (int i = 0; i < L_HASH_SIZE; i++) {
         GitStatusNode *node = cache->buckets[i];
         while (node) {
-            /* Check if deleted and directly in this directory (not nested) */
-            if (node->status[1] == 'D' &&
-                strncmp(node->path, dir_path, dir_len) == 0 &&
-                node->path[dir_len] == '/' &&
-                strchr(node->path + dir_len + 1, '/') == NULL) {
-                count++;
-            }
-            node = node->next;
-        }
-    }
-    return count;
-}
-
-int git_deleted_lines_direct(GitCache *cache, const char *dir_path) {
-    if (!cache) return 0;
-
-    int lines = 0;
-    size_t dir_len = strlen(dir_path);
-
-    for (int i = 0; i < L_HASH_SIZE; i++) {
-        GitStatusNode *node = cache->buckets[i];
-        while (node) {
-            /* Check if deleted and directly in this directory (not nested) */
-            if (node->status[1] == 'D' &&
-                strncmp(node->path, dir_path, dir_len) == 0 &&
-                node->path[dir_len] == '/' &&
-                strchr(node->path + dir_len + 1, '/') == NULL) {
-                lines += node->lines_removed;
-            }
-            node = node->next;
-        }
-    }
-    return lines;
-}
-
-int git_deleted_lines_recursive(GitCache *cache, const char *dir_path) {
-    if (!cache) return 0;
-
-    int lines = 0;
-    size_t dir_len = strlen(dir_path);
-
-    for (int i = 0; i < L_HASH_SIZE; i++) {
-        GitStatusNode *node = cache->buckets[i];
-        while (node) {
-            /* Check if deleted and anywhere under this directory */
             if (node->status[1] == 'D' &&
                 strncmp(node->path, dir_path, dir_len) == 0 &&
                 node->path[dir_len] == '/') {
-                lines += node->lines_removed;
+                /* If direct_only, skip nested paths */
+                if (!direct_only || strchr(node->path + dir_len + 1, '/') == NULL) {
+                    result += count_files ? 1 : node->lines_removed;
+                }
             }
             node = node->next;
         }
     }
-    return lines;
+    return result;
+}
+
+int git_count_deleted_direct(GitCache *cache, const char *dir_path) {
+    return git_walk_deleted(cache, dir_path, 1, 1);
+}
+
+int git_deleted_lines_direct(GitCache *cache, const char *dir_path) {
+    return git_walk_deleted(cache, dir_path, 0, 1);
+}
+
+int git_deleted_lines_recursive(GitCache *cache, const char *dir_path) {
+    return git_walk_deleted(cache, dir_path, 0, 0);
 }
 
 int git_dir_has_hidden_status(GitCache *cache, const char *dir_path) {
@@ -508,7 +480,8 @@ static void git_populate_diff_stats_shell(GitCache *cache, const char *repo_path
         int added, removed;
         char path[PATH_MAX];
 
-        if (sscanf(line, "%d\t%d\t%[^\n]", &added, &removed, path) == 3) {
+        /* %4095[^\n] limits scan to PATH_MAX-1 chars to prevent overflow */
+        if (sscanf(line, "%d\t%d\t%4095[^\n]", &added, &removed, path) == 3) {
             char full_path[PATH_MAX];
             path_join(full_path, sizeof(full_path), repo_path, path);
             git_cache_set_diff(cache, full_path, added, removed);
@@ -679,7 +652,8 @@ void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_
                 int added, removed;
                 char path[PATH_MAX];
 
-                if (sscanf(line, "%d\t%d\t%[^\n]", &added, &removed, path) == 3) {
+                /* %4095[^\n] limits scan to PATH_MAX-1 chars to prevent overflow */
+                if (sscanf(line, "%d\t%d\t%4095[^\n]", &added, &removed, path) == 3) {
                     char full_path[PATH_MAX];
                     path_join(full_path, sizeof(full_path), repo_path, path);
                     git_cache_set_diff(cache, full_path, added, removed);
