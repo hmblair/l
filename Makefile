@@ -1,5 +1,8 @@
 # Makefile for l directory listing tool
 
+# Use all CPU cores for parallel builds
+MAKEFLAGS += -j$(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 1)
+
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "unknown")
 
 PREFIX ?= $(HOME)/.local
