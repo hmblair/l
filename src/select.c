@@ -62,7 +62,8 @@ typedef enum {
     KEY_ENTER,
     KEY_QUIT,
     KEY_OPEN,
-    KEY_YANK
+    KEY_YANK,
+    KEY_FILTER_FILES
 } KeyPress;
 
 static KeyPress term_read_key(void) {
@@ -77,6 +78,7 @@ static KeyPress term_read_key(void) {
     if (c == 'l' || c == 'L') return KEY_RIGHT;
     if (c == 'o' || c == 'O') return KEY_OPEN;
     if (c == 'y' || c == 'Y') return KEY_YANK;
+    if (c == 'f' || c == 'F') return KEY_FILTER_FILES;
 
     if (c == '\033') {
         /* Check if more data available (arrow key sequence) with timeout */
@@ -365,7 +367,7 @@ static void render_line(SelectState *state, int index, int is_selected,
     print_entry(&item->node->entry, item->depth, is_expanded, has_visible, &line_ctx);
 }
 
-static void render_view(SelectState *state, PrintContext *ctx, CollapsedSet *collapsed) {
+static void render_view(SelectState *state, PrintContext *ctx, CollapsedSet *collapsed, int files_only) {
     int max_visible = state->term_rows - 2;  /* Leave room for status line */
     if (max_visible < 1) max_visible = 1;
     if (max_visible > state->count) max_visible = state->count;
@@ -394,8 +396,13 @@ static void render_view(SelectState *state, PrintContext *ctx, CollapsedSet *col
     }
 
     /* Status line */
-    printf("\r\033[K%s[j/k] move  [h/l] collapse/expand  [Enter] select  [o] open  [y] yank  [q] quit%s",
-           COLOR_GREY, COLOR_RESET);
+    if (files_only) {
+        printf("\r\033[K%s[j/k] files  [f] all  [h/l] fold  [o] open  [y] yank  [Enter] select  [q] quit%s",
+               COLOR_GREY, COLOR_RESET);
+    } else {
+        printf("\r\033[K%s[j/k] move  [f] files  [h/l] fold  [o] open  [y] yank  [Enter] select  [q] quit%s",
+               COLOR_GREY, COLOR_RESET);
+    }
 
     /* Clear any extra lines from previous render (when tree shrinks) */
     if (old_visible > new_visible) {
@@ -410,6 +417,24 @@ static void render_view(SelectState *state, PrintContext *ctx, CollapsedSet *col
 
     /* Track how many lines we printed */
     state->visible_lines = new_visible;
+}
+
+/* ============================================================================
+ * Navigation Helpers
+ * ============================================================================ */
+
+/* Find next file index (skipping directories), returns -1 if none found */
+static int find_next_file(SelectState *state, int from, int direction) {
+    int count = state->count;
+    if (count == 0) return -1;
+
+    for (int i = 1; i < count; i++) {
+        int idx = (from + i * direction + count) % count;
+        if (!node_is_directory(state->items[idx].node)) {
+            return idx;
+        }
+    }
+    return -1;  /* No files found */
 }
 
 /* ============================================================================
@@ -444,6 +469,9 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
     CollapsedSet collapsed;
     collapsed_init(&collapsed);
 
+    /* Filter mode: 0 = all, 1 = files only */
+    int files_only = 0;
+
     /* We need a continuation array for rendering */
     int continuation[L_MAX_DEPTH] = {0};
 
@@ -466,7 +494,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
 
     /* Enter raw mode and render */
     term_enable_raw();
-    render_view(&state, &render_ctx, &collapsed);
+    render_view(&state, &render_ctx, &collapsed, files_only);
 
     char *result = NULL;
 
@@ -479,21 +507,31 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
 
         switch (key) {
             case KEY_UP:
-                state.cursor = (state.cursor - 1 + state.count) % state.count;
-                render_view(&state, &render_ctx, &collapsed);
+                if (files_only) {
+                    int next = find_next_file(&state, state.cursor, -1);
+                    if (next >= 0) state.cursor = next;
+                } else {
+                    state.cursor = (state.cursor - 1 + state.count) % state.count;
+                }
+                render_view(&state, &render_ctx, &collapsed, files_only);
                 break;
 
             case KEY_DOWN:
-                state.cursor = (state.cursor + 1) % state.count;
-                render_view(&state, &render_ctx, &collapsed);
+                if (files_only) {
+                    int next = find_next_file(&state, state.cursor, 1);
+                    if (next >= 0) state.cursor = next;
+                } else {
+                    state.cursor = (state.cursor + 1) % state.count;
+                }
+                render_view(&state, &render_ctx, &collapsed, files_only);
                 break;
 
             case KEY_LEFT:
                 /* Collapse current directory (or parent if file/already collapsed) */
                 if (node_is_directory(current->node) &&
                     !collapsed_contains(&collapsed, current->node->entry.path) &&
-                    current->node->child_count > 0) {
-                    /* Collapse this directory */
+                    (current->node->child_count > 0 || current->node->was_expanded)) {
+                    /* Collapse this directory (including empty expanded dirs) */
                     collapsed_toggle(&collapsed, current->node->entry.path);
                     const char *cur_path = current->node->entry.path;
                     flatten_all(&state, trees, tree_count, ctx->cfg, &collapsed);
@@ -506,7 +544,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                             break;
                         }
                     }
-                    render_view(&state, &render_ctx, &collapsed);
+                    render_view(&state, &render_ctx, &collapsed, files_only);
                 }
                 break;
 
@@ -516,12 +554,12 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                     if (collapsed_contains(&collapsed, current->node->entry.path)) {
                         /* Was manually collapsed - uncollapse */
                         collapsed_toggle(&collapsed, current->node->entry.path);
-                    } else if (current->node->child_count == 0) {
+                    } else if (current->node->child_count == 0 && !current->node->was_expanded) {
                         /* Not loaded yet - dynamically expand */
                         tree_expand_node_from_config(current->node, ctx->columns, ctx->git,
                                          ctx->cfg, ctx->icons);
                     } else {
-                        /* Already expanded, nothing to do */
+                        /* Already expanded (including empty dirs), nothing to do */
                         break;
                     }
                     const char *cur_path = current->node->entry.path;
@@ -535,24 +573,41 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                             break;
                         }
                     }
-                    render_view(&state, &render_ctx, &collapsed);
+                    render_view(&state, &render_ctx, &collapsed, files_only);
                 }
+                break;
+
+            case KEY_FILTER_FILES:
+                if (!files_only) {
+                    /* Check if there are any files before enabling */
+                    int has_files = find_next_file(&state, state.cursor, 1) >= 0 ||
+                                    !node_is_directory(current->node);
+                    if (!has_files) {
+                        /* No files - ignore */
+                        break;
+                    }
+                    files_only = 1;
+                    /* Move to next file if on a directory */
+                    if (node_is_directory(current->node)) {
+                        int next = find_next_file(&state, state.cursor, 1);
+                        if (next >= 0) state.cursor = next;
+                    }
+                } else {
+                    files_only = 0;
+                }
+                render_view(&state, &render_ctx, &collapsed, files_only);
                 break;
 
             case KEY_OPEN:
                 if (node_is_directory(current->node)) {
                     /* Toggle expand/collapse for directories */
-                    if (current->node->child_count > 0) {
-                        /* Has children - toggle collapsed state */
+                    if (current->node->child_count > 0 || current->node->was_expanded) {
+                        /* Has children or was already expanded (empty dir) - toggle */
                         collapsed_toggle(&collapsed, current->node->entry.path);
                     } else {
-                        /* No children loaded - dynamically expand */
+                        /* Not yet expanded - dynamically expand */
                         tree_expand_node_from_config(current->node, ctx->columns, ctx->git,
                                          ctx->cfg, ctx->icons);
-                        if (current->node->child_count == 0) {
-                            /* Still no children (empty dir) - nothing to do */
-                            break;
-                        }
                     }
                     const char *cur_path = current->node->entry.path;
                     flatten_all(&state, trees, tree_count, ctx->cfg, &collapsed);
@@ -565,7 +620,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                             break;
                         }
                     }
-                    render_view(&state, &render_ctx, &collapsed);
+                    render_view(&state, &render_ctx, &collapsed, files_only);
                 } else {
                     /* Open file in editor */
                     const char *editor = getenv("EDITOR");

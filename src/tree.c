@@ -489,6 +489,7 @@ void tree_expand_node(TreeNode *node, const TreeBuildOpts *opts,
     }
     if (list.count == 0) {
         file_list_free(&list);
+        node->was_expanded = 1;  /* Mark as expanded even if empty */
         return;
     }
 
