@@ -273,7 +273,8 @@ int main(int argc, char **argv) {
             return 0;
         }
         if (strcmp(argv[i], "--daemon") == 0) {
-            daemon_run(argv[0]);
+            const char *subcmd = (i + 1 < argc) ? argv[i + 1] : NULL;
+            daemon_run(argv[0], subcmd);
             return 0;
         }
     }

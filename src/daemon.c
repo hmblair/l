@@ -795,15 +795,7 @@ static int find_in_path(const char *name, char *result) {
     return 0;
 }
 
-void daemon_run(const char *binary_path) {
-    /* Interactive menu requires a TTY */
-    if (!isatty(STDIN_FILENO)) {
-        fprintf(stderr, "%sError:%s --daemon requires an interactive terminal\n",
-                COLOR_RED, COLOR_RESET);
-        fprintf(stderr, "Use: --daemon start | stop | status | refresh | clear\n");
-        exit(1);
-    }
-
+void daemon_run(const char *binary_path, const char *subcmd) {
     /* Resolve to find actual binary location */
     char resolved_path[PATH_MAX];
     int found = 0;
@@ -841,6 +833,54 @@ void daemon_run(const char *binary_path) {
     if (access(daemon_path, X_OK) != 0) {
         fprintf(stderr, "%sError:%s l-cached not found at %s\n",
                 COLOR_RED, COLOR_RESET, daemon_path);
+        exit(1);
+    }
+
+    /* Handle non-interactive subcommands */
+    if (subcmd) {
+        if (strcmp(subcmd, "status") == 0) {
+            print_status();
+            return;
+        } else if (strcmp(subcmd, "start") == 0) {
+            if (daemon_is_running()) {
+                printf("Daemon is already running\n");
+            } else {
+                action_start(daemon_path);
+                printf("Daemon started\n");
+            }
+            return;
+        } else if (strcmp(subcmd, "stop") == 0) {
+            if (!daemon_is_running()) {
+                printf("Daemon is not running\n");
+            } else {
+                action_stop(daemon_path);
+                printf("Daemon stopped\n");
+            }
+            return;
+        } else if (strcmp(subcmd, "refresh") == 0) {
+            if (!daemon_is_running()) {
+                printf("Daemon is not running\n");
+            } else {
+                action_refresh(daemon_path);
+                printf("Refresh requested\n");
+            }
+            return;
+        } else if (strcmp(subcmd, "clear") == 0) {
+            action_clear(daemon_path);
+            printf("Cache cleared\n");
+            return;
+        } else {
+            fprintf(stderr, "Unknown subcommand: %s\n", subcmd);
+            fprintf(stderr, "Use: --daemon [start|stop|status|refresh|clear]\n");
+            exit(1);
+        }
+    }
+
+    /* Interactive menu requires a TTY */
+    if (!isatty(STDIN_FILENO)) {
+        fprintf(stderr, "%sError:%s --daemon requires an interactive terminal\n",
+                COLOR_RED, COLOR_RESET);
+        fprintf(stderr, "Use: --daemon start | stop | status | refresh | clear\n");
         exit(1);
     }
 
