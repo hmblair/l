@@ -215,6 +215,11 @@ static void parse_args(int argc, char **argv, Config *cfg,
                 cfg->show_hidden = 1;
                 cfg->max_depth = L_MAX_DEPTH;
             }
+            else if (strcmp(arg, "--daemon") == 0 || strcmp(arg, "--version") == 0) {
+                fprintf(stderr, "%sError:%s %s must be the first argument\n",
+                        CLR(cfg, COLOR_RED), RST(cfg), arg);
+                exit(1);
+            }
             else {
                 fprintf(stderr, "%sError:%s Unknown option: %s\n",
                         CLR(cfg, COLOR_RED), RST(cfg), arg);
