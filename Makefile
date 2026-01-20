@@ -68,7 +68,7 @@ all: $(BINDIR)/l $(BINDIR)/l-cached $(BINDIR)/cl
 $(BINDIR):
 	mkdir -p $(BINDIR)
 
-$(BINDIR)/l: $(SRCDIR)/l.o $(COMMON_OBJS) $(CACHE_CLIENT_OBJS) $(GIT_OBJS) $(TREE_OBJS) $(UI_OBJS) $(DAEMON_OBJS) $(SELECT_OBJS) | $(BINDIR)
+$(BINDIR)/l: $(SRCDIR)/l.o $(COMMON_OBJS) $(CACHE_CLIENT_OBJS) $(SCAN_OBJS) $(GIT_OBJS) $(TREE_OBJS) $(UI_OBJS) $(DAEMON_OBJS) $(SELECT_OBJS) | $(BINDIR)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
 $(BINDIR)/l-cached: $(SRCDIR)/ld.o $(COMMON_OBJS) $(CACHE_DAEMON_OBJS) $(SCAN_OBJS) | $(BINDIR)
@@ -81,7 +81,7 @@ $(BINDIR)/cl: $(SRCDIR)/cl | $(BINDIR)
 $(SRCDIR)/common.o: $(SRCDIR)/common.c $(SRCDIR)/common.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(SRCDIR)/cache.o: $(SRCDIR)/cache.c $(SRCDIR)/cache.h $(SRCDIR)/common.h
+$(SRCDIR)/cache.o: $(SRCDIR)/cache.c $(SRCDIR)/cache.h $(SRCDIR)/scan.h $(SRCDIR)/common.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(SRCDIR)/cache_daemon.o: $(SRCDIR)/cache_daemon.c $(SRCDIR)/cache.h $(SRCDIR)/common.h

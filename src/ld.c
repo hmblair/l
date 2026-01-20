@@ -108,7 +108,7 @@ int main(int argc, char *argv[]) {
 
         write_status("scanning");
         log_info("scanning /...");
-        ScanResult r = scan_directory("/", store_callback,
+        ScanResult r = scan_directory("/", store_callback, NULL,
                                        (volatile int *)&g_shutdown, threshold);
         log_info("  /: %ld files, %lld bytes", r.file_count, (long long)r.size);
 

@@ -22,6 +22,7 @@
 /* Scan context passed to recursive calls */
 typedef struct {
     scan_store_fn store_fn;
+    scan_cache_fn cache_fn;
     volatile int *shutdown;
     long threshold;
 } ScanContext;
@@ -30,10 +31,11 @@ static ScanResult scan_impl(const char *path, dev_t root_dev, const ScanContext 
 
 ScanResult scan_directory(const char *path,
                           scan_store_fn store_fn,
+                          scan_cache_fn cache_fn,
                           volatile int *shutdown,
                           long threshold) {
     ScanResult result;
-    ScanContext ctx = {store_fn, shutdown, threshold};
+    ScanContext ctx = {store_fn, cache_fn, shutdown, threshold};
 
     #pragma omp parallel
     #pragma omp single
@@ -149,8 +151,16 @@ static ScanResult scan_impl(const char *path, dev_t root_dev, const ScanContext 
         sub_stats = malloc(subdir_count * sizeof(ScanResult));
         if (sub_stats) {
             for (size_t i = 0; i < subdir_count; i++) {
-                #pragma omp task shared(sub_stats) firstprivate(i, root_dev, ctx)
-                sub_stats[i] = scan_impl(subdirs[i], root_dev, ctx);
+                /* Check cache first if available */
+                off_t cached_size;
+                long cached_count;
+                if (ctx->cache_fn && ctx->cache_fn(subdirs[i], &cached_size, &cached_count)) {
+                    sub_stats[i].size = cached_size;
+                    sub_stats[i].file_count = cached_count;
+                } else {
+                    #pragma omp task shared(sub_stats) firstprivate(i, root_dev, ctx)
+                    sub_stats[i] = scan_impl(subdirs[i], root_dev, ctx);
+                }
             }
             #pragma omp taskwait
 
@@ -296,8 +306,16 @@ static ScanResult scan_impl(const char *path, dev_t root_dev, const ScanContext 
         sub_stats = malloc(subdir_count * sizeof(ScanResult));
         if (sub_stats) {
             for (size_t i = 0; i < subdir_count; i++) {
-                #pragma omp task shared(sub_stats) firstprivate(i, root_dev, ctx)
-                sub_stats[i] = scan_impl(subdirs[i], root_dev, ctx);
+                /* Check cache first if available */
+                off_t cached_size;
+                long cached_count;
+                if (ctx->cache_fn && ctx->cache_fn(subdirs[i], &cached_size, &cached_count)) {
+                    sub_stats[i].size = cached_size;
+                    sub_stats[i].file_count = cached_count;
+                } else {
+                    #pragma omp task shared(sub_stats) firstprivate(i, root_dev, ctx)
+                    sub_stats[i] = scan_impl(subdirs[i], root_dev, ctx);
+                }
             }
             #pragma omp taskwait
 
