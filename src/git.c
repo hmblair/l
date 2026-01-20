@@ -9,6 +9,12 @@
 #include <git2.h>
 #endif
 
+/* Scanf format for paths: width is PATH_MAX-1 to leave room for null terminator */
+#define PATH_SCANF_WIDTH 4095
+#define STRINGIFY(x) #x
+#define TOSTRING(x) STRINGIFY(x)
+#define SCANF_PATH "%" TOSTRING(PATH_SCANF_WIDTH) "[^\n]"
+
 /* ============================================================================
  * GitCache Functions
  * ============================================================================ */
@@ -478,10 +484,9 @@ static void git_populate_diff_stats_shell(GitCache *cache, const char *repo_path
 
     while (fgets(line, sizeof(line), fp)) {
         int added, removed;
-        char path[PATH_MAX];
+        char path[PATH_SCANF_WIDTH + 1];
 
-        /* %4095[^\n] limits scan to PATH_MAX-1 chars to prevent overflow */
-        if (sscanf(line, "%d\t%d\t%4095[^\n]", &added, &removed, path) == 3) {
+        if (sscanf(line, "%d\t%d\t" SCANF_PATH, &added, &removed, path) == 3) {
             char full_path[PATH_MAX];
             path_join(full_path, sizeof(full_path), repo_path, path);
             git_cache_set_diff(cache, full_path, added, removed);
@@ -650,10 +655,9 @@ void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_
             char line[PATH_MAX + 64];
             while (fgets(line, sizeof(line), fp)) {
                 int added, removed;
-                char path[PATH_MAX];
+                char path[PATH_SCANF_WIDTH + 1];
 
-                /* %4095[^\n] limits scan to PATH_MAX-1 chars to prevent overflow */
-                if (sscanf(line, "%d\t%d\t%4095[^\n]", &added, &removed, path) == 3) {
+                if (sscanf(line, "%d\t%d\t" SCANF_PATH, &added, &removed, path) == 3) {
                     char full_path[PATH_MAX];
                     path_join(full_path, sizeof(full_path), repo_path, path);
                     git_cache_set_diff(cache, full_path, added, removed);
