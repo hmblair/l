@@ -321,9 +321,24 @@ int main(int argc, char **argv) {
         .compute = COMPUTE_NONE
     };
 
-    /* Initialize environment paths */
-    if (!getcwd(cfg.cwd, sizeof(cfg.cwd))) {
+    /* Initialize environment paths - prefer $PWD to preserve symlink paths */
+    const char *pwd = getenv("PWD");
+    char cwd_physical[PATH_MAX];
+    if (!getcwd(cwd_physical, sizeof(cwd_physical))) {
         die("Cannot determine current directory");
+    }
+    if (pwd && pwd[0] == '/') {
+        char pwd_resolved[PATH_MAX];
+        if (realpath(pwd, pwd_resolved) && strcmp(pwd_resolved, cwd_physical) == 0) {
+            strncpy(cfg.cwd, pwd, sizeof(cfg.cwd) - 1);
+            cfg.cwd[sizeof(cfg.cwd) - 1] = '\0';
+        } else {
+            strncpy(cfg.cwd, cwd_physical, sizeof(cfg.cwd) - 1);
+            cfg.cwd[sizeof(cfg.cwd) - 1] = '\0';
+        }
+    } else {
+        strncpy(cfg.cwd, cwd_physical, sizeof(cfg.cwd) - 1);
+        cfg.cwd[sizeof(cfg.cwd) - 1] = '\0';
     }
 
     const char *home = getenv("HOME");
