@@ -266,14 +266,22 @@ static void parse_args(int argc, char **argv, Config *cfg,
 #endif
 
 int main(int argc, char **argv) {
-    /* Check for --version/--daemon early (before other initialization) */
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--version") == 0) {
+    /* Check for --version/--daemon (must be first argument) */
+    if (argc >= 2) {
+        if (strcmp(argv[1], "--version") == 0) {
+            if (argc > 2) {
+                fprintf(stderr, "Error: --version takes no other arguments\n");
+                return 1;
+            }
             printf("l %s\n", VERSION);
             return 0;
         }
-        if (strcmp(argv[i], "--daemon") == 0) {
-            const char *subcmd = (i + 1 < argc) ? argv[i + 1] : NULL;
+        if (strcmp(argv[1], "--daemon") == 0) {
+            const char *subcmd = (argc > 2) ? argv[2] : NULL;
+            if (argc > 3) {
+                fprintf(stderr, "Error: --daemon takes at most one subcommand\n");
+                return 1;
+            }
             daemon_run(argv[0], subcmd);
             return 0;
         }
