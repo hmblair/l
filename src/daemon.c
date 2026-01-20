@@ -420,34 +420,21 @@ static int cache_get_count(void) {
     char cache_path[PATH_MAX];
     get_cache_path(cache_path, sizeof(cache_path));
 
-    char temp_path[PATH_MAX];
-    snprintf(temp_path, sizeof(temp_path), "%s.tmp", cache_path);
-
-    /* Try temp database first (scan in progress), then fall back to final */
-    const char *paths[] = {temp_path, cache_path};
-
-    for (int i = 0; i < 2; i++) {
-        struct stat st;
-        if (stat(paths[i], &st) != 0) continue;
-
-        sqlite3 *db;
-        if (sqlite3_open_v2(paths[i], &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK) {
-            continue;
-        }
-
-        int count = 0;
-        sqlite3_stmt *stmt;
-        if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM sizes", -1, &stmt, NULL) == SQLITE_OK) {
-            if (sqlite3_step(stmt) == SQLITE_ROW) {
-                count = sqlite3_column_int(stmt, 0);
-            }
-            sqlite3_finalize(stmt);
-        }
-        sqlite3_close(db);
-
-        if (count > 0) return count;  /* Return first non-zero count */
+    sqlite3 *db;
+    if (sqlite3_open_v2(cache_path, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK) {
+        return 0;
     }
-    return 0;
+
+    int count = 0;
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM sizes", -1, &stmt, NULL) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            count = sqlite3_column_int(stmt, 0);
+        }
+        sqlite3_finalize(stmt);
+    }
+    sqlite3_close(db);
+    return count;
 }
 
 static time_t cache_get_mtime(void) {
