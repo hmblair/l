@@ -52,6 +52,7 @@ SRCDIR = src
 COMMON_OBJS = $(SRCDIR)/common.o
 CACHE_CLIENT_OBJS = $(SRCDIR)/cache.o
 CACHE_DAEMON_OBJS = $(SRCDIR)/cache_daemon.o
+SCAN_OBJS = $(SRCDIR)/scan.o
 GIT_OBJS = $(SRCDIR)/git.o
 TREE_OBJS = $(SRCDIR)/tree.o
 UI_OBJS = $(SRCDIR)/ui.o $(SRCDIR)/icons.o $(SRCDIR)/fileinfo.o
@@ -67,7 +68,7 @@ $(BINDIR):
 $(BINDIR)/l: $(SRCDIR)/l.o $(COMMON_OBJS) $(CACHE_CLIENT_OBJS) $(GIT_OBJS) $(TREE_OBJS) $(UI_OBJS) $(DAEMON_OBJS) $(SELECT_OBJS) | $(BINDIR)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
-$(BINDIR)/l-cached: $(SRCDIR)/ld.o $(COMMON_OBJS) $(CACHE_DAEMON_OBJS) | $(BINDIR)
+$(BINDIR)/l-cached: $(SRCDIR)/ld.o $(COMMON_OBJS) $(CACHE_DAEMON_OBJS) $(SCAN_OBJS) | $(BINDIR)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
 $(BINDIR)/cl: $(SRCDIR)/cl | $(BINDIR)
@@ -107,7 +108,10 @@ $(SRCDIR)/daemon.o: $(SRCDIR)/daemon.c $(SRCDIR)/daemon.h $(SRCDIR)/common.h
 $(SRCDIR)/select.o: $(SRCDIR)/select.c $(SRCDIR)/select.h $(SRCDIR)/ui.h $(SRCDIR)/common.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(SRCDIR)/ld.o: $(SRCDIR)/ld.c $(SRCDIR)/common.h $(SRCDIR)/cache.h
+$(SRCDIR)/ld.o: $(SRCDIR)/ld.c $(SRCDIR)/common.h $(SRCDIR)/cache.h $(SRCDIR)/scan.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(SRCDIR)/scan.o: $(SRCDIR)/scan.c $(SRCDIR)/scan.h $(SRCDIR)/common.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 install: all

@@ -38,7 +38,7 @@ int cache_load(void) {
     sqlite3_busy_timeout(g_db, 1000);
 
     /* Prepare lookup statement */
-    const char *sql = "SELECT size, file_count, dir_mtime FROM sizes WHERE path = ?";
+    const char *sql = "SELECT size, file_count FROM sizes WHERE path = ?";
     if (sqlite3_prepare_v2(g_db, sql, -1, &g_lookup_stmt, NULL) != SQLITE_OK) {
         sqlite3_close(g_db);
         g_db = NULL;
@@ -60,7 +60,6 @@ int cache_lookup(const char *path, CacheEntry *out) {
     if (sqlite3_step(g_lookup_stmt) == SQLITE_ROW) {
         out->size = sqlite3_column_int64(g_lookup_stmt, 0);
         out->file_count = sqlite3_column_int64(g_lookup_stmt, 1);
-        out->dir_mtime = sqlite3_column_int64(g_lookup_stmt, 2);
         found = 1;
     }
 
@@ -268,17 +267,10 @@ DirStats dir_stats_get(const char *path, dir_stats_cache_fn cache_fn) {
     return result;
 }
 
-/* Cache lookup wrapper for dir_stats with mtime validation */
+/* Cache lookup wrapper for dir_stats */
 int cache_lookup_wrapper(const char *path, off_t *size, long *count) {
     const CacheEntry *cached = cache_lookup_entry(path);
     if (cached && cached->size >= 0 && cached->file_count >= 0) {
-        /* Validate mtime if available (skip if dir_mtime is 0 = not set) */
-        if (cached->dir_mtime > 0) {
-            struct stat st;
-            if (stat(path, &st) == 0 && st.st_mtime != cached->dir_mtime) {
-                return 0;  /* mtime changed, cache is stale */
-            }
-        }
         *size = (off_t)cached->size;
         *count = (long)cached->file_count;
         return 1;

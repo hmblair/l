@@ -226,7 +226,7 @@ static void get_service_path(char *buf, size_t len) {
 
 static void get_cache_path(char *buf, size_t len) {
     const char *home = getenv("HOME");
-    snprintf(buf, len, "%s/.cache/l/sizes.db", home ? home : "/tmp");
+    snprintf(buf, len, "%s/.cache/l/sizes-v2.db", home ? home : "/tmp");
 }
 
 static void get_log_path(char *buf, size_t len) {

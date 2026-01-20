@@ -233,7 +233,7 @@ void path_abbreviate_home(const char *path, char *buf, size_t len, const char *h
 
 void cache_get_path(char *buf, size_t len) {
     const char *home = getenv("HOME");
-    snprintf(buf, len, "%s/.cache/l/sizes.db", home ? home : "/tmp");
+    snprintf(buf, len, "%s/.cache/l/sizes-v2.db", home ? home : "/tmp");
 }
 
 int path_is_network_fs(const char *path) {

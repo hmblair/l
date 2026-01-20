@@ -20,7 +20,6 @@
 typedef struct {
     int64_t size;
     int64_t file_count;
-    int64_t dir_mtime;
 } CacheEntry;
 
 /* Directory statistics result */
@@ -68,7 +67,7 @@ void cache_unload(void);
  */
 DirStats dir_stats_get(const char *path, dir_stats_cache_fn cache_fn);
 
-/* Cache lookup wrapper with mtime validation (for use with dir_stats_get) */
+/* Cache lookup wrapper (for use with dir_stats_get) */
 int cache_lookup_wrapper(const char *path, off_t *size, long *count);
 
 /* Get directory stats with cache lookup */
@@ -76,27 +75,25 @@ DirStats get_dir_stats_cached(const char *path);
 
 /* ============================================================================
  * Daemon API (for ld.c) - read-write operations
+ *
+ * The daemon writes to a temp database during each scan, then atomically
+ * replaces the main database when complete. This ensures clients always
+ * see a consistent snapshot.
  * ============================================================================ */
 
-/* Initialize cache for daemon (read-write) - returns 0 on success */
+/* Create fresh temp database for a new scan - returns 0 on success */
 int cache_daemon_init(void);
 
 /* Store a cache entry - returns 0 on success */
-int cache_daemon_store(const char *path, off_t size, long file_count, time_t dir_mtime);
-
-/* Look up entry (daemon side) */
-const CacheEntry *cache_daemon_lookup(const char *path);
-
-/* Checkpoint WAL to main database */
-int cache_daemon_save(void);
+int cache_daemon_store(const char *path, off_t size, long file_count);
 
 /* Get entry count (for status display) */
 int cache_daemon_count(void);
 
-/* Remove cache entries for paths that no longer exist */
-int cache_daemon_prune_stale(void);
+/* Finalize and atomically replace main database with temp */
+int cache_daemon_save(void);
 
-/* Free cache resources */
+/* Clean up (removes temp db if save wasn't called) */
 void cache_daemon_close(void);
 
 #endif /* L_CACHE_H */
