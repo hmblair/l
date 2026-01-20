@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <stdarg.h>
+#include <sys/ioctl.h>
 
 /* ============================================================================
  * Path Wrappers (using Config)
@@ -756,6 +757,15 @@ static void card_init(Card *card) {
     card->max_width = 0;
 }
 
+/* Get terminal width (columns) */
+static int get_terminal_width(void) {
+    struct winsize ws;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
+        return ws.ws_col;
+    }
+    return 80;  /* Default fallback */
+}
+
 /* Calculate visible length (excluding ANSI escape sequences) */
 static int visible_strlen(const char *s) {
     int len = 0;
@@ -771,6 +781,66 @@ static int visible_strlen(const char *s) {
         }
     }
     return len;
+}
+
+/* Truncate string to max_visible_len visible characters, adding "..." if truncated.
+ * Preserves ANSI escape sequences. Returns new string that must be freed. */
+static char *truncate_visible(const char *s, int max_visible_len) {
+    if (max_visible_len < 4) max_visible_len = 4;
+
+    int visible_len = visible_strlen(s);
+    if (visible_len <= max_visible_len) {
+        return xstrdup(s);
+    }
+
+    int target_visible = max_visible_len - 3;
+
+    size_t alloc_size = strlen(s) + 4;
+    char *result = xmalloc(alloc_size);
+
+    const char *src = s;
+    char *dst = result;
+    int visible_count = 0;
+    int in_escape = 0;
+
+    while (*src && visible_count < target_visible) {
+        if (*src == '\033') {
+            in_escape = 1;
+            *dst++ = *src++;
+        } else if (in_escape) {
+            *dst++ = *src++;
+            if (*(src - 1) == 'm') in_escape = 0;
+        } else {
+            if ((*src & 0xC0) != 0x80) {
+                visible_count++;
+                if (visible_count > target_visible) break;
+            }
+            *dst++ = *src++;
+            while (*src && (*src & 0xC0) == 0x80) {
+                *dst++ = *src++;
+            }
+        }
+    }
+
+    *dst++ = '.';
+    *dst++ = '.';
+    *dst++ = '.';
+
+    /* Copy remaining escape sequences to ensure colors reset */
+    while (*src) {
+        if (*src == '\033') {
+            in_escape = 1;
+            *dst++ = *src++;
+        } else if (in_escape) {
+            *dst++ = *src++;
+            if (*(src - 1) == 'm') in_escape = 0;
+        } else {
+            src++;
+        }
+    }
+
+    *dst = '\0';
+    return result;
 }
 
 static void card_add(Card *card, const char *fmt, ...) {
@@ -802,7 +872,16 @@ static void card_add_empty(Card *card) {
 }
 
 static void card_print(const Card *card, const Config *cfg) {
-    int width = card->max_width + 4;  /* 2 padding + 2 border chars */
+    int term_width = cfg->is_tty ? get_terminal_width() : 0;
+    int max_content_width = term_width > 0 ? term_width - 4 : 0;  /* 2 border + 2 padding */
+
+    /* Limit card width to terminal if applicable */
+    int content_width = card->max_width;
+    if (max_content_width > 0 && content_width > max_content_width) {
+        content_width = max_content_width;
+    }
+
+    int width = content_width + 4;
     if (width < 20) width = 20;
 
     /* Top border */
@@ -812,10 +891,27 @@ static void card_print(const Card *card, const Config *cfg) {
 
     /* Content lines */
     for (int i = 0; i < card->count; i++) {
-        int padding = width - 4 - card->visible_lens[i];
-        printf("%s│%s %s", CLR(cfg, COLOR_GREY), RST(cfg), card->lines[i]);
+        char *display_line;
+        int display_len;
+
+        if (max_content_width > 0 && card->visible_lens[i] > max_content_width) {
+            display_line = truncate_visible(card->lines[i], max_content_width);
+            display_len = visible_strlen(display_line);
+        } else {
+            display_line = (char *)card->lines[i];
+            display_len = card->visible_lens[i];
+        }
+
+        int padding = width - 4 - display_len;
+        if (padding < 0) padding = 0;
+
+        printf("%s│%s %s", CLR(cfg, COLOR_GREY), RST(cfg), display_line);
         for (int j = 0; j < padding; j++) printf(" ");
         printf(" %s│%s\n", CLR(cfg, COLOR_GREY), RST(cfg));
+
+        if (display_line != card->lines[i]) {
+            free(display_line);
+        }
     }
 
     /* Bottom border */
