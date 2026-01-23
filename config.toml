@@ -98,6 +98,7 @@ env = "Environment"
 sql = "SQL"
 
 # Scientific data
+h5,hdf5 = "HDF5 data"
 cif,pdb = "Molecular structure"
 fasta,fa,fna,faa = "FASTA sequence"
 fastq,fq = "FASTQ sequence"
