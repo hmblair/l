@@ -1099,8 +1099,12 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
         card_add_empty(&card);
 
         if (fe->branch) {
-            card_add(&card, "%sBranch:%s   %s %s(%s)%s", CLR(cfg, COLOR_GREY), RST(cfg),
-                     fe->branch, CLR(cfg, COLOR_GREY), fe->short_hash, RST(cfg));
+            if (fe->short_hash[0]) {
+                card_add(&card, "%sBranch:%s   %s %s(%s)%s", CLR(cfg, COLOR_GREY), RST(cfg),
+                         fe->branch, CLR(cfg, COLOR_GREY), fe->short_hash, RST(cfg));
+            } else {
+                card_add(&card, "%sBranch:%s   %s", CLR(cfg, COLOR_GREY), RST(cfg), fe->branch);
+            }
         }
         if (fe->commit_count[0]) {
             card_add(&card, "%sCommits:%s  %s", CLR(cfg, COLOR_GREY), RST(cfg), fe->commit_count);
