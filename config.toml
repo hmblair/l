@@ -3,9 +3,6 @@
 [icons]
 default = ""
 symlink = ""
-symlink_dir = ""
-symlink_exec = ""
-symlink_file = ""
 closed_directory = ""
 open_directory = ""
 locked_dir = "󰉐"
@@ -32,6 +29,7 @@ cursor = "❯"
 jpg,png,gif,webp,bmp,ico = ""
 mp3,wav,flac,ogg,m4a,m4b = "󰝚"
 mp4,mkv,avi,mov,webm = "󰿎"
+py = ""
 
 [filetypes]
 # Programming languages

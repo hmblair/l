@@ -184,12 +184,16 @@ const char *get_icon(const Icons *icons, FileType type, int is_expanded,
             return icons->socket;
         case FTYPE_FIFO:
             return icons->fifo;
-        case FTYPE_SYMLINK:
-            return ICON_OR_FALLBACK(icons->symlink_file, icons->symlink);
+        case FTYPE_SYMLINK: {
+            const char *ext_icon = get_ext_icon(icons, name);
+            if (ext_icon) return ext_icon;
+            if (is_binary && icons->binary[0]) return icons->binary;
+            return icons->file;
+        }
         case FTYPE_SYMLINK_DIR:
-            return ICON_OR_FALLBACK(icons->symlink_dir, icons->symlink);
+            return is_expanded ? icons->open_directory : icons->closed_directory;
         case FTYPE_SYMLINK_EXEC:
-            return ICON_OR_FALLBACK(icons->symlink_exec, icons->symlink);
+            return icons->executable;
         case FTYPE_SYMLINK_DEVICE:
             return icons->device;
         case FTYPE_SYMLINK_SOCKET:
