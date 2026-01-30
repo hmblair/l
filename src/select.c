@@ -441,6 +441,62 @@ static int find_next_file(SelectState *state, int from, int direction) {
  * Clipboard
  * ============================================================================ */
 
+/* Check if file should be opened with system handler vs EDITOR */
+static int should_open_externally(const char *path) {
+    const char *ext = strrchr(path, '.');
+    if (!ext) return 0;
+    ext++;  /* skip the dot */
+
+    /* Images */
+    if (strcasecmp(ext, "png") == 0 || strcasecmp(ext, "jpg") == 0 ||
+        strcasecmp(ext, "jpeg") == 0 || strcasecmp(ext, "gif") == 0 ||
+        strcasecmp(ext, "bmp") == 0 || strcasecmp(ext, "tiff") == 0 ||
+        strcasecmp(ext, "tif") == 0 || strcasecmp(ext, "webp") == 0 ||
+        strcasecmp(ext, "svg") == 0 || strcasecmp(ext, "ico") == 0 ||
+        strcasecmp(ext, "heic") == 0 || strcasecmp(ext, "heif") == 0 ||
+        strcasecmp(ext, "raw") == 0 || strcasecmp(ext, "psd") == 0)
+        return 1;
+
+    /* Audio */
+    if (strcasecmp(ext, "mp3") == 0 || strcasecmp(ext, "wav") == 0 ||
+        strcasecmp(ext, "flac") == 0 || strcasecmp(ext, "aac") == 0 ||
+        strcasecmp(ext, "ogg") == 0 || strcasecmp(ext, "m4a") == 0 ||
+        strcasecmp(ext, "wma") == 0 || strcasecmp(ext, "aiff") == 0)
+        return 1;
+
+    /* Video */
+    if (strcasecmp(ext, "mp4") == 0 || strcasecmp(ext, "mov") == 0 ||
+        strcasecmp(ext, "avi") == 0 || strcasecmp(ext, "mkv") == 0 ||
+        strcasecmp(ext, "wmv") == 0 || strcasecmp(ext, "flv") == 0 ||
+        strcasecmp(ext, "webm") == 0 || strcasecmp(ext, "m4v") == 0)
+        return 1;
+
+    /* Documents */
+    if (strcasecmp(ext, "pdf") == 0 || strcasecmp(ext, "doc") == 0 ||
+        strcasecmp(ext, "docx") == 0 || strcasecmp(ext, "xls") == 0 ||
+        strcasecmp(ext, "xlsx") == 0 || strcasecmp(ext, "ppt") == 0 ||
+        strcasecmp(ext, "pptx") == 0 || strcasecmp(ext, "odt") == 0 ||
+        strcasecmp(ext, "ods") == 0 || strcasecmp(ext, "odp") == 0 ||
+        strcasecmp(ext, "pages") == 0 || strcasecmp(ext, "numbers") == 0 ||
+        strcasecmp(ext, "key") == 0)
+        return 1;
+
+    /* Archives */
+    if (strcasecmp(ext, "zip") == 0 || strcasecmp(ext, "tar") == 0 ||
+        strcasecmp(ext, "gz") == 0 || strcasecmp(ext, "rar") == 0 ||
+        strcasecmp(ext, "7z") == 0 || strcasecmp(ext, "dmg") == 0)
+        return 1;
+
+    /* Other binary */
+    if (strcasecmp(ext, "exe") == 0 || strcasecmp(ext, "app") == 0 ||
+        strcasecmp(ext, "dll") == 0 || strcasecmp(ext, "so") == 0 ||
+        strcasecmp(ext, "dylib") == 0 || strcasecmp(ext, "o") == 0 ||
+        strcasecmp(ext, "a") == 0)
+        return 1;
+
+    return 0;
+}
+
 static void copy_to_clipboard(const char *text) {
 #ifdef __APPLE__
     FILE *pbcopy = popen("pbcopy", "w");
@@ -622,16 +678,26 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                     }
                     render_view(&state, &render_ctx, &collapsed, files_only);
                 } else {
-                    /* Open file in editor */
-                    const char *editor = getenv("EDITOR");
-                    if (!editor) editor = "vim";
+                    /* Open file: use system handler for binary, EDITOR for text */
                     char cmd[PATH_MAX + 64];
 
                     printf("\r\033[K\n");
                     term_disable_raw();
 
-                    snprintf(cmd, sizeof(cmd), "%s \"%s\"", editor,
-                             current->node->entry.path);
+                    if (should_open_externally(current->node->entry.path)) {
+#ifdef PLATFORM_MACOS
+                        snprintf(cmd, sizeof(cmd), "open \"%s\"",
+                                 current->node->entry.path);
+#else
+                        snprintf(cmd, sizeof(cmd), "xdg-open \"%s\" 2>/dev/null",
+                                 current->node->entry.path);
+#endif
+                    } else {
+                        const char *editor = getenv("EDITOR");
+                        if (!editor) editor = "vim";
+                        snprintf(cmd, sizeof(cmd), "%s \"%s\"", editor,
+                                 current->node->entry.path);
+                    }
                     if (system(cmd)) { /* ignore */ }
 
                     state_free(&state);
