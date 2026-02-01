@@ -29,7 +29,8 @@ ifeq ($(UNAME),Darwin)
     CFLAGS += -fopenmp
   endif
 else
-  CFLAGS += -fopenmp
+  # Linux needs _GNU_SOURCE for O_DIRECTORY, fdopendir, fstatat, etc.
+  CFLAGS += -fopenmp -D_GNU_SOURCE -D_DEFAULT_SOURCE
 endif
 
 # Optional libgit2 support
