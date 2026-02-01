@@ -42,7 +42,7 @@ int cache_daemon_init(void) {
 
     /* Remove old temp files */
     unlink(d_temp_path);
-    char wal_path[PATH_MAX + 8], shm_path[PATH_MAX + 8];
+    char wal_path[PATH_MAX + 16], shm_path[PATH_MAX + 16];
     snprintf(wal_path, sizeof(wal_path), "%s-wal", d_temp_path);
     snprintf(shm_path, sizeof(shm_path), "%s-shm", d_temp_path);
     unlink(wal_path);
@@ -120,7 +120,7 @@ int cache_daemon_save(void) {
     d_db = NULL;
 
     /* Clean up WAL/SHM files from temp database */
-    char wal_path[PATH_MAX + 8], shm_path[PATH_MAX + 8];
+    char wal_path[PATH_MAX + 16], shm_path[PATH_MAX + 16];
     snprintf(wal_path, sizeof(wal_path), "%s-wal", d_temp_path);
     snprintf(shm_path, sizeof(shm_path), "%s-shm", d_temp_path);
     unlink(wal_path);
@@ -146,7 +146,7 @@ void cache_daemon_close(void) {
     }
     /* Clean up temp files if save wasn't called */
     unlink(d_temp_path);
-    char wal_path[PATH_MAX + 8], shm_path[PATH_MAX + 8];
+    char wal_path[PATH_MAX + 16], shm_path[PATH_MAX + 16];
     snprintf(wal_path, sizeof(wal_path), "%s-wal", d_temp_path);
     snprintf(shm_path, sizeof(shm_path), "%s-shm", d_temp_path);
     unlink(wal_path);
