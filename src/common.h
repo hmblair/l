@@ -5,9 +5,8 @@
 #ifndef L_COMMON_H
 #define L_COMMON_H
 
-#define _GNU_SOURCE      /* For O_DIRECTORY, fdopendir, fstatat on Linux */
-#define _DEFAULT_SOURCE  /* For DT_* constants on Linux */
-#define _BSD_SOURCE      /* For compatibility */
+/* Note: _GNU_SOURCE and _DEFAULT_SOURCE are set via CFLAGS in Makefile
+ * to ensure they're defined before any system headers are included. */
 
 #include <stdio.h>
 #include <stdlib.h>

@@ -17,7 +17,7 @@
 static sqlite3 *d_db = NULL;
 static sqlite3_stmt *d_insert_stmt = NULL;
 static char d_final_path[PATH_MAX];
-static char d_temp_path[PATH_MAX];
+static char d_temp_path[PATH_MAX + 8];  /* +8 for ".tmp" suffix */
 
 int cache_daemon_init(void) {
     /* Close any existing database */
