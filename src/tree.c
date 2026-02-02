@@ -223,6 +223,71 @@ static void apply_git_status(FileEntry *fe, GitCache *git, int compute_diff) {
     }
 }
 
+/* Find git repo roots in a file list and mark them.
+ * Returns array of repo paths to populate (caller must free).
+ * Sets is_git_repo_root[i] and is_submodule[i] for each entry. */
+static char **find_git_repo_roots(FileList *list, int in_git_repo,
+                                   int *is_git_repo_root, int *is_submodule,
+                                   size_t *out_count) {
+    char **git_repos = NULL;
+    size_t count = 0;
+
+    for (size_t i = 0; i < list->count; i++) {
+        is_git_repo_root[i] = 0;
+        is_submodule[i] = 0;
+        FileEntry *fe = &list->entries[i];
+        if ((fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR) &&
+            strcmp(fe->name, ".git") != 0 && path_is_git_root(fe->path)) {
+            is_git_repo_root[i] = 1;
+            fe->is_git_root = 1;
+            if (in_git_repo) {
+                is_submodule[i] = 1;
+            } else {
+                git_repos = xrealloc(git_repos, (count + 1) * sizeof(char *));
+                git_repos[count++] = fe->path;
+            }
+        }
+    }
+
+    *out_count = count;
+    return git_repos;
+}
+
+/* Aggregate size and file count from children into parent entry */
+static void aggregate_child_stats(FileEntry *entry, TreeNode *children,
+                                   size_t child_count, int do_sizes, int do_counts) {
+    off_t total_size = 0;
+    long total_count = 0;
+    int has_unknown_size = 0;
+
+    for (size_t i = 0; i < child_count; i++) {
+        FileEntry *ce = &children[i].entry;
+        if (ce->size < 0) has_unknown_size = 1;
+        else total_size += ce->size;
+
+        FileType t = ce->type;
+        if (t == FTYPE_FILE || t == FTYPE_EXEC ||
+            t == FTYPE_SYMLINK || t == FTYPE_SYMLINK_EXEC) {
+            total_count++;
+        } else if (ce->file_count >= 0) {
+            total_count += ce->file_count;
+        }
+    }
+
+    if (do_sizes) entry->size = has_unknown_size ? -1 : total_size;
+    if (do_counts) entry->file_count = total_count;
+}
+
+/* Check if all children are ignored */
+static int all_children_ignored(TreeNode *children, size_t child_count) {
+    for (size_t i = 0; i < child_count; i++) {
+        if (!children[i].entry.is_ignored) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static void build_tree_children(TreeNode *parent, int depth,
                                  const TreeBuildOpts *opts, GitCache *git,
                                  int in_git_repo, int parent_is_ignored) {
@@ -243,36 +308,21 @@ static void build_tree_children(TreeNode *parent, int depth,
     }
 
     /* Find git repo roots */
-    char **git_repos = NULL;
-    size_t git_repo_count = 0;
     int *is_git_repo_root = xmalloc(list.count * sizeof(int));
     int *is_submodule = xmalloc(list.count * sizeof(int));
-
-    for (size_t i = 0; i < list.count; i++) {
-        is_git_repo_root[i] = 0;
-        is_submodule[i] = 0;
-        FileEntry *fe = &list.entries[i];
-        if ((fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR) &&
-            strcmp(fe->name, ".git") != 0 && path_is_git_root(fe->path)) {
-            is_git_repo_root[i] = 1;
-            fe->is_git_root = 1;
-            if (in_git_repo) {
-                is_submodule[i] = 1;
-            } else if (opts->compute.git_status) {
-                git_repos = xrealloc(git_repos, (git_repo_count + 1) * sizeof(char *));
-                git_repos[git_repo_count++] = fe->path;
-            }
-        }
-    }
+    size_t git_repo_count = 0;
+    char **git_repos = opts->compute.git_status
+        ? find_git_repo_roots(&list, in_git_repo, is_git_repo_root, is_submodule, &git_repo_count)
+        : NULL;
 
     /* Populate git repos */
-    if (opts->compute.git_status) {
+    if (git_repos) {
         #pragma omp parallel for schedule(dynamic)
         for (size_t i = 0; i < git_repo_count; i++) {
             git_populate_repo(git, git_repos[i], opts->compute.git_diff);
         }
+        free(git_repos);
     }
-    free(git_repos);
 
     /* Allocate children */
     parent->children = xmalloc(list.count * sizeof(TreeNode));
@@ -308,17 +358,9 @@ static void build_tree_children(TreeNode *parent, int depth,
             build_tree_children(child, depth + 1, opts, git, child_in_git_repo, child->entry.is_ignored);
 
             /* Mark directory as ignored if all children are ignored */
-            if (!child->entry.is_ignored && child->child_count > 0) {
-                int all_ignored = 1;
-                for (size_t j = 0; j < child->child_count; j++) {
-                    if (!child->children[j].entry.is_ignored) {
-                        all_ignored = 0;
-                        break;
-                    }
-                }
-                if (all_ignored) {
-                    child->entry.is_ignored = 1;
-                }
+            if (!child->entry.is_ignored && child->child_count > 0 &&
+                all_children_ignored(child->children, child->child_count)) {
+                child->entry.is_ignored = 1;
             }
 
             if (opts->compute.git_diff) {
@@ -328,26 +370,8 @@ static void build_tree_children(TreeNode *parent, int depth,
             /* Aggregate sizes from children if showing hidden */
             if (opts->show_hidden && child->child_count > 0 &&
                 (opts->compute.sizes || opts->compute.file_counts)) {
-                off_t total_size = 0;
-                long total_count = 0;
-                int has_unknown_size = 0;
-
-                for (size_t j = 0; j < child->child_count; j++) {
-                    FileEntry *ce = &child->children[j].entry;
-                    if (ce->size < 0) has_unknown_size = 1;
-                    else total_size += ce->size;
-
-                    FileType t = ce->type;
-                    if (t == FTYPE_FILE || t == FTYPE_EXEC ||
-                        t == FTYPE_SYMLINK || t == FTYPE_SYMLINK_EXEC) {
-                        total_count++;
-                    } else if (ce->file_count >= 0) {
-                        total_count += ce->file_count;
-                    }
-                }
-
-                if (opts->compute.sizes) child->entry.size = has_unknown_size ? -1 : total_size;
-                if (opts->compute.file_counts) child->entry.file_count = total_count;
+                aggregate_child_stats(&child->entry, child->children, child->child_count,
+                                      opts->compute.sizes, opts->compute.file_counts);
             }
         }
     }
@@ -432,41 +456,15 @@ TreeNode *build_tree(const char *path, const TreeBuildOpts *opts,
         build_tree_children(root, 0, opts, git, in_git_repo, root->entry.is_ignored);
 
         /* Mark root as ignored if all children are ignored */
-        if (!root->entry.is_ignored && root->child_count > 0) {
-            int all_ignored = 1;
-            for (size_t i = 0; i < root->child_count; i++) {
-                if (!root->children[i].entry.is_ignored) {
-                    all_ignored = 0;
-                    break;
-                }
-            }
-            if (all_ignored) {
-                root->entry.is_ignored = 1;
-            }
+        if (!root->entry.is_ignored && root->child_count > 0 &&
+            all_children_ignored(root->children, root->child_count)) {
+            root->entry.is_ignored = 1;
         }
 
         if (opts->show_hidden && root->child_count > 0 &&
             (opts->compute.sizes || opts->compute.file_counts)) {
-            off_t total_size = 0;
-            long total_count = 0;
-            int has_unknown_size = 0;
-
-            for (size_t i = 0; i < root->child_count; i++) {
-                FileEntry *ce = &root->children[i].entry;
-                if (ce->size < 0) has_unknown_size = 1;
-                else total_size += ce->size;
-
-                FileType t = ce->type;
-                if (t == FTYPE_FILE || t == FTYPE_EXEC ||
-                    t == FTYPE_SYMLINK || t == FTYPE_SYMLINK_EXEC) {
-                    total_count++;
-                } else if (ce->file_count >= 0) {
-                    total_count += ce->file_count;
-                }
-            }
-
-            if (opts->compute.sizes) root->entry.size = has_unknown_size ? -1 : total_size;
-            if (opts->compute.file_counts) root->entry.file_count = total_count;
+            aggregate_child_stats(&root->entry, root->children, root->child_count,
+                                  opts->compute.sizes, opts->compute.file_counts);
         }
     }
 
@@ -501,21 +499,17 @@ void tree_expand_node(TreeNode *node, const TreeBuildOpts *opts,
 
     int *is_git_repo_root = xmalloc(list.count * sizeof(int));
     int *is_submodule = xmalloc(list.count * sizeof(int));
+    size_t git_repo_count = 0;
+    char **git_repos = opts->compute.git_status
+        ? find_git_repo_roots(&list, in_git_repo, is_git_repo_root, is_submodule, &git_repo_count)
+        : NULL;
 
-    for (size_t i = 0; i < list.count; i++) {
-        is_git_repo_root[i] = 0;
-        is_submodule[i] = 0;
-        FileEntry *fe = &list.entries[i];
-        if ((fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR) &&
-            strcmp(fe->name, ".git") != 0 && path_is_git_root(fe->path)) {
-            is_git_repo_root[i] = 1;
-            fe->is_git_root = 1;
-            if (in_git_repo) {
-                is_submodule[i] = 1;
-            } else if (opts->compute.git_status) {
-                git_populate_repo(git, fe->path, opts->compute.git_diff);
-            }
+    /* Populate git repos (no parallelism for single-node expansion) */
+    if (git_repos) {
+        for (size_t i = 0; i < git_repo_count; i++) {
+            git_populate_repo(git, git_repos[i], opts->compute.git_diff);
         }
+        free(git_repos);
     }
 
     node->children = xmalloc(list.count * sizeof(TreeNode));
