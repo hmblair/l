@@ -155,4 +155,7 @@ uninstall:
 clean:
 	rm -f $(SRCDIR)/*.o $(BINDIR)/l $(BINDIR)/l-cached $(BINDIR)/cl
 
-.PHONY: all install uninstall clean
+lint:
+	clang-tidy $(SRCDIR)/*.c -- -I$(SRCDIR) $(CFLAGS) -I/usr/include -I/usr/lib/gcc/aarch64-linux-gnu/13/include -fopenmp
+
+.PHONY: all install uninstall clean lint
