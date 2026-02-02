@@ -404,7 +404,7 @@ TreeNode *build_tree(const char *path, const TreeBuildOpts *opts,
         fileinfo_compute_content(&root->entry, opts->compute.line_counts, opts->compute.media_info);
     }
 
-    if (!is_virtual_fs && is_dir && !opts->show_hidden &&
+    if (!is_virtual_fs && is_dir &&
         (opts->compute.sizes || opts->compute.file_counts)) {
         DirStats stats = get_dir_stats_cached(abs_path);
         if (opts->compute.sizes) root->entry.size = stats.size;
