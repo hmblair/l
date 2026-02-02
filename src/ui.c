@@ -1141,9 +1141,9 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
                                 CLR(cfg, COLOR_RED), summary->deleted, RST(cfg));
             }
             if (summary->untracked) {
-                pos += snprintf(status_buf + pos, sizeof(status_buf) - pos,
-                                "%s%s%d untracked%s", pos > 0 ? ", " : "",
-                                CLR(cfg, COLOR_GREY), summary->untracked, RST(cfg));
+                snprintf(status_buf + pos, sizeof(status_buf) - pos,
+                         "%s%s%d untracked%s", pos > 0 ? ", " : "",
+                         CLR(cfg, COLOR_GREY), summary->untracked, RST(cfg));
             }
             card_add(&card, "%sStatus:%s   %s", CLR(cfg, COLOR_GREY), RST(cfg), status_buf);
         }
@@ -1170,9 +1170,9 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
                                 CLR(cfg, COLOR_RED), gs->deleted, RST(cfg));
             }
             if (gs->untracked) {
-                pos += snprintf(status_buf + pos, sizeof(status_buf) - pos,
-                                "%s%s%d untracked%s", pos > 0 ? ", " : "",
-                                CLR(cfg, COLOR_GREY), gs->untracked, RST(cfg));
+                snprintf(status_buf + pos, sizeof(status_buf) - pos,
+                         "%s%s%d untracked%s", pos > 0 ? ", " : "",
+                         CLR(cfg, COLOR_GREY), gs->untracked, RST(cfg));
             }
             card_add_empty(&card);
             card_add(&card, "%sStatus:%s   %s", CLR(cfg, COLOR_GREY), RST(cfg), status_buf);

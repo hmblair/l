@@ -490,7 +490,8 @@ int get_audio_duration(const char *path) {
                 if (memcmp(box + 4, "mvhd", 4) == 0) {
                     /* mvhd box found - read version to determine layout */
                     unsigned char mvhd[28];
-                    if (fread(mvhd, 1, 28, f) < 20) break;
+                    size_t mvhd_read = fread(mvhd, 1, 28, f);
+                    if (mvhd_read < 20) break;
 
                     int version = mvhd[0];
                     uint32_t timescale;
@@ -508,6 +509,7 @@ int get_audio_duration(const char *path) {
                          * [0] version, [1-3] flags
                          * [4-11] creation_time, [12-19] modification_time
                          * [20-23] timescale, [24-31] duration */
+                        if (mvhd_read < 28) break;
                         timescale = (mvhd[20] << 24) | (mvhd[21] << 16) | (mvhd[22] << 8) | mvhd[23];
                         duration = ((uint64_t)mvhd[24] << 56) | ((uint64_t)mvhd[25] << 48) |
                                    ((uint64_t)mvhd[26] << 40) | ((uint64_t)mvhd[27] << 32);

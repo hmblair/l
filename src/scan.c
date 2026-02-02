@@ -169,11 +169,12 @@ static ScanResult scan_impl(const char *path, dev_t root_dev, const ScanContext 
                             free(full);
                         } else {
                             if (subdir_count >= subdir_cap) {
-                                subdir_cap = subdir_cap ? subdir_cap * 2 : 16;
-                                char **new_subdirs = realloc(subdirs, subdir_cap * sizeof(char *));
+                                size_t new_cap = subdir_cap ? subdir_cap * 2 : 16;
+                                char **new_subdirs = realloc(subdirs, new_cap * sizeof(char *));
                                 if (!new_subdirs) {
                                     free(full);
                                 } else {
+                                    subdir_cap = new_cap;
                                     subdirs = new_subdirs;
                                     subdirs[subdir_count++] = full;
                                 }
