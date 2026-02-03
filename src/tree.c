@@ -253,31 +253,6 @@ static char **find_git_repo_roots(FileList *list, int in_git_repo,
     return git_repos;
 }
 
-/* Aggregate size and file count from children into parent entry */
-static void aggregate_child_stats(FileEntry *entry, TreeNode *children,
-                                   size_t child_count, int do_sizes, int do_counts) {
-    off_t total_size = 0;
-    long total_count = 0;
-    int has_unknown_size = 0;
-
-    for (size_t i = 0; i < child_count; i++) {
-        FileEntry *ce = &children[i].entry;
-        if (ce->size < 0) has_unknown_size = 1;
-        else total_size += ce->size;
-
-        FileType t = ce->type;
-        if (t == FTYPE_FILE || t == FTYPE_EXEC ||
-            t == FTYPE_SYMLINK || t == FTYPE_SYMLINK_EXEC) {
-            total_count++;
-        } else if (ce->file_count >= 0) {
-            total_count += ce->file_count;
-        }
-    }
-
-    if (do_sizes) entry->size = has_unknown_size ? -1 : total_size;
-    if (do_counts) entry->file_count = total_count;
-}
-
 /* Check if all children are ignored */
 static int all_children_ignored(TreeNode *children, size_t child_count) {
     for (size_t i = 0; i < child_count; i++) {
@@ -366,13 +341,6 @@ static void build_tree_children(TreeNode *parent, int depth,
             if (opts->compute.git_diff) {
                 child->entry.diff_removed = git_deleted_lines_direct(git, child->entry.path);
             }
-
-            /* Aggregate sizes from children if showing hidden */
-            if (opts->show_hidden && child->child_count > 0 &&
-                (opts->compute.sizes || opts->compute.file_counts)) {
-                aggregate_child_stats(&child->entry, child->children, child->child_count,
-                                      opts->compute.sizes, opts->compute.file_counts);
-            }
         }
     }
 
@@ -459,12 +427,6 @@ TreeNode *build_tree(const char *path, const TreeBuildOpts *opts,
         if (!root->entry.is_ignored && root->child_count > 0 &&
             all_children_ignored(root->children, root->child_count)) {
             root->entry.is_ignored = 1;
-        }
-
-        if (opts->show_hidden && root->child_count > 0 &&
-            (opts->compute.sizes || opts->compute.file_counts)) {
-            aggregate_child_stats(&root->entry, root->children, root->child_count,
-                                  opts->compute.sizes, opts->compute.file_counts);
         }
     }
 
