@@ -109,11 +109,18 @@ static ScanResult scan_impl(const char *path, dev_t root_dev, const ScanContext 
 
     int skip_file_count = path_is_git_dir(path);
 
+    /* Include this directory's own allocated size */
+    struct stat dir_st;
+    if (fstat(dirfd, &dir_st) == 0) {
+        result.size = dir_st.st_blocks * 512;
+    }
+
     struct attrlist attrList = {0};
     attrList.bitmapcount = ATTR_BIT_MAP_COUNT;
     attrList.commonattr = ATTR_CMN_RETURNED_ATTRS | ATTR_CMN_NAME |
                           ATTR_CMN_ERROR | ATTR_CMN_OBJTYPE;
     attrList.fileattr = ATTR_FILE_ALLOCSIZE;
+    attrList.dirattr = ATTR_DIR_ALLOCSIZE;
 
     char *attrBuf = malloc(ATTR_BUF_SIZE);
     if (!attrBuf) {
@@ -148,16 +155,19 @@ static ScanResult scan_impl(const char *path, dev_t root_dev, const ScanContext 
             fsobj_type_t obj_type = *(fsobj_type_t *)p;
             p += sizeof(fsobj_type_t);
 
-            off_t file_size = 0;
-            if (returned.fileattr & ATTR_FILE_ALLOCSIZE) {
-                file_size = *(off_t *)p;
+            off_t alloc_size = 0;
+            if (obj_type == VREG && (returned.fileattr & ATTR_FILE_ALLOCSIZE)) {
+                alloc_size = *(off_t *)p;
+            } else if (obj_type == VDIR && (returned.dirattr & ATTR_DIR_ALLOCSIZE)) {
+                alloc_size = *(off_t *)p;
             }
 
             if (!PATH_IS_DOT_OR_DOTDOT(name)) {
                 if (obj_type == VREG) {
-                    result.size += file_size;
+                    result.size += alloc_size;
                     if (!skip_file_count) result.file_count++;
                 } else if (obj_type == VDIR) {
+                    result.size += alloc_size;
                     char *full = malloc(PATH_MAX);
                     if (full) {
                         size_t plen = strlen(path);
@@ -226,6 +236,9 @@ static ScanResult scan_impl(const char *path, dev_t root_dev, const ScanContext 
 
     int skip_file_count = path_is_git_dir(path);
 
+    /* Include this directory's own allocated size */
+    result.size = dir_st.st_blocks * 512;
+
     DIR *dir = fdopendir(dirfd);
     if (!dir) {
         close(dirfd);
@@ -243,43 +256,18 @@ static ScanResult scan_impl(const char *path, dev_t root_dev, const ScanContext 
 
         int is_dir = 0;
 
-#ifdef DT_DIR
-        if (entry->d_type == DT_DIR) {
-            is_dir = 1;
-        } else if (entry->d_type == DT_REG) {
-            struct stat st;
-            if (fstatat(dirfd, entry->d_name, &st, AT_SYMLINK_NOFOLLOW) == 0) {
-                result.size += st.st_size;
-                if (!skip_file_count) result.file_count++;
-            }
-        } else if (entry->d_type == DT_LNK) {
-            if (!skip_file_count) result.file_count++;
-        } else if (entry->d_type == DT_UNKNOWN) {
-            struct stat st;
-            if (fstatat(dirfd, entry->d_name, &st, AT_SYMLINK_NOFOLLOW) == 0) {
-                if (S_ISDIR(st.st_mode)) {
-                    is_dir = 1;
-                } else if (S_ISREG(st.st_mode)) {
-                    result.size += st.st_size;
-                    if (!skip_file_count) result.file_count++;
-                } else if (S_ISLNK(st.st_mode)) {
-                    if (!skip_file_count) result.file_count++;
-                }
-            }
-        }
-#else
         struct stat st;
         if (fstatat(dirfd, entry->d_name, &st, AT_SYMLINK_NOFOLLOW) == 0) {
             if (S_ISDIR(st.st_mode)) {
                 is_dir = 1;
+                result.size += st.st_blocks * 512;
             } else if (S_ISREG(st.st_mode)) {
-                result.size += st.st_size;
+                result.size += st.st_blocks * 512;
                 if (!skip_file_count) result.file_count++;
             } else if (S_ISLNK(st.st_mode)) {
                 if (!skip_file_count) result.file_count++;
             }
         }
-#endif
 
         if (is_dir) {
             char *full = malloc(PATH_MAX);
