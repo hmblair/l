@@ -622,7 +622,9 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
         const char *target_base = strrchr(fe->symlink_target, '/');
         target_base = target_base ? target_base + 1 : fe->symlink_target;
         const char *target_style = (target_base[0] == '.') ? CLR(ctx->cfg, STYLE_ITALIC) : "";
-        printf(" %s %s%s%s%s", ctx->icons->symlink, color, target_style, abbrev, RST(ctx->cfg));
+        const char *target_color = (fe->type == FTYPE_SYMLINK_BROKEN) ?
+            CLR(ctx->cfg, COLOR_RED) : CLR(ctx->cfg, COLOR_CYAN);
+        printf(" %s%s%s %s%s%s%s", CLR(ctx->cfg, COLOR_GREY), ctx->icons->symlink, RST(ctx->cfg), target_color, target_style, abbrev, RST(ctx->cfg));
     }
 
     printf("\n");

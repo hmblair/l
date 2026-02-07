@@ -71,7 +71,6 @@ typedef struct Icons {
     char symlink_dir[L_MAX_ICON_LEN];
     char symlink_exec[L_MAX_ICON_LEN];
     char symlink_file[L_MAX_ICON_LEN];
-    char symlink_broken[L_MAX_ICON_LEN];
     char closed_directory[L_MAX_ICON_LEN];
     char open_directory[L_MAX_ICON_LEN];
     char locked_dir[L_MAX_ICON_LEN];

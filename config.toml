@@ -2,7 +2,7 @@
 
 [icons]
 default = ""
-symlink = ""
+symlink = ""
 closed_directory = ""
 open_directory = ""
 locked_dir = "󰉐"

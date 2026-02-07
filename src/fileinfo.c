@@ -103,12 +103,12 @@ const char *get_file_color(FileType type, int is_cwd, int is_ignored, int is_tty
         case FTYPE_SOCKET:         return COLOR_MAGENTA;
         case FTYPE_FIFO:           return COLOR_MAGENTA;
         case FTYPE_SYMLINK:        return COLOR_WHITE;
-        case FTYPE_SYMLINK_DIR:    return COLOR_CYAN;
+        case FTYPE_SYMLINK_DIR:    return COLOR_BLUE;
         case FTYPE_SYMLINK_EXEC:   return COLOR_GREEN;
         case FTYPE_SYMLINK_DEVICE: return COLOR_YELLOW;
         case FTYPE_SYMLINK_SOCKET: return COLOR_MAGENTA;
         case FTYPE_SYMLINK_FIFO:   return COLOR_MAGENTA;
-        case FTYPE_SYMLINK_BROKEN: return COLOR_RED;
+        case FTYPE_SYMLINK_BROKEN: return COLOR_WHITE;
         default:                   return COLOR_WHITE;
     }
 }

@@ -27,7 +27,6 @@ static const struct { const char *key; size_t offset; } icon_keys[] = {
     { "symlink_dir",    offsetof(Icons, symlink_dir) },
     { "symlink_exec",   offsetof(Icons, symlink_exec) },
     { "symlink_file",   offsetof(Icons, symlink_file) },
-    { "symlink_broken", offsetof(Icons, symlink_broken) },
     { "git_modified",   offsetof(Icons, git_modified) },
     { "git_untracked",  offsetof(Icons, git_untracked) },
     { "git_staged",     offsetof(Icons, git_staged) },
@@ -201,7 +200,7 @@ const char *get_icon(const Icons *icons, FileType type, int is_expanded,
         case FTYPE_SYMLINK_FIFO:
             return icons->fifo;
         case FTYPE_SYMLINK_BROKEN:
-            return ICON_OR_FALLBACK(icons->symlink_broken, icons->symlink);
+            return icons->file;
         case FTYPE_UNKNOWN:
         default:
             return icons->default_icon;
