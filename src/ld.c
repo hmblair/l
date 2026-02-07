@@ -11,8 +11,10 @@
 #include <stdarg.h>
 #include <signal.h>
 #include <time.h>
+#include <omp.h>
 
 #define LOG_FILE "/tmp/l-cached.log"
+#define DAEMON_MAX_THREADS 4
 
 static volatile sig_atomic_t g_shutdown = 0;
 static volatile sig_atomic_t g_refresh = 0;
@@ -85,6 +87,11 @@ static void handle_refresh(int sig) {
 int main(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
+
+    int max_threads = omp_get_num_procs();
+    if (max_threads > DAEMON_MAX_THREADS)
+        max_threads = DAEMON_MAX_THREADS;
+    omp_set_num_threads(max_threads);
 
     signal(SIGINT, handle_shutdown);
     signal(SIGTERM, handle_shutdown);
