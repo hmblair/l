@@ -13,32 +13,9 @@
  * ============================================================================ */
 
 static const struct { const char *key; size_t offset; } icon_keys[] = {
-    { "default",           offsetof(Icons, default_icon) },
-    { "closed_directory",  offsetof(Icons, closed_directory) },
-    { "open_directory",    offsetof(Icons, open_directory) },
-    { "locked_dir",        offsetof(Icons, locked_dir) },
-    { "file",           offsetof(Icons, file) },
-    { "binary",         offsetof(Icons, binary) },
-    { "executable",     offsetof(Icons, executable) },
-    { "device",         offsetof(Icons, device) },
-    { "socket",         offsetof(Icons, socket) },
-    { "fifo",           offsetof(Icons, fifo) },
-    { "symlink",        offsetof(Icons, symlink) },
-    { "symlink_dir",    offsetof(Icons, symlink_dir) },
-    { "symlink_exec",   offsetof(Icons, symlink_exec) },
-    { "symlink_file",   offsetof(Icons, symlink_file) },
-    { "git_modified",   offsetof(Icons, git_modified) },
-    { "git_untracked",  offsetof(Icons, git_untracked) },
-    { "git_staged",     offsetof(Icons, git_staged) },
-    { "git_deleted",    offsetof(Icons, git_deleted) },
-    { "git_upstream",   offsetof(Icons, git_upstream) },
-    { "readonly",       offsetof(Icons, readonly) },
-    { "count_files",    offsetof(Icons, count_files) },
-    { "count_lines",    offsetof(Icons, count_lines) },
-    { "count_pixels",   offsetof(Icons, count_pixels) },
-    { "count_duration", offsetof(Icons, count_duration) },
-    { "count_pages",    offsetof(Icons, count_pages) },
-    { "cursor",         offsetof(Icons, cursor) },
+    #define X(field, key) { key, offsetof(Icons, field) },
+    ICON_FIELDS(X)
+    #undef X
     { NULL, 0 }
 };
 

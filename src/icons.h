@@ -64,34 +64,40 @@ typedef struct {
     int count;
 } Shebangs;
 
+/* Icon fields: X(field_name, config_key) — single source of truth for struct + config */
+#define ICON_FIELDS(X) \
+    X(default_icon,     "default")          \
+    X(symlink,          "symlink")          \
+    X(symlink_dir,      "symlink_dir")      \
+    X(symlink_exec,     "symlink_exec")     \
+    X(symlink_file,     "symlink_file")     \
+    X(closed_directory, "closed_directory") \
+    X(open_directory,   "open_directory")   \
+    X(locked_dir,       "locked_dir")       \
+    X(executable,       "executable")       \
+    X(device,           "device")           \
+    X(socket,           "socket")           \
+    X(fifo,             "fifo")             \
+    X(file,             "file")             \
+    X(binary,           "binary")           \
+    X(git_modified,     "git_modified")     \
+    X(git_untracked,    "git_untracked")    \
+    X(git_staged,       "git_staged")       \
+    X(git_deleted,      "git_deleted")      \
+    X(git_upstream,     "git_upstream")     \
+    X(readonly,         "readonly")         \
+    X(count_files,      "count_files")      \
+    X(count_lines,      "count_lines")      \
+    X(count_pixels,     "count_pixels")     \
+    X(count_duration,   "count_duration")   \
+    X(count_pages,      "count_pages")      \
+    X(cursor,           "cursor")
+
 /* Icons configuration */
 typedef struct Icons {
-    char default_icon[L_MAX_ICON_LEN];
-    char symlink[L_MAX_ICON_LEN];
-    char symlink_dir[L_MAX_ICON_LEN];
-    char symlink_exec[L_MAX_ICON_LEN];
-    char symlink_file[L_MAX_ICON_LEN];
-    char closed_directory[L_MAX_ICON_LEN];
-    char open_directory[L_MAX_ICON_LEN];
-    char locked_dir[L_MAX_ICON_LEN];
-    char executable[L_MAX_ICON_LEN];
-    char device[L_MAX_ICON_LEN];
-    char socket[L_MAX_ICON_LEN];
-    char fifo[L_MAX_ICON_LEN];
-    char file[L_MAX_ICON_LEN];
-    char binary[L_MAX_ICON_LEN];
-    char git_modified[L_MAX_ICON_LEN];
-    char git_untracked[L_MAX_ICON_LEN];
-    char git_staged[L_MAX_ICON_LEN];
-    char git_deleted[L_MAX_ICON_LEN];
-    char git_upstream[L_MAX_ICON_LEN];
-    char readonly[L_MAX_ICON_LEN];
-    char count_files[L_MAX_ICON_LEN];
-    char count_lines[L_MAX_ICON_LEN];
-    char count_pixels[L_MAX_ICON_LEN];
-    char count_duration[L_MAX_ICON_LEN];
-    char count_pages[L_MAX_ICON_LEN];
-    char cursor[L_MAX_ICON_LEN];
+    #define X(field, key) char field[L_MAX_ICON_LEN];
+    ICON_FIELDS(X)
+    #undef X
     ExtIcon ext_icons[L_MAX_EXT_ICONS];
     int ext_count;
 } Icons;
