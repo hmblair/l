@@ -65,6 +65,7 @@ l [options] [path...]
 | `-i, --interactive` | Interactive selection mode |
 | `-g` | Git-only mode (modified/untracked files, implies `-at`) |
 | `-f, --filter PATTERN` | Filter files matching pattern (implies `-at`) |
+| `--min-size SIZE` | Show only entries >= SIZE (e.g., `100M`, `1G`) |
 | `-c, --color-all` | Don't gray out gitignored files |
 | `--list` | Flat list output (no tree structure) |
 | `--summary` | Show detailed summary for file/directory |
@@ -106,6 +107,7 @@ l -al ~/projects     # Long format, hidden files
 l -g                 # Only git-modified files
 l -f "*.go"          # Filter to Go files
 l -i                 # Interactive selection
+l -d3 --min-size 1G  # Directories/files >= 1GB, depth 3
 l -Sr                # Sort by size, reversed (smallest first)
 l --daemon           # Configure background caching
 ```

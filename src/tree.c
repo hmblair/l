@@ -328,7 +328,8 @@ static void build_tree_children(TreeNode *parent, int depth,
             child->entry.is_ignored = has_ignore_all_gitignore(child->entry.path);
         }
 
-        if (node_is_directory(child) && !should_skip_dir(child->entry.name, child->entry.is_ignored, opts->skip_gitignored)) {
+        if (node_is_directory(child) && !should_skip_dir(child->entry.name, child->entry.is_ignored, opts->skip_gitignored) &&
+            !(opts->skip_fn && opts->skip_fn(&child->entry, opts->skip_ctx))) {
             int child_in_git_repo = in_git_repo || is_git_repo_root[i];
             build_tree_children(child, depth + 1, opts, git, child_in_git_repo, child->entry.is_ignored);
 
@@ -700,3 +701,4 @@ int compute_grep_flags(TreeNode *node, const char *pattern) {
     node->matches_grep = result;
     return result;
 }
+

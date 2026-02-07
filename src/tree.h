@@ -122,6 +122,10 @@ typedef enum {
     SORT_NAME
 } SortMode;
 
+/* Callback to skip recursion into a directory during tree building.
+ * Return non-zero to skip the directory's children. */
+typedef int (*tree_skip_fn)(const FileEntry *entry, void *ctx);
+
 typedef struct {
     int max_depth;
     int show_hidden;
@@ -130,6 +134,8 @@ typedef struct {
     int sort_reverse;
     const char *cwd;           /* Current working directory (for relative paths) */
     ComputeOpts compute;       /* What metadata to compute */
+    tree_skip_fn skip_fn;      /* Optional: skip recursion predicate */
+    void *skip_ctx;            /* Context for skip_fn */
 } TreeBuildOpts;
 
 /* ============================================================================
@@ -161,6 +167,7 @@ int compute_git_status_flags(TreeNode *node, GitCache *git, int show_hidden);
 
 /* Compute grep match flags recursively (returns 1 if any node matches) */
 int compute_grep_flags(TreeNode *node, const char *pattern);
+
 
 /* Check if node is a directory type */
 int node_is_directory(const TreeNode *node);

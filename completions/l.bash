@@ -12,13 +12,16 @@ _l() {
         -f|--filter)
             return 0  # User provides pattern
             ;;
+        --min-size)
+            return 0  # User provides size
+            ;;
     esac
 
     # Complete options
     if [[ "$cur" == -* ]]; then
         opts="-a -l --long -s --short -t --tree -d --depth -p --path
               -e --expand-all --list --summary --no-icons -c --color-all -g
-              -f --filter -i --interactive -S -T -N -r
+              -f --filter --min-size -i --interactive -S -T -N -r
               -h --help --version --daemon"
         COMPREPLY=( $(compgen -W "$opts" -- "$cur") )
         return 0

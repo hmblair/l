@@ -24,6 +24,22 @@ static void cleanup_libgit2(void) {
  * Argument Parsing
  * ============================================================================ */
 
+static off_t parse_size(const char *str) {
+    char *endptr;
+    double val = strtod(str, &endptr);
+    if (endptr == str || val < 0) die("--min-size requires a positive number with optional suffix (K, M, G, T)");
+    switch (*endptr) {
+        case 'k': case 'K': val *= 1024; endptr++; break;
+        case 'm': case 'M': val *= 1024 * 1024; endptr++; break;
+        case 'g': case 'G': val *= 1024 * 1024 * 1024; endptr++; break;
+        case 't': case 'T': val *= 1024.0 * 1024 * 1024 * 1024; endptr++; break;
+        case '\0': break;
+        default: die("--min-size: unknown suffix (use K, M, G, or T)");
+    }
+    if (*endptr != '\0') die("--min-size: trailing characters after size");
+    return (off_t)val;
+}
+
 static int parse_depth(const char *str, const char *opt_name) {
     char *endptr;
     long val = strtol(str, &endptr, 10);
@@ -58,6 +74,7 @@ static void print_usage(void) {
     printf("  -c, --color-all   Don't gray out gitignored files\n");
     printf("  -g              Show only git-modified/untracked files (implies -at)\n");
     printf("  -f, --filter PATTERN  Show only files/folders matching pattern (implies -at)\n");
+    printf("  --min-size SIZE       Show only entries >= SIZE (e.g., 100M, 1G)\n");
     printf("  -i, --interactive     Interactive selection mode\n");
     printf("\n");
     printf("Sorting:\n");
@@ -215,6 +232,9 @@ static void parse_args(int argc, char **argv, Config *cfg,
                 cfg->show_hidden = 1;
                 cfg->max_depth = L_MAX_DEPTH;
             }
+            else if ((val = match_opt_with_arg(arg, &i, argc, argv, 0, "min-size"))) {
+                cfg->min_size = parse_size(val);
+            }
             else if (strcmp(arg, "--daemon") == 0 || strcmp(arg, "--version") == 0) {
                 fprintf(stderr, "%sError:%s %s must be the first argument\n",
                         CLR(cfg, COLOR_RED), RST(cfg), arg);
@@ -318,6 +338,7 @@ int main(int argc, char **argv) {
         .home = "",
         .script_dir = "",
         .grep_pattern = NULL,
+        .min_size = 0,
         .compute = COMPUTE_NONE
     };
 
@@ -448,7 +469,7 @@ int main(int argc, char **argv) {
         }
     }
     /* Recalculate column widths for visible entries only */
-    if ((cfg.git_only || cfg.grep_pattern) && cfg.long_format) {
+    if (is_filtering_active(&cfg) && cfg.long_format) {
         columns_recalculate_visible(cols, trees, dir_count, &icons, &cfg);
     }
 
@@ -493,25 +514,18 @@ int main(int argc, char **argv) {
     {
         /* Print all trees (using consistent column widths) */
         for (int i = 0; i < dir_count; i++) {
-            /* In git-only mode, show message if no changes and in sync with upstream */
-            if (cfg.git_only && !trees[i]->has_git_status) {
-                int in_sync = 1;
-                if (path_is_git_root(trees[i]->entry.path)) {
-                    char *branch = git_get_branch(trees[i]->entry.path);
-                    if (branch) {
-                        char local_hash[64], remote_hash[64];
-                        char local_ref[128], remote_ref[128];
-                        snprintf(local_ref, sizeof(local_ref), "refs/heads/%s", branch);
-                        snprintf(remote_ref, sizeof(remote_ref), "refs/remotes/origin/%s", branch);
-                        git_read_ref(trees[i]->entry.path, local_ref, local_hash, sizeof(local_hash));
-                        if (git_read_ref(trees[i]->entry.path, remote_ref, remote_hash, sizeof(remote_hash))) {
-                            in_sync = (strcmp(local_hash, remote_hash) == 0);
-                        }
-                        free(branch);
+            /* Check if filtering produced no visible children */
+            if (is_filtering_active(&cfg)) {
+                int has_visible = 0;
+                for (size_t j = 0; j < trees[i]->child_count; j++) {
+                    if (node_is_visible(&trees[i]->children[j], &cfg)) {
+                        has_visible = 1;
+                        break;
                     }
                 }
-                if (in_sync) {
-                    printf("%sUp to date.%s\n", COLOR_GREEN, COLOR_RESET);
+                if (!has_visible) {
+                    printf("%sNo matches.%s\n",
+                           CLR(&cfg, COLOR_RED), RST(&cfg));
                     continue;
                 }
             }

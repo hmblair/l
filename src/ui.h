@@ -33,6 +33,7 @@ typedef struct {
     char home[PATH_MAX];
     char script_dir[PATH_MAX];
     const char *grep_pattern;
+    off_t min_size;              /* Minimum size filter (0 = disabled) */
     ComputeOpts compute;        /* What metadata to compute */
 } Config;
 
