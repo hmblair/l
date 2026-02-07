@@ -9,8 +9,8 @@ PREFIX ?= $(HOME)/.local
 DESTBINDIR = $(PREFIX)/bin
 CONFIGDIR = $(HOME)/.config/l
 CONFIG_FILE = config.toml
-ZSH_COMPLETIONS = /usr/local/share/zsh/site-functions
-BASH_COMPLETIONS = /usr/local/share/bash-completion/completions
+ZSH_COMPLETIONS = $(PREFIX)/share/zsh/site-functions
+BASH_COMPLETIONS = $(PREFIX)/share/bash-completion/completions
 
 # Local build output
 BINDIR = bin
@@ -127,22 +127,18 @@ install: all
 	install -m 644 $(CONFIG_FILE) $(CONFIGDIR)/$(CONFIG_FILE)
 	@echo "Installed l, l-cached, and cl to $(DESTBINDIR)"
 	@echo "Installed $(CONFIG_FILE) to $(CONFIGDIR)"
-	@if [ -w "$(ZSH_COMPLETIONS)" ] || [ -w "$$(dirname $(ZSH_COMPLETIONS))" ]; then \
-		mkdir -p $(ZSH_COMPLETIONS); \
-		install -m 644 completions/_l $(ZSH_COMPLETIONS)/_l; \
-		install -m 644 completions/_cl $(ZSH_COMPLETIONS)/_cl; \
-		echo "Installed zsh completions to $(ZSH_COMPLETIONS)"; \
-	else \
-		echo "Note: Run with sudo to install zsh completions to $(ZSH_COMPLETIONS)"; \
+	@mkdir -p $(ZSH_COMPLETIONS)
+	install -m 644 completions/_l $(ZSH_COMPLETIONS)/_l
+	install -m 644 completions/_cl $(ZSH_COMPLETIONS)/_cl
+	@echo "Installed zsh completions to $(ZSH_COMPLETIONS)"
+	@if command -v zsh >/dev/null 2>&1 && ! zsh -ic 'echo "$$fpath"' 2>/dev/null | grep -qF "$(ZSH_COMPLETIONS)"; then \
+		printf "\033[33mWarning:\033[0m $(ZSH_COMPLETIONS) is not in your zsh fpath\n"; \
+		echo "  Add this to your .zshrc: fpath=($(ZSH_COMPLETIONS) \$$fpath)"; \
 	fi
-	@if [ -w "$(BASH_COMPLETIONS)" ] || [ -w "$$(dirname $(BASH_COMPLETIONS))" ]; then \
-		mkdir -p $(BASH_COMPLETIONS); \
-		install -m 644 completions/l.bash $(BASH_COMPLETIONS)/l; \
-		ln -sf l $(BASH_COMPLETIONS)/cl; \
-		echo "Installed bash completions to $(BASH_COMPLETIONS)"; \
-	else \
-		echo "Note: Run with sudo to install bash completions to $(BASH_COMPLETIONS)"; \
-	fi
+	@mkdir -p $(BASH_COMPLETIONS)
+	install -m 644 completions/l.bash $(BASH_COMPLETIONS)/l
+	ln -sf l $(BASH_COMPLETIONS)/cl
+	@echo "Installed bash completions to $(BASH_COMPLETIONS)"
 
 uninstall:
 	rm -f $(DESTBINDIR)/l $(DESTBINDIR)/l-cached $(DESTBINDIR)/cl
