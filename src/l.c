@@ -258,13 +258,30 @@ static void parse_args(int argc, char **argv, Config *cfg,
             cfg->show_hidden = 1;
             cfg->max_depth = L_MAX_DEPTH;
         } else {
-            /* Combined short flags like -alt */
+            /* Combined short flags like -alt, -ad2, -af "*.c" */
             for (int j = 1; arg[j]; j++) {
                 int result = apply_short_flag(arg[j], cfg, &set);
                 if (result == -1) {
-                    fprintf(stderr, "%sError:%s -%c cannot be combined with other flags\n",
-                            CLR(cfg, COLOR_RED), RST(cfg), arg[j]);
-                    exit(1);
+                    /* Flag requires argument: consume rest of string or next argv */
+                    const char *flag_arg = arg[j + 1] ? arg + j + 1 : NULL;
+                    if (!flag_arg) {
+                        if (i + 1 >= argc) {
+                            fprintf(stderr, "%sError:%s -%c requires an argument\n",
+                                    CLR(cfg, COLOR_RED), RST(cfg), arg[j]);
+                            exit(1);
+                        }
+                        flag_arg = argv[++i];
+                    }
+                    if (arg[j] == 'd') {
+                        check_conflict(&set.depth, "-d", cfg);
+                        cfg->max_depth = parse_depth(flag_arg, "-d");
+                    } else if (arg[j] == 'f') {
+                        check_conflict(&set.filter, "-f", cfg);
+                        cfg->grep_pattern = flag_arg;
+                        cfg->show_hidden = 1;
+                        cfg->max_depth = L_MAX_DEPTH;
+                    }
+                    break;  /* rest of string consumed */
                 } else if (result == 0) {
                     fprintf(stderr, "%sError:%s Unknown option: -%c\n",
                             CLR(cfg, COLOR_RED), RST(cfg), arg[j]);
