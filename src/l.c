@@ -60,32 +60,32 @@ static void print_usage(void) {
     printf("Usage: l [OPTIONS] [FILE ...]\n");
     printf("\n");
     printf("Options:\n");
-    printf("  -a              Show hidden files\n");
-    printf("  -l, --long      Long format with size, lines, time (default)\n");
-    printf("  -s, --short     Short format (no size, lines, time)\n");
-    printf("                  Auto-enabled on network filesystems\n");
-    printf("  -t, --tree      Show full tree (depth %d)\n", L_MAX_DEPTH);
-    printf("  -d, --depth INT Limit tree depth\n");
-    printf("  -p, --path      Show ancestry from ~ (or /) to target\n");
-    printf("  -e, --expand-all  Expand all directories (ignore skip list)\n");
-    printf("  --list          Flat list output (no tree structure)\n");
-    printf("  --summary       Show summary info for file/directory\n");
-    printf("  --no-icons      Hide file/folder/git icons\n");
-    printf("  -c, --color-all   Don't gray out gitignored files\n");
-    printf("  -g              Show only git-modified/untracked files (implies -at)\n");
-    printf("  -f, --filter PATTERN  Show only files/folders matching pattern (implies -at)\n");
-    printf("  --min-size SIZE       Show only entries >= SIZE (e.g., 100M, 1G)\n");
-    printf("  -i, --interactive     Interactive selection mode\n");
+    printf("  -a                      Show hidden files\n");
+    printf("  -l, --long              Long format with size, lines, time (default)\n");
+    printf("  -s, --short             Short format (no size, lines, time)\n");
+    printf("                          Auto-enabled on network filesystems\n");
+    printf("  -t, --tree              Show full tree (depth %d)\n", L_MAX_DEPTH);
+    printf("  -d, --depth INT         Limit tree depth\n");
+    printf("  -p, --path              Show ancestry from ~ (or /) to target\n");
+    printf("  -e, --expand-all        Expand all directories (ignore skip list)\n");
+    printf("  --list                  Flat list output (no tree structure)\n");
+    printf("  --summary               Show summary info for file/directory\n");
+    printf("  --no-icons              Hide file/folder/git icons\n");
+    printf("  -c, --color-all         Don't gray out gitignored files\n");
+    printf("  -g                      Show only git-modified/untracked files (implies -at)\n");
+    printf("  -f, --filter PATTERN    Show only files/folders matching pattern (implies -at)\n");
+    printf("  --min-size SIZE         Show only entries >= SIZE (e.g., 100M, 1G)\n");
+    printf("  -i, --interactive       Interactive selection mode\n");
     printf("\n");
     printf("Sorting:\n");
-    printf("  -S              Sort by size (largest first)\n");
-    printf("  -T              Sort by modification time (newest first)\n");
-    printf("  -N              Sort by name (alphabetical)\n");
-    printf("  -r              Reverse sort order\n");
+    printf("  -S                      Sort by size (largest first)\n");
+    printf("  -T                      Sort by modification time (newest first)\n");
+    printf("  -N                      Sort by name (alphabetical)\n");
+    printf("  -r                      Reverse sort order\n");
     printf("\n");
-    printf("  -h, --help      Show this help message\n");
-    printf("  --version       Show version information\n");
-    printf("  --daemon        Manage the size caching daemon\n");
+    printf("  -h, --help              Show this help message\n");
+    printf("  --version               Show version information\n");
+    printf("  --daemon                Manage the size caching daemon\n");
 }
 
 /* Track which options have been set to detect conflicts/duplicates */
@@ -507,7 +507,8 @@ int main(int argc, char **argv) {
             .columns = cfg.long_format ? cols : NULL,
             .continuation = continuation,
             .diff_add_width = diff_add_width,
-            .diff_del_width = diff_del_width
+            .diff_del_width = diff_del_width,
+            .term_width = cfg.is_tty ? get_terminal_width() : 0
         };
         char *selected = select_run(trees, dir_count, &ctx);
         int exit_code = 0;
@@ -555,7 +556,8 @@ int main(int argc, char **argv) {
                 .columns = cfg.long_format ? cols : NULL,
                 .continuation = continuation,
                 .diff_add_width = diff_add_width,
-                .diff_del_width = diff_del_width
+                .diff_del_width = diff_del_width,
+                .term_width = cfg.is_tty ? get_terminal_width() : 0
             };
             if (cfg.summary_mode) {
                 print_summary(trees[i], &ctx);

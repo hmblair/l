@@ -18,7 +18,8 @@ static int raw_mode_enabled = 0;
 static void term_disable_raw(void) {
     if (raw_mode_enabled) {
         tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
-        printf("\033[?25h");  /* Show cursor */
+        printf("\033[?7h");   /* Re-enable line wrap */
+    printf("\033[?25h");  /* Show cursor */
         fflush(stdout);
         raw_mode_enabled = 0;
     }
@@ -49,6 +50,7 @@ static void term_enable_raw(void) {
     raw.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
 
+    printf("\033[?7l");   /* Disable line wrap */
     printf("\033[?25l");  /* Hide cursor */
     raw_mode_enabled = 1;
 }
@@ -547,6 +549,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
     PrintContext render_ctx = *ctx;
     render_ctx.continuation = continuation;
     render_ctx.line_prefix = NULL;
+    render_ctx.term_width = get_terminal_width();
 
     /* Enter raw mode and render */
     term_enable_raw();

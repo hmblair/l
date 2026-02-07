@@ -87,6 +87,7 @@ typedef struct {
     int diff_del_width;
     const char *line_prefix;
     int selected;
+    int term_width;
 } PrintContext;
 
 /* ============================================================================
@@ -116,6 +117,7 @@ const char *get_git_indicator(GitCache *cache, const char *path,
  * Path Resolution Helpers
  * ============================================================================ */
 
+int get_terminal_width(void);
 void resolve_source_dir(const char *argv0, char *src_dir, size_t len);
 void get_realpath(const char *path, char *resolved, const Config *cfg);
 void get_abspath(const char *path, char *resolved, const Config *cfg);

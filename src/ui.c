@@ -449,24 +449,38 @@ const char *get_git_indicator(GitCache *cache, const char *path,
  * Tree Printing
  * ============================================================================ */
 
-static void print_prefix(int depth, int *continuation, const Config *cfg) {
+/* Forward declarations for string utilities defined later */
+static int visible_strlen(const char *s);
+static char *truncate_visible(const char *s, int max_visible_len);
+
+/* Buffer size for print_entry line assembly */
+#define ENTRY_BUF_SIZE 8192
+
+/* Append formatted text to a buffer, advancing pos. Silently stops if full. */
+#define EMIT(buf, pos, size, ...) do { \
+    int _n = snprintf((buf) + (pos), (size) - (pos), __VA_ARGS__); \
+    if (_n > 0 && (pos) + _n < (int)(size)) (pos) += _n; \
+    else if (_n > 0) (pos) = (int)(size) - 1; \
+} while (0)
+
+static void emit_prefix(char *buf, int *pos, int size, int depth, int *continuation, const Config *cfg) {
     if (cfg->list_mode) return;
 
     if (!cfg->is_tty) {
         for (int i = 0; i < depth; i++) {
-            printf("  ");
+            EMIT(buf, *pos, size, "  ");
         }
         return;
     }
 
-    printf("%s", COLOR_GREY);
+    EMIT(buf, *pos, size, "%s", COLOR_GREY);
     for (int i = 0; i < depth - 1; i++) {
-        printf("%s", continuation[i] ? TREE_VERT : TREE_SPACE);
+        EMIT(buf, *pos, size, "%s", continuation[i] ? TREE_VERT : TREE_SPACE);
     }
     if (depth > 0) {
-        printf("%s", continuation[depth - 1] ? TREE_BRANCH : TREE_LAST);
+        EMIT(buf, *pos, size, "%s", continuation[depth - 1] ? TREE_BRANCH : TREE_LAST);
     }
-    printf("%s", COLOR_RESET);
+    EMIT(buf, *pos, size, "%s", COLOR_RESET);
 }
 
 void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visible_children, const PrintContext *ctx) {
@@ -476,33 +490,36 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
     int is_cwd = (strcmp(abs_path, ctx->cfg->cwd) == 0);
     int is_hidden = (fe->name[0] == '.');
 
+    char line[ENTRY_BUF_SIZE];
+    int pos = 0;
+
     /* Print optional line prefix (used for interactive selection cursor) */
     if (ctx->line_prefix) {
-        printf("%s", ctx->line_prefix);
+        EMIT(line, pos, ENTRY_BUF_SIZE, "%s", ctx->line_prefix);
     }
 
     if (ctx->cfg->long_format && ctx->columns) {
-        char buf[32];
+        char col_buf[32];
         for (int i = 0; i < NUM_COLUMNS; i++) {
-            ctx->columns[i].format(fe, ctx->icons, buf, sizeof(buf));
-            printf("%s%*s%s", CLR(ctx->cfg, COLOR_GREY), ctx->columns[i].width, buf, RST(ctx->cfg));
+            ctx->columns[i].format(fe, ctx->icons, col_buf, sizeof(col_buf));
+            EMIT(line, pos, ENTRY_BUF_SIZE, "%s%*s%s", CLR(ctx->cfg, COLOR_GREY), ctx->columns[i].width, col_buf, RST(ctx->cfg));
             if (i == COL_LINES) {
                 const char *count_icon = get_count_icon(fe, ctx->icons);
                 if (count_icon[0]) {
-                    printf(" %s%s%s", CLR(ctx->cfg, COLOR_GREY), count_icon, RST(ctx->cfg));
+                    EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s", CLR(ctx->cfg, COLOR_GREY), count_icon, RST(ctx->cfg));
                 } else {
-                    printf("  ");
+                    EMIT(line, pos, ENTRY_BUF_SIZE, "  ");
                 }
             }
-            printf("  ");
+            EMIT(line, pos, ENTRY_BUF_SIZE, "  ");
         }
         /* Diff columns (only shown when there are diffs) */
         if (ctx->diff_add_width > 0) {
             if (fe->diff_added > 0) {
-                printf("%s%*d%s ", CLR(ctx->cfg, COLOR_GREEN),
+                EMIT(line, pos, ENTRY_BUF_SIZE, "%s%*d%s ", CLR(ctx->cfg, COLOR_GREEN),
                        ctx->diff_add_width, fe->diff_added, RST(ctx->cfg));
             } else {
-                printf("%s%*s%s ", CLR(ctx->cfg, COLOR_GREY),
+                EMIT(line, pos, ENTRY_BUF_SIZE, "%s%*s%s ", CLR(ctx->cfg, COLOR_GREY),
                        ctx->diff_add_width, "-", RST(ctx->cfg));
             }
         }
@@ -518,68 +535,68 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
             }
 
             if (diff_removed > 0) {
-                printf("%s%-*d%s ", CLR(ctx->cfg, COLOR_RED),
+                EMIT(line, pos, ENTRY_BUF_SIZE, "%s%-*d%s ", CLR(ctx->cfg, COLOR_RED),
                        ctx->diff_del_width, diff_removed, RST(ctx->cfg));
             } else {
-                printf("%s%-*s%s ", CLR(ctx->cfg, COLOR_GREY),
+                EMIT(line, pos, ENTRY_BUF_SIZE, "%s%-*s%s ", CLR(ctx->cfg, COLOR_GREY),
                        ctx->diff_del_width, "-", RST(ctx->cfg));
             }
         }
         if (ctx->diff_add_width > 0 || ctx->diff_del_width > 0) {
-            printf(" ");
+            EMIT(line, pos, ENTRY_BUF_SIZE, " ");
         }
     }
 
-    print_prefix(depth, ctx->continuation, ctx->cfg);
+    emit_prefix(line, &pos, ENTRY_BUF_SIZE, depth, ctx->continuation, ctx->cfg);
 
     int is_readonly = (access(fe->path, W_OK) != 0 && access(fe->path, R_OK) == 0);
     int is_dir = (fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR);
     if (!ctx->cfg->no_icons && is_readonly && !is_dir) {
-        printf("%s%s%s ", CLR(ctx->cfg, COLOR_YELLOW), ctx->icons->readonly, RST(ctx->cfg));
+        EMIT(line, pos, ENTRY_BUF_SIZE, "%s%s%s ", CLR(ctx->cfg, COLOR_YELLOW), ctx->icons->readonly, RST(ctx->cfg));
     }
 
     if (is_dir && !has_visible_children && !ctx->cfg->no_icons) {
         /* Collapsed directory: show full recursive summary */
         GitSummary gs = git_get_dir_summary(ctx->git, abs_path);
         if (gs.modified) {
-            printf("%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), gs.modified, ctx->icons->git_modified, RST(ctx->cfg));
+            EMIT(line, pos, ENTRY_BUF_SIZE, "%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), gs.modified, ctx->icons->git_modified, RST(ctx->cfg));
         }
         if (gs.untracked) {
-            printf("%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), gs.untracked, ctx->icons->git_untracked, RST(ctx->cfg));
+            EMIT(line, pos, ENTRY_BUF_SIZE, "%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), gs.untracked, ctx->icons->git_untracked, RST(ctx->cfg));
         }
         if (gs.staged) {
-            printf("%s%d %s%s ", CLR(ctx->cfg, COLOR_YELLOW), gs.staged, ctx->icons->git_staged, RST(ctx->cfg));
+            EMIT(line, pos, ENTRY_BUF_SIZE, "%s%d %s%s ", CLR(ctx->cfg, COLOR_YELLOW), gs.staged, ctx->icons->git_staged, RST(ctx->cfg));
         }
         if (gs.deleted) {
-            printf("%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), gs.deleted, ctx->icons->git_deleted, RST(ctx->cfg));
+            EMIT(line, pos, ENTRY_BUF_SIZE, "%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), gs.deleted, ctx->icons->git_deleted, RST(ctx->cfg));
         }
     } else if (is_dir && has_visible_children && !ctx->cfg->no_icons) {
         /* Expanded directory: show directly deleted files count */
         int deleted_direct = git_count_deleted_direct(ctx->git, abs_path);
         if (deleted_direct) {
-            printf("%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), deleted_direct, ctx->icons->git_deleted, RST(ctx->cfg));
+            EMIT(line, pos, ENTRY_BUF_SIZE, "%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), deleted_direct, ctx->icons->git_deleted, RST(ctx->cfg));
         }
         /* Also show hidden file status if hidden files aren't shown */
         if (!ctx->cfg->show_hidden) {
             GitSummary gs = git_get_hidden_dir_summary(ctx->git, abs_path);
             if (gs.modified) {
-                printf("%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), gs.modified, ctx->icons->git_modified, RST(ctx->cfg));
+                EMIT(line, pos, ENTRY_BUF_SIZE, "%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), gs.modified, ctx->icons->git_modified, RST(ctx->cfg));
             }
             if (gs.untracked) {
-                printf("%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), gs.untracked, ctx->icons->git_untracked, RST(ctx->cfg));
+                EMIT(line, pos, ENTRY_BUF_SIZE, "%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), gs.untracked, ctx->icons->git_untracked, RST(ctx->cfg));
             }
             if (gs.staged) {
-                printf("%s%d %s%s ", CLR(ctx->cfg, COLOR_YELLOW), gs.staged, ctx->icons->git_staged, RST(ctx->cfg));
+                EMIT(line, pos, ENTRY_BUF_SIZE, "%s%d %s%s ", CLR(ctx->cfg, COLOR_YELLOW), gs.staged, ctx->icons->git_staged, RST(ctx->cfg));
             }
             /* Note: deleted already counted above in deleted_direct if visible,
              * but hidden deleted files need separate handling */
             if (gs.deleted && !deleted_direct) {
-                printf("%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), gs.deleted, ctx->icons->git_deleted, RST(ctx->cfg));
+                EMIT(line, pos, ENTRY_BUF_SIZE, "%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), gs.deleted, ctx->icons->git_deleted, RST(ctx->cfg));
             }
         }
     } else {
         const char *git_ind = get_git_indicator(ctx->git, abs_path, ctx->icons, ctx->cfg);
-        printf("%s", git_ind);
+        EMIT(line, pos, ENTRY_BUF_SIZE, "%s", git_ind);
     }
 
     int is_locked = (fe->type == FTYPE_DIR && (fe->size < 0 || is_readonly));
@@ -591,16 +608,16 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
         int is_binary = (fe->file_count < 0 && fe->line_count == -1);
         int is_dir = (fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR);
         int is_expanded = is_dir ? was_expanded : 0;
-        printf("%s%s%s ", color, get_icon(ctx->icons, fe->type, is_expanded, is_locked, is_binary, fe->name), RST(ctx->cfg));
+        EMIT(line, pos, ENTRY_BUF_SIZE, "%s%s%s ", color, get_icon(ctx->icons, fe->type, is_expanded, is_locked, is_binary, fe->name), RST(ctx->cfg));
     }
 
     const char *bold = ctx->selected ? CLR(ctx->cfg, STYLE_BOLD) : "";
     if (ctx->cfg->list_mode) {
         char abbrev[PATH_MAX];
         abbreviate_home(abs_path, abbrev, sizeof(abbrev), ctx->cfg);
-        printf("%s%s%s%s%s", color, bold, style, abbrev, RST(ctx->cfg));
+        EMIT(line, pos, ENTRY_BUF_SIZE, "%s%s%s%s%s", color, bold, style, abbrev, RST(ctx->cfg));
     } else {
-        printf("%s%s%s%s%s", color, bold, style, fe->name, RST(ctx->cfg));
+        EMIT(line, pos, ENTRY_BUF_SIZE, "%s%s%s%s%s", color, bold, style, fe->name, RST(ctx->cfg));
     }
 
     if (is_dir && fe->is_git_root) {
@@ -608,9 +625,9 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
         if (git_get_branch_info(fe->path, &gi)) {
             if (gi.has_upstream) {
                 const char *cloud_color = gi.out_of_sync ? COLOR_RED : COLOR_GREY;
-                printf(" %s%s%s%s %s%s%s", CLR(ctx->cfg, COLOR_GREY), CLR(ctx->cfg, STYLE_ITALIC), gi.branch, RST(ctx->cfg), CLR(ctx->cfg, cloud_color), ctx->icons->git_upstream, RST(ctx->cfg));
+                EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s%s %s%s%s", CLR(ctx->cfg, COLOR_GREY), CLR(ctx->cfg, STYLE_ITALIC), gi.branch, RST(ctx->cfg), CLR(ctx->cfg, cloud_color), ctx->icons->git_upstream, RST(ctx->cfg));
             } else {
-                printf(" %s%s%s%s", CLR(ctx->cfg, COLOR_GREY), CLR(ctx->cfg, STYLE_ITALIC), gi.branch, RST(ctx->cfg));
+                EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s%s", CLR(ctx->cfg, COLOR_GREY), CLR(ctx->cfg, STYLE_ITALIC), gi.branch, RST(ctx->cfg));
             }
             free(gi.branch);
         }
@@ -623,11 +640,20 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
         target_base = target_base ? target_base + 1 : fe->symlink_target;
         const char *target_style = (target_base[0] == '.') ? CLR(ctx->cfg, STYLE_ITALIC) : "";
         const char *target_color = (fe->type == FTYPE_SYMLINK_BROKEN) ?
-            CLR(ctx->cfg, COLOR_RED) : CLR(ctx->cfg, COLOR_CYAN);
-        printf(" %s%s%s %s%s%s%s", CLR(ctx->cfg, COLOR_GREY), ctx->icons->symlink, RST(ctx->cfg), target_color, target_style, abbrev, RST(ctx->cfg));
+            CLR(ctx->cfg, COLOR_RED) : CLR(ctx->cfg, COLOR_GREY);
+        EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s %s%s%s%s", CLR(ctx->cfg, COLOR_GREY), ctx->icons->symlink, RST(ctx->cfg), target_color, target_style, abbrev, RST(ctx->cfg));
     }
 
-    printf("\n");
+    line[pos] = '\0';
+
+    /* Truncate to terminal width if set */
+    if (ctx->term_width > 0 && visible_strlen(line) > ctx->term_width) {
+        char *truncated = truncate_visible(line, ctx->term_width);
+        printf("%s\n", truncated);
+        free(truncated);
+    } else {
+        printf("%s\n", line);
+    }
 }
 
 static void print_tree_children(const TreeNode *parent, int depth, PrintContext *ctx);
@@ -768,7 +794,7 @@ static void card_init(Card *card) {
 }
 
 /* Get terminal width (columns) */
-static int get_terminal_width(void) {
+int get_terminal_width(void) {
     struct winsize ws;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
         return ws.ws_col;
