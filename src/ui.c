@@ -252,7 +252,7 @@ int is_filtering_active(const Config *cfg) {
 int node_is_visible(const TreeNode *node, const Config *cfg) {
     if (cfg->git_only && !node->has_git_status) return 0;
     if (cfg->grep_pattern && !node->matches_grep) return 0;
-    if (cfg->min_size > 0 && node->entry.size >= 0 && node->entry.size < cfg->min_size) return 0;
+    if (cfg->min_size > 0 && (node->entry.size < 0 || node->entry.size < cfg->min_size)) return 0;
     return 1;
 }
 
@@ -346,7 +346,7 @@ static void columns_update_widths_recursive(Column *cols, const TreeNode *node,
 
 static int skip_below_min_size(const FileEntry *entry, void *ctx) {
     off_t min_size = *(off_t *)ctx;
-    return entry->size >= 0 && entry->size < min_size;
+    return entry->size < 0 || entry->size < min_size;
 }
 
 TreeBuildOpts config_to_build_opts(const Config *cfg) {
