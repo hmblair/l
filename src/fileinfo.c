@@ -441,11 +441,77 @@ static int has_isobmff_audio_extension(const char *path) {
 /* Forward declaration for Matroska parser */
 static int get_matroska_duration(const char *path);
 
+/* Check if file has a WAV extension */
+static int has_wav_extension(const char *path) {
+    const char *dot = strrchr(path, '/');
+    dot = dot ? strrchr(dot, '.') : strrchr(path, '.');
+    if (!dot) return 0;
+    dot++;
+    return strcasecmp(dot, "wav") == 0;
+}
+
+/* Get duration from WAV (RIFF) file. Returns duration in seconds, or -1. */
+static int get_wav_duration(const char *path) {
+    if (!has_wav_extension(path)) return -1;
+
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+
+    /* Read RIFF header: "RIFF" + size(4) + "WAVE" = 12 bytes */
+    unsigned char header[12];
+    if (fread(header, 1, 12, f) < 12 ||
+        memcmp(header, "RIFF", 4) != 0 ||
+        memcmp(header + 8, "WAVE", 4) != 0) {
+        fclose(f);
+        return -1;
+    }
+
+    uint32_t byte_rate = 0;
+    uint32_t data_size = 0;
+    int found_fmt = 0, found_data = 0;
+
+    /* Walk chunks looking for "fmt " and "data" */
+    unsigned char chunk_hdr[8];
+    while (fread(chunk_hdr, 1, 8, f) == 8) {
+        uint32_t chunk_size = chunk_hdr[4] | (chunk_hdr[5] << 8) |
+                              (chunk_hdr[6] << 16) | (chunk_hdr[7] << 24);
+
+        if (memcmp(chunk_hdr, "fmt ", 4) == 0) {
+            if (chunk_size < 16) break;
+            unsigned char fmt[16];
+            if (fread(fmt, 1, 16, f) < 16) break;
+            /* byte_rate is at offset 8 in fmt chunk (little-endian) */
+            byte_rate = fmt[8] | (fmt[9] << 8) | (fmt[10] << 16) | (fmt[11] << 24);
+            found_fmt = 1;
+            /* Skip remainder of fmt chunk */
+            if (chunk_size > 16) fseek(f, chunk_size - 16, SEEK_CUR);
+        } else if (memcmp(chunk_hdr, "data", 4) == 0) {
+            data_size = chunk_size;
+            found_data = 1;
+            break;
+        } else {
+            fseek(f, chunk_size, SEEK_CUR);
+        }
+
+        /* Chunks are word-aligned: skip padding byte if chunk_size is odd */
+        if (chunk_size & 1) fseek(f, 1, SEEK_CUR);
+    }
+
+    fclose(f);
+
+    if (!found_fmt || !found_data || byte_rate == 0) return -1;
+    return (int)(data_size / byte_rate);
+}
+
 /* Get audio/video duration from ISOBMFF container (M4B, M4A, MP4, MOV, etc.)
  * Returns duration in seconds, or -1 on failure. */
 int get_audio_duration(const char *path) {
-    /* Try Matroska first (MKV, WebM) */
-    int dur = get_matroska_duration(path);
+    /* Try WAV (RIFF) */
+    int dur = get_wav_duration(path);
+    if (dur >= 0) return dur;
+
+    /* Try Matroska (MKV, WebM) */
+    dur = get_matroska_duration(path);
     if (dur >= 0) return dur;
 
     if (!has_isobmff_audio_extension(path)) return -1;

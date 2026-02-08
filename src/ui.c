@@ -1119,7 +1119,28 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
             format_count(fe->word_count, word_buf, sizeof(word_buf));
             card_add(&card, "%sWords:%s    %s", CLR(cfg, COLOR_GREY), RST(cfg), word_buf);
         }
-    } else if (fe->line_count >= 0 && fe->content_type == CONTENT_PDF) {
+    } else if (fe->content_type == CONTENT_AUDIO && fe->line_count >= 0) {
+        int secs = fe->line_count;
+        int hours = secs / 3600;
+        int mins = (secs % 3600) / 60;
+        int s = secs % 60;
+        char dur_buf[32];
+        if (hours > 0) {
+            snprintf(dur_buf, sizeof(dur_buf), "%d:%02d:%02d", hours, mins, s);
+        } else {
+            snprintf(dur_buf, sizeof(dur_buf), "%d:%02d", mins, s);
+        }
+        card_add(&card, "%sDuration:%s %s", CLR(cfg, COLOR_GREY), RST(cfg), dur_buf);
+    } else if (fe->content_type == CONTENT_IMAGE && fe->line_count >= 0) {
+        double mp = fe->line_count / 10.0;
+        char mp_buf[32];
+        if (mp >= 10.0) {
+            snprintf(mp_buf, sizeof(mp_buf), "%.0f MP", mp);
+        } else {
+            snprintf(mp_buf, sizeof(mp_buf), "%.1f MP", mp);
+        }
+        card_add(&card, "%sPixels:%s   %s", CLR(cfg, COLOR_GREY), RST(cfg), mp_buf);
+    } else if (fe->content_type == CONTENT_PDF && fe->line_count >= 0) {
         card_add(&card, "%sPages:%s    %d", CLR(cfg, COLOR_GREY), RST(cfg), fe->line_count);
     }
 
