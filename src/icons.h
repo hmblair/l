@@ -86,6 +86,7 @@ typedef struct {
     X(git_deleted,      "git_deleted")      \
     X(git_upstream,     "git_upstream")     \
     X(readonly,         "readonly")         \
+    X(mount_point,      "mount_point")      \
     X(count_files,      "count_files")      \
     X(count_lines,      "count_lines")      \
     X(count_pixels,     "count_pixels")     \

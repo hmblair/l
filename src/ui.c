@@ -608,7 +608,14 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
         int is_binary = (fe->file_count < 0 && fe->line_count == -1);
         int is_dir = (fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR);
         int is_expanded = is_dir ? was_expanded : 0;
-        EMIT(line, pos, ENTRY_BUF_SIZE, "%s%s%s ", color, get_icon(ctx->icons, fe->type, is_expanded, is_locked, is_binary, fe->name), RST(ctx->cfg));
+        int is_root = (fe->path[0] == '/' && fe->path[1] == '\0');
+        const char *icon;
+        if ((fe->is_mount_point || is_root) && fe->type == FTYPE_DIR) {
+            icon = ctx->icons->mount_point[0] ? ctx->icons->mount_point : "󰋊";
+        } else {
+            icon = get_icon(ctx->icons, fe->type, is_expanded, is_locked, is_binary, fe->name);
+        }
+        EMIT(line, pos, ENTRY_BUF_SIZE, "%s%s%s ", color, icon, RST(ctx->cfg));
     }
 
     const char *bold = ctx->selected ? CLR(ctx->cfg, STYLE_BOLD) : "";

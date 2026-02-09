@@ -44,9 +44,11 @@ typedef struct FileEntry {
 
     /* --- Basic metadata --- */
     mode_t mode;
+    dev_t dev;                   /* Device ID (for mount boundary detection) */
     off_t size;                  /* File size or directory total */
     time_t mtime;                /* Last modification time */
     long file_count;             /* Number of files (directories only) */
+    int is_mount_point;          /* 1 if on different filesystem than parent */
 
     /* --- Content analysis --- */
     ContentType content_type;    /* text/binary/image/etc. */

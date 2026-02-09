@@ -121,6 +121,7 @@ int read_directory(const char *dir_path, FileList *list,
         struct stat st;
         fe.type = detect_file_type(full_path, &st, &fe.symlink_target);
         fe.mode = st.st_mode;
+        fe.dev = st.st_dev;
         fe.mtime = GET_MTIME(st);
         fe.size = is_virtual_fs ? -1 : st.st_size;
 
@@ -307,6 +308,8 @@ static void build_tree_children(TreeNode *parent, int depth,
         TreeNode *child = &parent->children[i];
         memset(child, 0, sizeof(TreeNode));
         child->entry = list.entries[i];
+        /* Mark mount boundaries (different filesystem than parent) */
+        child->entry.is_mount_point = (child->entry.dev != parent->entry.dev);
     }
 
     /* Set git status and recurse */
@@ -381,6 +384,7 @@ TreeNode *build_tree(const char *path, const TreeBuildOpts *opts,
     root->entry.type = type;
     root->entry.symlink_target = symlink_target;
     root->entry.mode = st.st_mode;
+    root->entry.dev = st.st_dev;
     root->entry.mtime = GET_MTIME(st);
     root->entry.line_count = -1;
     root->entry.word_count = -1;
@@ -482,6 +486,8 @@ void tree_expand_node(TreeNode *node, const TreeBuildOpts *opts,
         TreeNode *child = &node->children[i];
         memset(child, 0, sizeof(TreeNode));
         child->entry = list.entries[i];
+        /* Mark mount boundaries (different filesystem than parent) */
+        child->entry.is_mount_point = (child->entry.dev != node->entry.dev);
 
         if (opts->compute.git_status) {
             apply_git_status(&child->entry, git, opts->compute.git_diff);
@@ -530,6 +536,7 @@ static TreeNode *build_ancestor_node(const char *path, const TreeBuildOpts *opts
     node->entry.type = type;
     node->entry.symlink_target = symlink_target;
     node->entry.mode = st.st_mode;
+    node->entry.dev = st.st_dev;
     node->entry.mtime = GET_MTIME(st);
     node->entry.line_count = -1;
     node->entry.word_count = -1;
