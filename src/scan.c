@@ -210,24 +210,12 @@ static ScanResult scan_impl(const char *path, dev_t root_dev, const ScanContext 
 #else
 /* Linux/other: use readdir + fstatat */
 static ScanResult scan_impl(const char *path, dev_t root_dev, const ScanContext *ctx) {
+    (void)root_dev;  /* Not used - cross filesystem boundaries like macOS */
     ScanResult result = {0, 0};
     if (ctx->shutdown && *ctx->shutdown) return result;
 
     int dirfd = open(path, O_RDONLY | O_DIRECTORY);
     if (dirfd < 0) return (ScanResult){-1, -1};
-
-    struct stat dir_st;
-    if (fstat(dirfd, &dir_st) != 0) {
-        close(dirfd);
-        return (ScanResult){-1, -1};
-    }
-
-    if (root_dev == 0) {
-        root_dev = dir_st.st_dev;
-    } else if (dir_st.st_dev != root_dev) {
-        close(dirfd);
-        return (ScanResult){0, 0};
-    }
 
     if (path_is_network_fs(path) || path_is_virtual_fs(path)) {
         close(dirfd);
@@ -237,7 +225,10 @@ static ScanResult scan_impl(const char *path, dev_t root_dev, const ScanContext 
     int skip_file_count = path_is_git_dir(path);
 
     /* Include this directory's own allocated size */
-    result.size = dir_st.st_blocks * 512;
+    struct stat dir_st;
+    if (fstat(dirfd, &dir_st) == 0) {
+        result.size = dir_st.st_blocks * 512;
+    }
 
     DIR *dir = fdopendir(dirfd);
     if (!dir) {
