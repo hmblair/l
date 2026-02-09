@@ -134,16 +134,6 @@ int path_is_git_dir(const char *path) {
     return strcmp(name, ".git") == 0;
 }
 
-int path_should_skip_firmlink(const char *path) {
-    /* Only skip /System/Volumes/Data - it's firmlinked and would cause double-counting.
-     * Other volumes like Preboot, VM, Update are real storage and should be counted. */
-    if (strncmp(path, "/System/Volumes/Data", 20) == 0 &&
-        (path[20] == '/' || path[20] == '\0')) return 1;
-    if (strncmp(path, "//System/Volumes/Data", 21) == 0 &&
-        (path[21] == '/' || path[21] == '\0')) return 1;
-    return 0;
-}
-
 int path_is_git_root(const char *path) {
     char git_path[PATH_MAX];
     snprintf(git_path, sizeof(git_path), "%s/.git", path);

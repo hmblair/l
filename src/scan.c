@@ -27,10 +27,62 @@ typedef struct {
     long threshold;
 } ScanContext;
 
-static ScanResult scan_impl(const char *path, dev_t root_dev, const ScanContext *ctx);
+/* Inode identifier for loop detection */
+typedef struct {
+    dev_t dev;
+    ino_t ino;
+} Inode;
+
+#define MAX_SCAN_DEPTH 128
+
+/* Check if inode matches any ancestor (loop detection) */
+static int is_ancestor_inode(dev_t dev, ino_t ino,
+                             const Inode *ancestors, int depth) {
+    for (int i = 0; i < depth; i++) {
+        if (ancestors[i].dev == dev && ancestors[i].ino == ino)
+            return 1;
+    }
+    return 0;
+}
+
+static ScanResult scan_impl(const char *path,
+                            const Inode *ancestors, int depth,
+                            const ScanContext *ctx);
+
+/* Common setup for scan_impl - returns dirfd on success, -1 to skip, -2 on error */
+static int scan_setup(const char *path, struct stat *dir_st,
+                      Inode *new_ancestors, const Inode *ancestors, int depth,
+                      const ScanContext *ctx) {
+    if (ctx->shutdown && *ctx->shutdown) return -1;
+    if (depth >= MAX_SCAN_DEPTH) return -1;
+
+    int dirfd = open(path, O_RDONLY | O_DIRECTORY);
+    if (dirfd < 0) return -2;
+
+    if (path_is_network_fs(path) || path_is_virtual_fs(path)) {
+        close(dirfd);
+        return -1;
+    }
+
+    if (fstat(dirfd, dir_st) != 0) {
+        close(dirfd);
+        return -2;
+    }
+
+    if (is_ancestor_inode(dir_st->st_dev, dir_st->st_ino, ancestors, depth)) {
+        close(dirfd);
+        return -1;
+    }
+
+    if (ancestors) memcpy(new_ancestors, ancestors, depth * sizeof(Inode));
+    new_ancestors[depth] = (Inode){dir_st->st_dev, dir_st->st_ino};
+
+    return dirfd;
+}
 
 /* Process subdirectories with OMP tasks, accumulating into result */
-static void scan_process_subdirs(char **subdirs, size_t subdir_count, dev_t root_dev,
+static void scan_process_subdirs(char **subdirs, size_t subdir_count,
+                                 const Inode *ancestors, int depth,
                                  const ScanContext *ctx, int skip_file_count,
                                  ScanResult *result) {
     if (subdir_count == 0) return;
@@ -45,8 +97,8 @@ static void scan_process_subdirs(char **subdirs, size_t subdir_count, dev_t root
                 sub_stats[i].size = cached_size;
                 sub_stats[i].file_count = cached_count;
             } else {
-                #pragma omp task shared(sub_stats) firstprivate(i, root_dev, ctx)
-                sub_stats[i] = scan_impl(subdirs[i], root_dev, ctx);
+                #pragma omp task shared(sub_stats) firstprivate(i, ancestors, depth, ctx)
+                sub_stats[i] = scan_impl(subdirs[i], ancestors, depth, ctx);
             }
         }
         #pragma omp taskwait
@@ -75,6 +127,16 @@ static void scan_finalize(const char *path, const ScanContext *ctx,
     if (skip_file_count) result->file_count = -1;
 }
 
+/* Common teardown for scan_impl */
+static void scan_teardown(const char *path, char **subdirs, size_t subdir_count,
+                          Inode *new_ancestors, int depth,
+                          const ScanContext *ctx, int skip_file_count,
+                          ScanResult *result) {
+    scan_process_subdirs(subdirs, subdir_count, new_ancestors, depth + 1,
+                         ctx, skip_file_count, result);
+    scan_finalize(path, ctx, skip_file_count, result);
+}
+
 ScanResult scan_directory(const char *path,
                           scan_store_fn store_fn,
                           scan_cache_fn cache_fn,
@@ -86,34 +148,25 @@ ScanResult scan_directory(const char *path,
     #pragma omp parallel
     #pragma omp single
     {
-        result = scan_impl(path, 0, &ctx);
+        result = scan_impl(path, NULL, 0, &ctx);
     }
     return result;
 }
 
 #ifdef __APPLE__
 /* macOS: use getattrlistbulk for faster metadata fetching */
-static ScanResult scan_impl(const char *path, dev_t root_dev, const ScanContext *ctx) {
-    (void)root_dev;  /* Not used on macOS - firmlinks cross device boundaries */
-    ScanResult result = {0, 0};
-    if (ctx->shutdown && *ctx->shutdown) return result;
-
-    int dirfd = open(path, O_RDONLY | O_DIRECTORY);
-    if (dirfd < 0) return (ScanResult){-1, -1};
-
-    /* Skip network and virtual filesystems */
-    if (path_is_network_fs(path) || path_is_virtual_fs(path)) {
-        close(dirfd);
-        return (ScanResult){0, 0};
-    }
-
-    int skip_file_count = path_is_git_dir(path);
-
-    /* Include this directory's own allocated size */
+static ScanResult scan_impl(const char *path,
+                            const Inode *ancestors, int depth,
+                            const ScanContext *ctx) {
     struct stat dir_st;
-    if (fstat(dirfd, &dir_st) == 0) {
-        result.size = dir_st.st_blocks * 512;
-    }
+    Inode new_ancestors[MAX_SCAN_DEPTH];
+
+    int dirfd = scan_setup(path, &dir_st, new_ancestors, ancestors, depth, ctx);
+    if (dirfd == -1) return (ScanResult){0, 0};
+    if (dirfd == -2) return (ScanResult){-1, -1};
+
+    ScanResult result = {dir_st.st_blocks * 512, 0};
+    int skip_file_count = path_is_git_dir(path);
 
     struct attrlist attrList = {0};
     attrList.bitmapcount = ATTR_BIT_MAP_COUNT;
@@ -175,22 +228,18 @@ static ScanResult scan_impl(const char *path, dev_t root_dev, const ScanContext 
                         snprintf(full, PATH_MAX, need_slash ? "%s/%s" : "%s%s",
                                  path, name);
 
-                        if (path_should_skip_firmlink(full)) {
-                            free(full);
-                        } else {
-                            if (subdir_count >= subdir_cap) {
-                                size_t new_cap = subdir_cap ? subdir_cap * 2 : 16;
-                                char **new_subdirs = realloc(subdirs, new_cap * sizeof(char *));
-                                if (!new_subdirs) {
-                                    free(full);
-                                } else {
-                                    subdir_cap = new_cap;
-                                    subdirs = new_subdirs;
-                                    subdirs[subdir_count++] = full;
-                                }
+                        if (subdir_count >= subdir_cap) {
+                            size_t new_cap = subdir_cap ? subdir_cap * 2 : 16;
+                            char **new_subdirs = realloc(subdirs, new_cap * sizeof(char *));
+                            if (!new_subdirs) {
+                                free(full);
                             } else {
+                                subdir_cap = new_cap;
+                                subdirs = new_subdirs;
                                 subdirs[subdir_count++] = full;
                             }
+                        } else {
+                            subdirs[subdir_count++] = full;
                         }
                     }
                 }
@@ -202,33 +251,25 @@ static ScanResult scan_impl(const char *path, dev_t root_dev, const ScanContext 
     free(attrBuf);
     close(dirfd);
 
-    scan_process_subdirs(subdirs, subdir_count, root_dev, ctx, skip_file_count, &result);
-    scan_finalize(path, ctx, skip_file_count, &result);
+    scan_teardown(path, subdirs, subdir_count, new_ancestors, depth,
+                  ctx, skip_file_count, &result);
     return result;
 }
 
 #else
 /* Linux/other: use readdir + fstatat */
-static ScanResult scan_impl(const char *path, dev_t root_dev, const ScanContext *ctx) {
-    (void)root_dev;  /* Not used - cross filesystem boundaries like macOS */
-    ScanResult result = {0, 0};
-    if (ctx->shutdown && *ctx->shutdown) return result;
-
-    int dirfd = open(path, O_RDONLY | O_DIRECTORY);
-    if (dirfd < 0) return (ScanResult){-1, -1};
-
-    if (path_is_network_fs(path) || path_is_virtual_fs(path)) {
-        close(dirfd);
-        return (ScanResult){0, 0};
-    }
-
-    int skip_file_count = path_is_git_dir(path);
-
-    /* Include this directory's own allocated size */
+static ScanResult scan_impl(const char *path,
+                            const Inode *ancestors, int depth,
+                            const ScanContext *ctx) {
     struct stat dir_st;
-    if (fstat(dirfd, &dir_st) == 0) {
-        result.size = dir_st.st_blocks * 512;
-    }
+    Inode new_ancestors[MAX_SCAN_DEPTH];
+
+    int dirfd = scan_setup(path, &dir_st, new_ancestors, ancestors, depth, ctx);
+    if (dirfd == -1) return (ScanResult){0, 0};
+    if (dirfd == -2) return (ScanResult){-1, -1};
+
+    ScanResult result = {dir_st.st_blocks * 512, 0};
+    int skip_file_count = path_is_git_dir(path);
 
     DIR *dir = fdopendir(dirfd);
     if (!dir) {
@@ -268,29 +309,25 @@ static ScanResult scan_impl(const char *path, dev_t root_dev, const ScanContext 
                 snprintf(full, PATH_MAX, need_slash ? "%s/%s" : "%s%s",
                          path, entry->d_name);
 
-                if (path_should_skip_firmlink(full)) {
-                    free(full);
-                } else {
-                    if (subdir_count >= subdir_cap) {
-                        subdir_cap = subdir_cap ? subdir_cap * 2 : 16;
-                        char **new_subdirs = realloc(subdirs, subdir_cap * sizeof(char *));
-                        if (!new_subdirs) {
-                            free(full);
-                        } else {
-                            subdirs = new_subdirs;
-                            subdirs[subdir_count++] = full;
-                        }
+                if (subdir_count >= subdir_cap) {
+                    subdir_cap = subdir_cap ? subdir_cap * 2 : 16;
+                    char **new_subdirs = realloc(subdirs, subdir_cap * sizeof(char *));
+                    if (!new_subdirs) {
+                        free(full);
                     } else {
+                        subdirs = new_subdirs;
                         subdirs[subdir_count++] = full;
                     }
+                } else {
+                    subdirs[subdir_count++] = full;
                 }
             }
         }
     }
     closedir(dir);
 
-    scan_process_subdirs(subdirs, subdir_count, root_dev, ctx, skip_file_count, &result);
-    scan_finalize(path, ctx, skip_file_count, &result);
+    scan_teardown(path, subdirs, subdir_count, new_ancestors, depth,
+                  ctx, skip_file_count, &result);
     return result;
 }
 #endif

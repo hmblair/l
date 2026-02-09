@@ -153,9 +153,6 @@ void path_join(char *dest, size_t dest_len, const char *dir, const char *name);
 /* Check if path is or ends with .git */
 int path_is_git_dir(const char *path);
 
-/* Check if path should be skipped (macOS APFS firmlinks) */
-int path_should_skip_firmlink(const char *path);
-
 /* Check if directory is a git repository root (contains .git) */
 int path_is_git_root(const char *path);
 
