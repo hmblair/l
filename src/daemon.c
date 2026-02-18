@@ -500,6 +500,7 @@ static void cache_clear(void) {
 
 static void print_status(void) {
     int lines_after_cache = 0;  /* Count lines printed after the cache count line */
+    long last_scan_secs = -1;
 
     printf("\n");
 
@@ -515,10 +516,10 @@ static void print_status(void) {
                     pid = (pid_t)atoi(buf);
                 pclose(fp);
             }
-            /* Get status (scanning/idle) */
+            /* Get status (scanning/idle) and last scan duration */
             char status_path[PATH_MAX];
             get_status_path(status_path, sizeof(status_path));
-            char status[16] = "idle";
+            char status[32] = "idle";
             FILE *sf = fopen(status_path, "r");
             if (sf) {
                 if (fgets(status, sizeof(status), sf)) {
@@ -527,14 +528,20 @@ static void print_status(void) {
                 fclose(sf);
             }
             int is_scanning = (strcmp(status, "scanning") == 0);
+            /* Parse "idle <seconds>" to extract scan duration */
+            const char *display_status = status;
+            if (strncmp(status, "idle ", 5) == 0) {
+                last_scan_secs = atol(status + 5);
+                display_status = "idle";
+            }
             if (pid > 0) {
                 printf("  %s●%s Daemon    %srunning%s %s(%s, PID %d)%s\n",
                        COLOR_GREEN, COLOR_RESET, COLOR_GREEN, COLOR_RESET,
-                       COLOR_GREY, status, pid, COLOR_RESET);
+                       COLOR_GREY, display_status, pid, COLOR_RESET);
             } else {
                 printf("  %s●%s Daemon    %srunning%s %s(%s)%s\n",
                        COLOR_GREEN, COLOR_RESET, COLOR_GREEN, COLOR_RESET,
-                       COLOR_GREY, status, COLOR_RESET);
+                       COLOR_GREY, display_status, COLOR_RESET);
             }
             (void)is_scanning;  /* Suppress unused warning */
         } else {
@@ -569,7 +576,19 @@ static void print_status(void) {
                COLOR_GREEN, COLOR_RESET, COLOR_WHITE, count, COLOR_RESET,
                COLOR_GREY, size_buf, COLOR_RESET);
         /* Lines after the cache count line start here */
-        printf("              %supdated %s%s\n", COLOR_GREY, time_buf, COLOR_RESET);
+        if (last_scan_secs >= 0) {
+            char dur_buf[32];
+            if (last_scan_secs >= 60) {
+                snprintf(dur_buf, sizeof(dur_buf), "%ldm %lds",
+                         last_scan_secs / 60, last_scan_secs % 60);
+            } else {
+                snprintf(dur_buf, sizeof(dur_buf), "%lds", last_scan_secs);
+            }
+            printf("              %supdated %s (scan took %s)%s\n",
+                   COLOR_GREY, time_buf, dur_buf, COLOR_RESET);
+        } else {
+            printf("              %supdated %s%s\n", COLOR_GREY, time_buf, COLOR_RESET);
+        }
         lines_after_cache++;
     } else {
         printf("  %s○%s Cache     %sempty%s\n", COLOR_GREY, COLOR_RESET, COLOR_GREY, COLOR_RESET);

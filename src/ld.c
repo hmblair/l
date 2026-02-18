@@ -128,7 +128,9 @@ int main(int argc, char *argv[]) {
 
         time_t elapsed = time(NULL) - start;
         log_info("scan complete (%lds, %d cached)", elapsed, cached);
-        write_status("idle");
+        char status_buf[32];
+        snprintf(status_buf, sizeof(status_buf), "idle %ld", (long)elapsed);
+        write_status(status_buf);
 
         for (int i = 0; i < scan_interval && !g_shutdown && !g_refresh; i++)
             sleep(1);
