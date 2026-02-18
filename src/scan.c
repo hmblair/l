@@ -216,7 +216,7 @@ static ScanResult scan_impl(const char *path,
             }
 
             if (!PATH_IS_DOT_OR_DOTDOT(name)) {
-                if (obj_type == VREG) {
+                if (obj_type == VREG || obj_type == VLNK) {
                     result.size += alloc_size;
                     if (!skip_file_count) result.file_count++;
                 } else if (obj_type == VDIR) {
