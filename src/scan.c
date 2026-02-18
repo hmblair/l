@@ -59,7 +59,7 @@ static int scan_setup(const char *path, struct stat *dir_st,
     int dirfd = open(path, O_RDONLY | O_DIRECTORY);
     if (dirfd < 0) return -2;
 
-    if (path_is_network_fs(path) || path_is_virtual_fs(path)) {
+    if (path_is_virtual_fs(path)) {
         close(dirfd);
         return -1;
     }
