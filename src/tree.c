@@ -130,7 +130,9 @@ int read_directory(const char *dir_path, FileList *list,
     closedir(dir);
 
     /* Compute metadata in parallel if requested */
-    if (list->count > 0 && !is_virtual_fs) {
+    int need_parallel = !is_virtual_fs &&
+        (c->sizes || c->file_counts || c->line_counts || c->media_info);
+    if (list->count > 0 && need_parallel) {
         #pragma omp parallel for schedule(dynamic)
         for (size_t i = 0; i < list->count; i++) {
             FileEntry *fe = &list->entries[i];

@@ -27,7 +27,7 @@ typedef struct {
 
 /* Preset configurations */
 #define COMPUTE_NONE     ((ComputeOpts){0, 0, 0, 0, 0, 0, 0, 0})
-#define COMPUTE_BASIC    ((ComputeOpts){1, 1, 0, 0, 1, 0, 0, 0})  /* sizes, counts, git status */
+#define COMPUTE_BASIC    ((ComputeOpts){0, 0, 0, 0, 1, 0, 0, 0})  /* git status only */
 #define COMPUTE_LONG     ((ComputeOpts){1, 1, 1, 1, 1, 1, 0, 0})  /* + lines, media, diff */
 #define COMPUTE_SUMMARY  ((ComputeOpts){1, 1, 1, 1, 1, 0, 1, 1})  /* + type_stats, repo_info */
 

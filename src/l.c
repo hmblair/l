@@ -418,6 +418,10 @@ int main(int argc, char **argv) {
         cfg.compute = COMPUTE_BASIC;
     }
 
+    /* Enable sizes if needed for sorting/filtering in short mode */
+    if (cfg.sort_by == SORT_SIZE) cfg.compute.sizes = 1;
+    if (cfg.min_size > 0) cfg.compute.sizes = 1;
+
     /* Load icons */
     Icons icons;
     icons_init_defaults(&icons);
@@ -433,8 +437,10 @@ int main(int argc, char **argv) {
     shebangs_init(&shebangs);
     shebangs_load(&shebangs, cfg.script_dir);
 
-    /* Load size cache */
-    cache_load();
+    /* Load size cache (only needed when computing sizes or file counts) */
+    if (cfg.compute.sizes || cfg.compute.file_counts) {
+        cache_load();
+    }
 
     /* Validate all inputs first */
     for (int i = 0; i < dir_count; i++) {
