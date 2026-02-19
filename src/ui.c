@@ -642,7 +642,15 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
 
     if (fe->symlink_target) {
         char abbrev[PATH_MAX];
-        abbreviate_home(fe->symlink_target, abbrev, sizeof(abbrev), ctx->cfg);
+        /* Show relative path if target is under the same directory as the link */
+        const char *link_slash = strrchr(fe->path, '/');
+        size_t dir_len = link_slash ? (size_t)(link_slash - fe->path) : 0;
+        if (dir_len > 0 && strncmp(fe->symlink_target, fe->path, dir_len) == 0 &&
+            fe->symlink_target[dir_len] == '/') {
+            snprintf(abbrev, sizeof(abbrev), "%s", fe->symlink_target + dir_len + 1);
+        } else {
+            abbreviate_home(fe->symlink_target, abbrev, sizeof(abbrev), ctx->cfg);
+        }
         const char *target_base = strrchr(fe->symlink_target, '/');
         target_base = target_base ? target_base + 1 : fe->symlink_target;
         const char *target_style = (target_base[0] == '.') ? CLR(ctx->cfg, STYLE_ITALIC) : "";
