@@ -632,7 +632,13 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
         if (git_get_branch_info(fe->path, &gi)) {
             if (gi.has_upstream) {
                 const char *cloud_color = gi.out_of_sync ? COLOR_RED : COLOR_GREY;
-                EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s%s %s%s%s", CLR(ctx->cfg, COLOR_GREY), CLR(ctx->cfg, STYLE_ITALIC), gi.branch, RST(ctx->cfg), CLR(ctx->cfg, cloud_color), ctx->icons->git_upstream, RST(ctx->cfg));
+                char *web_url = git_remote_to_web_url(fe->remote);
+                if (web_url && ctx->cfg->is_tty) {
+                    EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s%s %s\033]8;;%s\033\\%s\033]8;;\033\\%s", CLR(ctx->cfg, COLOR_GREY), CLR(ctx->cfg, STYLE_ITALIC), gi.branch, RST(ctx->cfg), CLR(ctx->cfg, cloud_color), web_url, ctx->icons->git_upstream, RST(ctx->cfg));
+                } else {
+                    EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s%s %s%s%s", CLR(ctx->cfg, COLOR_GREY), CLR(ctx->cfg, STYLE_ITALIC), gi.branch, RST(ctx->cfg), CLR(ctx->cfg, cloud_color), ctx->icons->git_upstream, RST(ctx->cfg));
+                }
+                free(web_url);
             } else {
                 EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s%s", CLR(ctx->cfg, COLOR_GREY), CLR(ctx->cfg, STYLE_ITALIC), gi.branch, RST(ctx->cfg));
             }
@@ -820,14 +826,17 @@ int get_terminal_width(void) {
 /* Calculate visible length (excluding ANSI escape sequences) */
 static int visible_strlen(const char *s) {
     int len = 0;
-    int in_escape = 0;
     for (; *s; s++) {
-        if (*s == '\033') {
-            in_escape = 1;
-        } else if (in_escape) {
-            if (*s == 'm') in_escape = 0;
+        if (s[0] == '\033' && s[1] == ']') {
+            /* OSC sequence: skip until ST (\033\\) */
+            s += 2;
+            while (*s && !(s[0] == '\033' && s[1] == '\\')) s++;
+            if (*s) s++; /* skip past \\ */
+        } else if (*s == '\033') {
+            /* CSI sequence: skip until 'm' */
+            s++;
+            while (*s && *s != 'm') s++;
         } else {
-            /* Handle UTF-8: count codepoints, not bytes */
             if ((*s & 0xC0) != 0x80) len++;
         }
     }
@@ -855,7 +864,12 @@ static char *truncate_visible(const char *s, int max_visible_len) {
     int in_escape = 0;
 
     while (*src && visible_count < target_visible) {
-        if (*src == '\033') {
+        if (src[0] == '\033' && src[1] == ']') {
+            /* Copy OSC sequence verbatim */
+            *dst++ = *src++; *dst++ = *src++;
+            while (*src && !(src[0] == '\033' && src[1] == '\\')) *dst++ = *src++;
+            if (*src) { *dst++ = *src++; *dst++ = *src++; }
+        } else if (*src == '\033') {
             in_escape = 1;
             *dst++ = *src++;
         } else if (in_escape) {
@@ -877,9 +891,13 @@ static char *truncate_visible(const char *s, int max_visible_len) {
     *dst++ = '.';
     *dst++ = '.';
 
-    /* Copy remaining escape sequences to ensure colors reset */
+    /* Copy remaining escape sequences to ensure colors/links reset */
     while (*src) {
-        if (*src == '\033') {
+        if (src[0] == '\033' && src[1] == ']') {
+            *dst++ = *src++; *dst++ = *src++;
+            while (*src && !(src[0] == '\033' && src[1] == '\\')) *dst++ = *src++;
+            if (*src) { *dst++ = *src++; *dst++ = *src++; }
+        } else if (*src == '\033') {
             in_escape = 1;
             *dst++ = *src++;
         } else if (in_escape) {
@@ -1012,10 +1030,19 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
     if (fe->has_git_repo_info && fe->branch) {
         if (fe->has_upstream) {
             const char *cloud_color = fe->out_of_sync ? COLOR_RED : COLOR_GREY;
-            card_add(&card, "%s%s%s%s%s%s%s %s%s%s%s %s%s%s",
-                     color, icon, icon_space, style, fe->name, RST(cfg), "",
-                     CLR(cfg, COLOR_GREY), CLR(cfg, STYLE_ITALIC), fe->branch, RST(cfg),
-                     CLR(cfg, cloud_color), ctx->icons->git_upstream, RST(cfg));
+            char *web_url = git_remote_to_web_url(fe->remote);
+            if (web_url && cfg->is_tty) {
+                card_add(&card, "%s%s%s%s%s%s%s %s%s%s%s %s\033]8;;%s\033\\%s\033]8;;\033\\%s",
+                         color, icon, icon_space, style, fe->name, RST(cfg), "",
+                         CLR(cfg, COLOR_GREY), CLR(cfg, STYLE_ITALIC), fe->branch, RST(cfg),
+                         CLR(cfg, cloud_color), web_url, ctx->icons->git_upstream, RST(cfg));
+            } else {
+                card_add(&card, "%s%s%s%s%s%s%s %s%s%s%s %s%s%s",
+                         color, icon, icon_space, style, fe->name, RST(cfg), "",
+                         CLR(cfg, COLOR_GREY), CLR(cfg, STYLE_ITALIC), fe->branch, RST(cfg),
+                         CLR(cfg, cloud_color), ctx->icons->git_upstream, RST(cfg));
+            }
+            free(web_url);
         } else {
             card_add(&card, "%s%s%s%s%s%s%s %s%s%s%s",
                      color, icon, icon_space, style, fe->name, RST(cfg), "",

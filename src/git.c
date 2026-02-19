@@ -398,6 +398,76 @@ int git_get_branch_info(const char *repo_path, GitBranchInfo *info) {
     return 1;
 }
 
+char *git_get_remote_url(const char *repo_path) {
+    char config_path[PATH_MAX];
+    snprintf(config_path, sizeof(config_path), "%s/.git/config", repo_path);
+
+    FILE *f = fopen(config_path, "r");
+    if (!f) return NULL;
+
+    char line[1024];
+    int in_origin = 0;
+
+    while (fgets(line, sizeof(line), f)) {
+        /* Strip leading whitespace */
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+
+        if (p[0] == '[') {
+            in_origin = (strncmp(p, "[remote \"origin\"]", 17) == 0);
+            continue;
+        }
+
+        if (in_origin && strncmp(p, "url", 3) == 0) {
+            char *eq = strchr(p, '=');
+            if (!eq) continue;
+            eq++;
+            while (*eq == ' ' || *eq == '\t') eq++;
+            eq[strcspn(eq, "\r\n")] = '\0';
+            if (*eq) {
+                fclose(f);
+                return xstrdup(eq);
+            }
+        }
+    }
+
+    fclose(f);
+    return NULL;
+}
+
+char *git_remote_to_web_url(const char *remote) {
+    if (!remote) return NULL;
+
+    char buf[1024];
+
+    if (strncmp(remote, "git@", 4) == 0) {
+        /* git@host:user/repo.git -> https://host/user/repo */
+        const char *host = remote + 4;
+        const char *colon = strchr(host, ':');
+        if (!colon) return NULL;
+        snprintf(buf, sizeof(buf), "https://%.*s/%s",
+                 (int)(colon - host), host, colon + 1);
+    } else if (strncmp(remote, "ssh://", 6) == 0) {
+        /* ssh://git@host/user/repo.git -> https://host/user/repo */
+        const char *p = remote + 6;
+        const char *at = strchr(p, '@');
+        if (at) p = at + 1;
+        snprintf(buf, sizeof(buf), "https://%s", p);
+    } else if (strncmp(remote, "https://", 8) == 0 ||
+               strncmp(remote, "http://", 7) == 0) {
+        snprintf(buf, sizeof(buf), "%s", remote);
+    } else {
+        return NULL;
+    }
+
+    /* Strip trailing .git */
+    size_t len = strlen(buf);
+    if (len > 4 && strcmp(buf + len - 4, ".git") == 0)
+        buf[len - 4] = '\0';
+
+    return xstrdup(buf);
+}
+
 /* ============================================================================
  * Shell Escape (for non-libgit2 fallback)
  * ============================================================================ */

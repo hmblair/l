@@ -115,6 +115,15 @@ typedef struct {
  * Returns 1 if on a branch, 0 otherwise. Caller must free info->branch. */
 int git_get_branch_info(const char *repo_path, GitBranchInfo *info);
 
+/* Get origin remote URL by parsing .git/config directly.
+ * Returns allocated string or NULL. Caller must free. */
+char *git_get_remote_url(const char *repo_path);
+
+/* Convert a git remote URL to a browser-clickable HTTPS URL.
+ * Handles git@, ssh://, https://, http:// formats. Strips trailing .git.
+ * Returns allocated string or NULL. Caller must free. */
+char *git_remote_to_web_url(const char *remote);
+
 /* ============================================================================
  * Shell Escape (for non-libgit2 fallback)
  * ============================================================================ */
