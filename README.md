@@ -167,45 +167,14 @@ The daemon is managed via launchd on macOS and systemd on Linux, storing its cac
 
 ### Sections
 
-**`[icons]`** - Nerd Font icons for file types and UI elements:
-```toml
-[icons]
-default = ""
-closed_directory = ""
-open_directory = ""
-executable = ""
-git_modified = ""
-```
+| Section | Description |
+|---------|-------------|
+| `[icons]` | Nerd Font icons for file types and UI elements |
+| `[extensions]` | Icons for specific file extensions |
+| `[filetypes]` | File type names for `--summary` output |
+| `[shebangs]` | Map shebang interpreters to file types (for files without extensions) |
 
-**`[extensions]`** - Icons for specific file extensions:
-```toml
-[extensions]
-jpg,png,gif,webp,bmp,ico = ""
-mp3,wav,flac,ogg,m4a,m4b = "󰝚"
-mp4,mkv,avi,mov,webm = "󰿎"
-```
-
-**`[filetypes]`** - File type names for `--summary` output:
-```toml
-[filetypes]
-c = "C source"
-h = "C header"
-cpp,cc,cxx = "C++ source"
-cu = "CUDA source"
-py = "Python"
-rs = "Rust"
-go = "Go"
-```
-
-**`[shebangs]`** - Map shebang interpreters to file types (for files without extensions):
-```toml
-[shebangs]
-sh,bash,zsh = "Shell script"
-python,python3 = "Python"
-node,nodejs = "JavaScript"
-```
-
-Comma-separated extensions map to the same value. Custom entries override built-in defaults.
+Comma-separated keys map to the same value. Custom entries override built-in defaults. See `config.toml` for all available options.
 
 ## License
 
