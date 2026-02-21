@@ -115,6 +115,10 @@ typedef struct {
  * Returns 1 if on a branch, 0 otherwise. Caller must free info->branch. */
 int git_get_branch_info(const char *repo_path, GitBranchInfo *info);
 
+/* Get the latest tag reachable from HEAD.
+ * Returns allocated string or NULL. Caller must free. */
+char *git_get_latest_tag(const char *repo_path);
+
 /* Get origin remote URL by parsing .git/config directly.
  * Returns allocated string or NULL. Caller must free. */
 char *git_get_remote_url(const char *repo_path);

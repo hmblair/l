@@ -398,6 +398,22 @@ int git_get_branch_info(const char *repo_path, GitBranchInfo *info) {
     return 1;
 }
 
+char *git_get_latest_tag(const char *repo_path) {
+    char cmd[PATH_MAX + 64];
+    snprintf(cmd, sizeof(cmd), "git -C '%s' describe --tags --abbrev=0 2>/dev/null", repo_path);
+    FILE *fp = popen(cmd, "r");
+    if (!fp) return NULL;
+
+    char buf[256];
+    char *result = NULL;
+    if (fgets(buf, sizeof(buf), fp)) {
+        buf[strcspn(buf, "\r\n")] = '\0';
+        if (buf[0]) result = xstrdup(buf);
+    }
+    pclose(fp);
+    return result;
+}
+
 char *git_get_remote_url(const char *repo_path) {
     char config_path[PATH_MAX];
     snprintf(config_path, sizeof(config_path), "%s/.git/config", repo_path);

@@ -244,6 +244,7 @@ static char **find_git_repo_roots(FileList *list, int in_git_repo,
             is_git_repo_root[i] = 1;
             fe->is_git_root = 1;
             fe->remote = git_get_remote_url(fe->path);
+            fe->tag = git_get_latest_tag(fe->path);
             if (in_git_repo) {
                 is_submodule[i] = 1;
             } else {
@@ -427,6 +428,7 @@ TreeNode *build_tree(const char *path, const TreeBuildOpts *opts,
     if (is_dir && in_git_repo && strcmp(abs_path, git_root) == 0) {
         root->entry.is_git_root = 1;
         root->entry.remote = git_get_remote_url(abs_path);
+        root->entry.tag = git_get_latest_tag(abs_path);
     }
 
     if (is_dir) {
@@ -559,6 +561,7 @@ static TreeNode *build_ancestor_node(const char *path, const TreeBuildOpts *opts
     if ((type == FTYPE_DIR || type == FTYPE_SYMLINK_DIR) && path_is_git_root(path)) {
         node->entry.is_git_root = 1;
         node->entry.remote = git_get_remote_url(path);
+        node->entry.tag = git_get_latest_tag(path);
     }
 
     return node;

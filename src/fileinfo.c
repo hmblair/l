@@ -1365,6 +1365,7 @@ void fileinfo_compute_git_repo_info(struct FileEntry *fe, GitCache *git) {
                         *last_dash = '-';
                     }
                 }
+                free(fe->tag);
                 fe->tag = xstrdup(tag_buf);
             }
         }
@@ -1379,6 +1380,7 @@ void fileinfo_compute_git_repo_info(struct FileEntry *fe, GitCache *git) {
         if (fgets(remote_buf, sizeof(remote_buf), fp)) {
             remote_buf[strcspn(remote_buf, "\n")] = '\0';
             if (remote_buf[0]) {
+                free(fe->remote);
                 fe->remote = xstrdup(remote_buf);
             }
         }

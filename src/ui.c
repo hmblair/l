@@ -630,17 +630,20 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
     if (is_dir && fe->is_git_root) {
         GitBranchInfo gi;
         if (git_get_branch_info(fe->path, &gi)) {
+            if (fe->tag) {
+                EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s (%s)%s", CLR(ctx->cfg, COLOR_GREY), CLR(ctx->cfg, STYLE_ITALIC), gi.branch, fe->tag, RST(ctx->cfg));
+            } else {
+                EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s%s", CLR(ctx->cfg, COLOR_GREY), CLR(ctx->cfg, STYLE_ITALIC), gi.branch, RST(ctx->cfg));
+            }
             if (gi.has_upstream) {
                 const char *cloud_color = gi.out_of_sync ? COLOR_RED : COLOR_GREY;
                 char *web_url = git_remote_to_web_url(fe->remote);
                 if (web_url && ctx->cfg->is_tty) {
-                    EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s%s %s\033]8;;%s\033\\%s\033]8;;\033\\%s", CLR(ctx->cfg, COLOR_GREY), CLR(ctx->cfg, STYLE_ITALIC), gi.branch, RST(ctx->cfg), CLR(ctx->cfg, cloud_color), web_url, ctx->icons->git_upstream, RST(ctx->cfg));
+                    EMIT(line, pos, ENTRY_BUF_SIZE, " %s\033]8;;%s\033\\%s\033]8;;\033\\%s", CLR(ctx->cfg, cloud_color), web_url, ctx->icons->git_upstream, RST(ctx->cfg));
                 } else {
-                    EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s%s %s%s%s", CLR(ctx->cfg, COLOR_GREY), CLR(ctx->cfg, STYLE_ITALIC), gi.branch, RST(ctx->cfg), CLR(ctx->cfg, cloud_color), ctx->icons->git_upstream, RST(ctx->cfg));
+                    EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s", CLR(ctx->cfg, cloud_color), ctx->icons->git_upstream, RST(ctx->cfg));
                 }
                 free(web_url);
-            } else {
-                EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s%s", CLR(ctx->cfg, COLOR_GREY), CLR(ctx->cfg, STYLE_ITALIC), gi.branch, RST(ctx->cfg));
             }
             free(gi.branch);
         }
