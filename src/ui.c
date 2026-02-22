@@ -611,7 +611,7 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
         int is_root = (fe->path[0] == '/' && fe->path[1] == '\0');
         const char *icon;
         if ((fe->is_mount_point || is_root) && fe->type == FTYPE_DIR) {
-            icon = ctx->icons->mount_point[0] ? ctx->icons->mount_point : "󰋊";
+            icon = ctx->icons->mount_point;
         } else {
             icon = get_icon(ctx->icons, fe->type, is_expanded, is_locked, is_binary, fe->name);
         }
