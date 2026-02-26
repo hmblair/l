@@ -26,8 +26,14 @@ static void term_disable_raw(void) {
 }
 
 static void sigint_handler(int sig) {
-    term_disable_raw();
-    printf("\n");
+    ssize_t r;
+    if (raw_mode_enabled) {
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+        r = write(STDOUT_FILENO, "\033[?7h\033[?25h\n", 13);
+    } else {
+        r = write(STDOUT_FILENO, "\n", 1);
+    }
+    (void)r;
     _exit(128 + sig);
 }
 

@@ -77,14 +77,26 @@ void git_cache_add(GitCache *cache, const char *path, const char *status) {
 
 const char *git_cache_get(GitCache *cache, const char *path) {
     unsigned int h = hash_string(path);
+
+#ifdef _OPENMP
+    omp_set_lock(&cache->lock);
+#endif
+
+    const char *result = NULL;
     GitStatusNode *node = cache->buckets[h];
     while (node) {
         if (strcmp(node->path, path) == 0) {
-            return node->status;
+            result = node->status;
+            break;
         }
         node = node->next;
     }
-    return NULL;
+
+#ifdef _OPENMP
+    omp_unset_lock(&cache->lock);
+#endif
+
+    return result;
 }
 
 GitStatusNode *git_cache_get_node(GitCache *cache, const char *path) {
@@ -100,11 +112,19 @@ GitStatusNode *git_cache_get_node(GitCache *cache, const char *path) {
 }
 
 void git_cache_set_diff(GitCache *cache, const char *path, int added, int removed) {
+#ifdef _OPENMP
+    omp_set_lock(&cache->lock);
+#endif
+
     GitStatusNode *node = git_cache_get_node(cache, path);
     if (node) {
         node->lines_added = added;
         node->lines_removed = removed;
     }
+
+#ifdef _OPENMP
+    omp_unset_lock(&cache->lock);
+#endif
 }
 
 GitSummary git_get_dir_summary(GitCache *cache, const char *dir_path) {
