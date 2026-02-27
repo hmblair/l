@@ -19,39 +19,89 @@
 #define ATTR_BUF_SIZE (128 * 1024)
 #endif
 
+/* ============================================================================
+ * Visited inode set - prevents double-counting firmlinks and bind mounts
+ * ============================================================================ */
+
+#define VISITED_BUCKETS 4096
+
+typedef struct VisitedNode {
+    dev_t dev;
+    ino_t ino;
+    struct VisitedNode *next;
+} VisitedNode;
+
+typedef struct {
+    VisitedNode *buckets[VISITED_BUCKETS];
+} VisitedSet;
+
+static void visited_init(VisitedSet *set) {
+    memset(set->buckets, 0, sizeof(set->buckets));
+}
+
+static unsigned visited_hash(dev_t dev, ino_t ino) {
+    return (unsigned)((dev * 2654435761u) ^ (ino * 2246822519u)) % VISITED_BUCKETS;
+}
+
+/* Returns 1 if already visited, 0 if new (and inserts it) */
+static int visited_check_and_insert(VisitedSet *set, dev_t dev, ino_t ino) {
+    unsigned h = visited_hash(dev, ino);
+    int found = 0;
+
+    #pragma omp critical(visited_set)
+    {
+        VisitedNode *n = set->buckets[h];
+        while (n) {
+            if (n->dev == dev && n->ino == ino) {
+                found = 1;
+                break;
+            }
+            n = n->next;
+        }
+        if (!found) {
+            VisitedNode *node = malloc(sizeof(VisitedNode));
+            if (node) {
+                node->dev = dev;
+                node->ino = ino;
+                node->next = set->buckets[h];
+                set->buckets[h] = node;
+            }
+        }
+    }
+    return found;
+}
+
+static void visited_free(VisitedSet *set) {
+    for (int i = 0; i < VISITED_BUCKETS; i++) {
+        VisitedNode *n = set->buckets[i];
+        while (n) {
+            VisitedNode *next = n->next;
+            free(n);
+            n = next;
+        }
+    }
+}
+
+/* ============================================================================
+ * Scan context and helpers
+ * ============================================================================ */
+
 /* Scan context passed to recursive calls */
 typedef struct {
     scan_store_fn store_fn;
     scan_cache_fn cache_fn;
     volatile int *shutdown;
     long threshold;
+    VisitedSet *visited;
 } ScanContext;
-
-/* Inode identifier for loop detection */
-typedef struct {
-    dev_t dev;
-    ino_t ino;
-} Inode;
 
 #define MAX_SCAN_DEPTH 128
 
-/* Check if inode matches any ancestor (loop detection) */
-static int is_ancestor_inode(dev_t dev, ino_t ino,
-                             const Inode *ancestors, int depth) {
-    for (int i = 0; i < depth; i++) {
-        if (ancestors[i].dev == dev && ancestors[i].ino == ino)
-            return 1;
-    }
-    return 0;
-}
-
-static ScanResult scan_impl(const char *path,
-                            const Inode *ancestors, int depth,
+static ScanResult scan_impl(const char *path, int depth,
                             const ScanContext *ctx);
 
 /* Common setup for scan_impl - returns dirfd on success, -1 to skip, -2 on error */
-static int scan_setup(const char *path, struct stat *dir_st,
-                      Inode *new_ancestors, const Inode *ancestors, int depth,
+static int scan_setup(const char *path, struct stat *dir_st, int depth,
                       const ScanContext *ctx) {
     if (ctx->shutdown && *ctx->shutdown) return -1;
     if (depth >= MAX_SCAN_DEPTH) return -1;
@@ -69,22 +119,23 @@ static int scan_setup(const char *path, struct stat *dir_st,
         return -2;
     }
 
-    if (is_ancestor_inode(dir_st->st_dev, dir_st->st_ino, ancestors, depth)) {
+    if (visited_check_and_insert(ctx->visited, dir_st->st_dev, dir_st->st_ino)) {
         close(dirfd);
+        /* Cache duplicates at 0 so live-scan fallbacks find them */
+        if (ctx->store_fn) {
+            #pragma omp critical
+            ctx->store_fn(path, 0, 0);
+        }
         return -1;
     }
-
-    if (ancestors) memcpy(new_ancestors, ancestors, depth * sizeof(Inode));
-    new_ancestors[depth] = (Inode){dir_st->st_dev, dir_st->st_ino};
 
     return dirfd;
 }
 
 /* Process subdirectories with OMP tasks, accumulating into result */
 static void scan_process_subdirs(char **subdirs, size_t subdir_count,
-                                 const Inode *ancestors, int depth,
-                                 const ScanContext *ctx, int skip_file_count,
-                                 ScanResult *result) {
+                                 int depth, const ScanContext *ctx,
+                                 int skip_file_count, ScanResult *result) {
     if (subdir_count == 0) return;
 
     ScanResult *sub_stats = malloc(subdir_count * sizeof(ScanResult));
@@ -97,8 +148,8 @@ static void scan_process_subdirs(char **subdirs, size_t subdir_count,
                 sub_stats[i].size = cached_size;
                 sub_stats[i].file_count = cached_count;
             } else {
-                #pragma omp task shared(sub_stats) firstprivate(i, ancestors, depth, ctx)
-                sub_stats[i] = scan_impl(subdirs[i], ancestors, depth, ctx);
+                #pragma omp task shared(sub_stats) firstprivate(i, depth, ctx)
+                sub_stats[i] = scan_impl(subdirs[i], depth, ctx);
             }
         }
         #pragma omp taskwait
@@ -129,10 +180,9 @@ static void scan_finalize(const char *path, const ScanContext *ctx,
 
 /* Common teardown for scan_impl */
 static void scan_teardown(const char *path, char **subdirs, size_t subdir_count,
-                          Inode *new_ancestors, int depth,
-                          const ScanContext *ctx, int skip_file_count,
-                          ScanResult *result) {
-    scan_process_subdirs(subdirs, subdir_count, new_ancestors, depth + 1,
+                          int depth, const ScanContext *ctx,
+                          int skip_file_count, ScanResult *result) {
+    scan_process_subdirs(subdirs, subdir_count, depth + 1,
                          ctx, skip_file_count, result);
     scan_finalize(path, ctx, skip_file_count, result);
 }
@@ -143,25 +193,27 @@ ScanResult scan_directory(const char *path,
                           volatile int *shutdown,
                           long threshold) {
     ScanResult result;
-    ScanContext ctx = {store_fn, cache_fn, shutdown, threshold};
+    VisitedSet visited;
+    visited_init(&visited);
+    ScanContext ctx = {store_fn, cache_fn, shutdown, threshold, &visited};
 
     #pragma omp parallel
     #pragma omp single
     {
-        result = scan_impl(path, NULL, 0, &ctx);
+        result = scan_impl(path, 0, &ctx);
     }
+
+    visited_free(&visited);
     return result;
 }
 
 #ifdef __APPLE__
 /* macOS: use getattrlistbulk for faster metadata fetching */
-static ScanResult scan_impl(const char *path,
-                            const Inode *ancestors, int depth,
+static ScanResult scan_impl(const char *path, int depth,
                             const ScanContext *ctx) {
     struct stat dir_st;
-    Inode new_ancestors[MAX_SCAN_DEPTH];
 
-    int dirfd = scan_setup(path, &dir_st, new_ancestors, ancestors, depth, ctx);
+    int dirfd = scan_setup(path, &dir_st, depth, ctx);
     if (dirfd == -1) return (ScanResult){0, 0};
     if (dirfd == -2) return (ScanResult){-1, -1};
 
@@ -251,20 +303,18 @@ static ScanResult scan_impl(const char *path,
     free(attrBuf);
     close(dirfd);
 
-    scan_teardown(path, subdirs, subdir_count, new_ancestors, depth,
+    scan_teardown(path, subdirs, subdir_count, depth,
                   ctx, skip_file_count, &result);
     return result;
 }
 
 #else
 /* Linux/other: use readdir + fstatat */
-static ScanResult scan_impl(const char *path,
-                            const Inode *ancestors, int depth,
+static ScanResult scan_impl(const char *path, int depth,
                             const ScanContext *ctx) {
     struct stat dir_st;
-    Inode new_ancestors[MAX_SCAN_DEPTH];
 
-    int dirfd = scan_setup(path, &dir_st, new_ancestors, ancestors, depth, ctx);
+    int dirfd = scan_setup(path, &dir_st, depth, ctx);
     if (dirfd == -1) return (ScanResult){0, 0};
     if (dirfd == -2) return (ScanResult){-1, -1};
 
@@ -327,7 +377,7 @@ static ScanResult scan_impl(const char *path,
     }
     closedir(dir);
 
-    scan_teardown(path, subdirs, subdir_count, new_ancestors, depth,
+    scan_teardown(path, subdirs, subdir_count, depth,
                   ctx, skip_file_count, &result);
     return result;
 }
