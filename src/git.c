@@ -397,6 +397,8 @@ int git_get_branch_info(const char *repo_path, GitBranchInfo *info) {
     info->branch = NULL;
     info->has_upstream = 0;
     info->out_of_sync = 0;
+    info->ahead = 0;
+    info->behind = 0;
 
     char *branch = git_get_branch(repo_path);
     if (!branch) return 0;
@@ -413,6 +415,28 @@ int git_get_branch_info(const char *repo_path, GitBranchInfo *info) {
 
     if (info->has_upstream) {
         info->out_of_sync = (strcmp(local_hash, remote_hash) != 0);
+        if (info->out_of_sync) {
+            char cmd[PATH_MAX + 128];
+            char buf[64];
+            snprintf(cmd, sizeof(cmd),
+                     "git -C '%s' rev-list --count origin/%s..%s 2>/dev/null",
+                     repo_path, branch, branch);
+            FILE *fp = popen(cmd, "r");
+            if (fp) {
+                if (fgets(buf, sizeof(buf), fp))
+                    info->ahead = atoi(buf);
+                pclose(fp);
+            }
+            snprintf(cmd, sizeof(cmd),
+                     "git -C '%s' rev-list --count %s..origin/%s 2>/dev/null",
+                     repo_path, branch, branch);
+            fp = popen(cmd, "r");
+            if (fp) {
+                if (fgets(buf, sizeof(buf), fp))
+                    info->behind = atoi(buf);
+                pclose(fp);
+            }
+        }
     }
 
     return 1;

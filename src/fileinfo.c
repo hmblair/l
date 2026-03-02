@@ -1308,6 +1308,8 @@ void fileinfo_compute_git_repo_info(struct FileEntry *fe, GitCache *git) {
         fe->branch = gi.branch;  /* Takes ownership */
         fe->has_upstream = gi.has_upstream;
         fe->out_of_sync = gi.out_of_sync;
+        fe->ahead = gi.ahead;
+        fe->behind = gi.behind;
 
         /* Get short hash */
         char hash[64] = "";

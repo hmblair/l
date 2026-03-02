@@ -79,6 +79,8 @@ typedef struct FileEntry {
     char commit_count[32];       /* Number of commits */
     int has_upstream;            /* 1 if origin/<branch> exists */
     int out_of_sync;             /* 1 if local and remote differ */
+    int ahead;                   /* Commits ahead of upstream */
+    int behind;                  /* Commits behind upstream */
     GitSummary repo_status;      /* Repo-wide dirty status */
     int has_git_repo_info;       /* 1 if repo info fields are valid */
 } FileEntry;

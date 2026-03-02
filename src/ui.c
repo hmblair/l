@@ -644,6 +644,10 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
                     EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s", CLR(ctx->cfg, cloud_color), ctx->icons->git_upstream, RST(ctx->cfg));
                 }
                 free(web_url);
+                if (gi.ahead > 0)
+                    EMIT(line, pos, ENTRY_BUF_SIZE, " %s+%d%s", CLR(ctx->cfg, COLOR_RED), gi.ahead, RST(ctx->cfg));
+                if (gi.behind > 0)
+                    EMIT(line, pos, ENTRY_BUF_SIZE, " %s-%d%s", CLR(ctx->cfg, COLOR_RED), gi.behind, RST(ctx->cfg));
             }
             free(gi.branch);
         }
@@ -1033,17 +1037,23 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
     if (fe->has_git_repo_info && fe->branch) {
         if (fe->has_upstream) {
             const char *cloud_color = fe->out_of_sync ? COLOR_RED : COLOR_GREY;
+            char ahead_behind[64] = "";
+            int ab_pos = 0;
+            if (fe->ahead > 0)
+                ab_pos += snprintf(ahead_behind + ab_pos, sizeof(ahead_behind) - ab_pos, " %s+%d%s", CLR(cfg, COLOR_RED), fe->ahead, RST(cfg));
+            if (fe->behind > 0)
+                ab_pos += snprintf(ahead_behind + ab_pos, sizeof(ahead_behind) - ab_pos, " %s-%d%s", CLR(cfg, COLOR_RED), fe->behind, RST(cfg));
             char *web_url = git_remote_to_web_url(fe->remote);
             if (web_url && cfg->is_tty) {
-                card_add(&card, "%s%s%s%s%s%s%s %s%s%s%s %s\033]8;;%s\033\\%s\033]8;;\033\\%s",
+                card_add(&card, "%s%s%s%s%s%s%s %s%s%s%s %s\033]8;;%s\033\\%s\033]8;;\033\\%s%s",
                          color, icon, icon_space, style, fe->name, RST(cfg), "",
                          CLR(cfg, COLOR_GREY), CLR(cfg, STYLE_ITALIC), fe->branch, RST(cfg),
-                         CLR(cfg, cloud_color), web_url, ctx->icons->git_upstream, RST(cfg));
+                         CLR(cfg, cloud_color), web_url, ctx->icons->git_upstream, RST(cfg), ahead_behind);
             } else {
-                card_add(&card, "%s%s%s%s%s%s%s %s%s%s%s %s%s%s",
+                card_add(&card, "%s%s%s%s%s%s%s %s%s%s%s %s%s%s%s",
                          color, icon, icon_space, style, fe->name, RST(cfg), "",
                          CLR(cfg, COLOR_GREY), CLR(cfg, STYLE_ITALIC), fe->branch, RST(cfg),
-                         CLR(cfg, cloud_color), ctx->icons->git_upstream, RST(cfg));
+                         CLR(cfg, cloud_color), ctx->icons->git_upstream, RST(cfg), ahead_behind);
             }
             free(web_url);
         } else {

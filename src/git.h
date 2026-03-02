@@ -109,6 +109,8 @@ typedef struct {
     char *branch;      /* Branch name (caller must free), NULL if not on branch */
     int has_upstream;  /* 1 if origin/<branch> exists */
     int out_of_sync;   /* 1 if local and remote hashes differ */
+    int ahead;         /* Commits ahead of upstream (local only) */
+    int behind;        /* Commits behind upstream (local only) */
 } GitBranchInfo;
 
 /* Get branch info including upstream sync status.
