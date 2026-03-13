@@ -73,7 +73,7 @@ static void print_usage(void) {
     printf("  --no-icons              Hide file/folder/git icons\n");
     printf("  -c, --color-all         Don't gray out gitignored files\n");
     printf("  -g                      Show only git-modified/untracked files (implies -at)\n");
-    printf("  -f, --filter PATTERN    Show only files/folders matching pattern (implies -at)\n");
+    printf("  -f, --filter STRING     Show only files/folders containing substring (implies -at)\n");
     printf("  --min-size SIZE         Show only entries >= SIZE (e.g., 100M, 1G)\n");
     printf("  -i, --interactive       Interactive selection mode\n");
     printf("\n");

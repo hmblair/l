@@ -5,7 +5,7 @@
 #include "tree.h"
 #include "cache.h"
 #include <dirent.h>
-#include <fnmatch.h>
+#include <string.h>
 
 /* ============================================================================
  * File List Management
@@ -705,7 +705,7 @@ int compute_git_status_flags(TreeNode *node, GitCache *git, int show_hidden) {
 }
 
 int compute_grep_flags(TreeNode *node, const char *pattern) {
-    int result = (fnmatch(pattern, node->entry.name, FNM_CASEFOLD) == 0);
+    int result = (strcasestr(node->entry.name, pattern) != NULL);
 
     for (size_t i = 0; i < node->child_count; i++) {
         if (compute_grep_flags(&node->children[i], pattern)) {
