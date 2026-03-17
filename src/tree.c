@@ -517,6 +517,23 @@ void tree_expand_node(TreeNode *node, const TreeBuildOpts *opts,
     node->was_expanded = 1;
 }
 
+void tree_rescan_node(TreeNode *node, const TreeBuildOpts *opts,
+                      GitCache *git, const Icons *icons) {
+    if (!node_is_directory(node)) return;
+
+    /* Free existing children */
+    for (size_t i = 0; i < node->child_count; i++) {
+        tree_node_free(&node->children[i]);
+    }
+    free(node->children);
+    node->children = NULL;
+    node->child_count = 0;
+    node->was_expanded = 0;
+
+    /* Re-expand */
+    tree_expand_node(node, opts, git, icons);
+}
+
 /* ============================================================================
  * Ancestry Tree Building
  * ============================================================================ */

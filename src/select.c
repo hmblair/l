@@ -6,7 +6,9 @@
 #include <termios.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
+#include <sys/stat.h>
 #include <signal.h>
+#include <poll.h>
 
 /* ============================================================================
  * Terminal Handling
@@ -74,6 +76,13 @@ typedef enum {
     KEY_FILTER_FILES
 } KeyPress;
 
+/* Wait for stdin to become readable within timeout_ms.
+ * Returns 1 if readable, 0 on timeout, -1 on error. */
+static int poll_stdin(int timeout_ms) {
+    struct pollfd pfd = { .fd = STDIN_FILENO, .events = POLLIN };
+    return poll(&pfd, 1, timeout_ms);
+}
+
 static KeyPress term_read_key(void) {
     char c;
     if (read(STDIN_FILENO, &c, 1) != 1) return KEY_NONE;
@@ -113,28 +122,28 @@ static KeyPress term_read_key(void) {
 }
 
 /* ============================================================================
- * Collapsed Directory Tracking
+ * Expanded Directory Set - external UI state tracking which dirs are open
  * ============================================================================ */
 
-#define MAX_COLLAPSED 256
+#define MAX_EXPANDED 1024
 
 typedef struct {
-    char *paths[MAX_COLLAPSED];
+    char *paths[MAX_EXPANDED];
     int count;
-} CollapsedSet;
+} ExpandedSet;
 
-static void collapsed_init(CollapsedSet *set) {
+static void expanded_init(ExpandedSet *set) {
     set->count = 0;
 }
 
-static void collapsed_free(CollapsedSet *set) {
+static void expanded_free(ExpandedSet *set) {
     for (int i = 0; i < set->count; i++) {
         free(set->paths[i]);
     }
     set->count = 0;
 }
 
-static int collapsed_contains(CollapsedSet *set, const char *path) {
+static int expanded_contains(ExpandedSet *set, const char *path) {
     for (int i = 0; i < set->count; i++) {
         if (strcmp(set->paths[i], path) == 0) {
             return 1;
@@ -143,12 +152,18 @@ static int collapsed_contains(CollapsedSet *set, const char *path) {
     return 0;
 }
 
-static void collapsed_toggle(CollapsedSet *set, const char *path) {
-    /* If already collapsed, remove it (expand) */
+static void expanded_add(ExpandedSet *set, const char *path) {
+    if (expanded_contains(set, path)) return;
+    if (set->count < MAX_EXPANDED) {
+        char *dup = strdup(path);
+        if (dup) set->paths[set->count++] = dup;
+    }
+}
+
+static void expanded_remove(ExpandedSet *set, const char *path) {
     for (int i = 0; i < set->count; i++) {
         if (strcmp(set->paths[i], path) == 0) {
             free(set->paths[i]);
-            /* Move last element to fill gap (unless removing last) */
             if (i < set->count - 1) {
                 set->paths[i] = set->paths[set->count - 1];
             }
@@ -156,10 +171,16 @@ static void collapsed_toggle(CollapsedSet *set, const char *path) {
             return;
         }
     }
-    /* Not found, add it (collapse) */
-    if (set->count < MAX_COLLAPSED) {
-        char *dup = strdup(path);
-        if (dup) set->paths[set->count++] = dup;
+}
+
+/* Seed the expanded set from the initially-built tree (dirs that were expanded
+ * by the initial depth-limited scan). */
+static void expanded_seed_from_tree(ExpandedSet *set, TreeNode *node) {
+    if (node_is_directory(node) && node->was_expanded) {
+        expanded_add(set, node->entry.path);
+    }
+    for (size_t i = 0; i < node->child_count; i++) {
+        expanded_seed_from_tree(set, &node->children[i]);
     }
 }
 
@@ -230,13 +251,11 @@ static void state_free(SelectState *state) {
  * Tree Flattening
  * ============================================================================ */
 
-/* Count visible children for a node */
+/* Count visible children for a node (only if expanded) */
 static int count_visible_children(const TreeNode *node, const Config *cfg,
-                                   CollapsedSet *collapsed) {
-    /* If collapsed, report no visible children */
-    if (collapsed && collapsed_contains(collapsed, node->entry.path)) {
-        return 0;
-    }
+                                   ExpandedSet *expanded) {
+    if (!node_is_directory(node)) return 0;
+    if (!expanded_contains(expanded, node->entry.path)) return 0;
     int filtering = is_filtering_active(cfg);
     int count = 0;
     for (size_t i = 0; i < node->child_count; i++) {
@@ -249,26 +268,26 @@ static int count_visible_children(const TreeNode *node, const Config *cfg,
 
 static void flatten_children(SelectState *state, const TreeNode *parent,
                              int depth, int *continuation, const Config *cfg,
-                             CollapsedSet *collapsed);
+                             ExpandedSet *expanded);
 
 static void flatten_node(SelectState *state, TreeNode *node, int depth,
                          int *continuation, const Config *cfg,
-                         CollapsedSet *collapsed) {
-    int has_visible_children = count_visible_children(node, cfg, collapsed) > 0;
+                         ExpandedSet *expanded) {
+    int has_visible_children = count_visible_children(node, cfg, expanded) > 0;
 
     /* Add this node */
     state_add(state, node, depth, has_visible_children, continuation);
 
-    /* Recurse into children (unless collapsed) */
-    int is_collapsed = collapsed && collapsed_contains(collapsed, node->entry.path);
-    if (node->child_count > 0 && !is_collapsed) {
-        flatten_children(state, node, depth, continuation, cfg, collapsed);
+    /* Recurse into children only if this dir is in the expanded set */
+    int is_expanded = expanded_contains(expanded, node->entry.path);
+    if (node->child_count > 0 && is_expanded) {
+        flatten_children(state, node, depth, continuation, cfg, expanded);
     }
 }
 
 static void flatten_children(SelectState *state, const TreeNode *parent,
                              int depth, int *continuation, const Config *cfg,
-                             CollapsedSet *collapsed) {
+                             ExpandedSet *expanded) {
     if (parent->child_count == 0) return;
 
     int filtering = is_filtering_active(cfg);
@@ -293,19 +312,19 @@ static void flatten_children(SelectState *state, const TreeNode *parent,
         /* Set continuation for this depth */
         continuation[depth] = !is_last;
 
-        flatten_node(state, child, depth + 1, continuation, cfg, collapsed);
+        flatten_node(state, child, depth + 1, continuation, cfg, expanded);
     }
 
     free(visible_indices);
 }
 
 static void flatten_all(SelectState *state, TreeNode **trees, int tree_count,
-                        const Config *cfg, CollapsedSet *collapsed) {
+                        const Config *cfg, ExpandedSet *expanded) {
     int continuation[L_MAX_DEPTH] = {0};
     state_clear(state);
     for (int i = 0; i < tree_count; i++) {
         memset(continuation, 0, sizeof(continuation));
-        flatten_node(state, trees[i], 0, continuation, cfg, collapsed);
+        flatten_node(state, trees[i], 0, continuation, cfg, expanded);
     }
 }
 
@@ -323,6 +342,102 @@ static void recalculate_columns(SelectState *state, Column *cols, const Icons *i
 }
 
 /* ============================================================================
+ * Live Refresh
+ * ============================================================================ */
+
+#define REFRESH_INTERVAL_MS  100
+#define GIT_REFRESH_INTERVAL_MS  5000
+
+static struct timespec timespec_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts;
+}
+
+static long timespec_diff_ms(struct timespec a, struct timespec b) {
+    return (a.tv_sec - b.tv_sec) * 1000 + (a.tv_nsec - b.tv_nsec) / 1000000;
+}
+
+/* Recursively expand all dirs in the expanded set under a given node */
+static void expand_from_set(TreeNode *node, ExpandedSet *expanded,
+                            const TreeBuildOpts *opts, GitCache *git,
+                            const Icons *icons) {
+    for (size_t i = 0; i < node->child_count; i++) {
+        TreeNode *child = &node->children[i];
+        if (node_is_directory(child) && expanded_contains(expanded, child->entry.path)) {
+            tree_expand_node(child, opts, git, icons);
+            expand_from_set(child, expanded, opts, git, icons);
+        }
+    }
+}
+
+/* Recursively check and rescan a node and its expanded children (top-down).
+ * Walks the live tree, not the flattened state, so rescan is safe. */
+static int rescan_recursive(TreeNode *node, ExpandedSet *expanded,
+                            const TreeBuildOpts *opts, GitCache *git,
+                            const Icons *icons) {
+    if (!node_is_directory(node)) return 0;
+    if (!expanded_contains(expanded, node->entry.path)) return 0;
+
+    struct stat st;
+    if (stat(node->entry.path, &st) != 0) return 0;
+
+    time_t new_mtime = GET_MTIME(st);
+    if (new_mtime != node->entry.mtime) {
+        /* This node changed — rescan it, which rebuilds all children.
+         * expand_from_set re-expands any children in the expanded set,
+         * recursively, so we don't need to recurse further here. */
+        node->entry.mtime = new_mtime;
+        tree_rescan_node(node, opts, git, icons);
+        expand_from_set(node, expanded, opts, git, icons);
+        return 1;
+    }
+
+    /* No change at this level — check children */
+    int changed = 0;
+    for (size_t i = 0; i < node->child_count; i++) {
+        changed |= rescan_recursive(&node->children[i], expanded, opts, git, icons);
+    }
+    return changed;
+}
+
+/* Check expanded directories for mtime changes. Rescan any that changed.
+ * When refresh_git is set, force rescan of all expanded dirs with git status.
+ * Returns 1 if anything was rescanned. */
+static int check_and_rescan(SelectState *state, TreeNode **trees, int tree_count,
+                            PrintContext *ctx, ExpandedSet *expanded,
+                            int refresh_git) {
+    TreeBuildOpts opts = config_to_build_opts(ctx->cfg);
+    if (!refresh_git) {
+        opts.compute.git_status = 0;
+        opts.compute.git_diff = 0;
+    }
+
+    int changed = 0;
+    for (int i = 0; i < tree_count; i++) {
+        changed |= rescan_recursive(trees[i], expanded, &opts, ctx->git, ctx->icons);
+    }
+
+    if (changed) {
+        flatten_all(state, trees, tree_count, ctx->cfg, expanded);
+        recalculate_columns(state, ctx->columns, ctx->icons);
+
+        /* Remove stale paths (deleted directories) from expanded set */
+        for (int i = expanded->count - 1; i >= 0; i--) {
+            struct stat st;
+            if (stat(expanded->paths[i], &st) != 0) {
+                free(expanded->paths[i]);
+                if (i < expanded->count - 1)
+                    expanded->paths[i] = expanded->paths[expanded->count - 1];
+                expanded->count--;
+            }
+        }
+    }
+
+    return changed;
+}
+
+/* ============================================================================
  * Rendering
  * ============================================================================ */
 
@@ -336,7 +451,7 @@ static void get_terminal_size(int *rows) {
 }
 
 static void render_line(SelectState *state, int index, int is_selected,
-                        PrintContext *ctx, CollapsedSet *collapsed) {
+                        PrintContext *ctx, ExpandedSet *expanded) {
     FlatNode *item = &state->items[index];
 
     /* Clear line */
@@ -356,14 +471,10 @@ static void render_line(SelectState *state, int index, int is_selected,
     /* Copy continuation state into context */
     memcpy(ctx->continuation, item->continuation, L_MAX_DEPTH * sizeof(int));
 
-    /* Adjust has_visible_children and is_expanded based on collapsed state */
+    /* Determine expansion state from the external set */
     int has_visible = item->has_visible_children;
-    int is_expanded = item->node->was_expanded;
-    if (node_is_directory(item->node) && collapsed_contains(collapsed, item->node->entry.path)) {
-        /* Show as having children even when collapsed (so we can expand) */
-        has_visible = (item->node->child_count > 0);
-        is_expanded = 0;  /* Show closed icon when collapsed */
-    }
+    int is_expanded = node_is_directory(item->node) &&
+                      expanded_contains(expanded, item->node->entry.path);
 
     /* Create a modified context with the line prefix */
     PrintContext line_ctx = *ctx;
@@ -375,7 +486,7 @@ static void render_line(SelectState *state, int index, int is_selected,
     print_entry(&item->node->entry, item->depth, is_expanded, has_visible, &line_ctx);
 }
 
-static void render_view(SelectState *state, PrintContext *ctx, CollapsedSet *collapsed, int files_only) {
+static void render_view(SelectState *state, PrintContext *ctx, ExpandedSet *expanded, int files_only) {
     int max_visible = state->term_rows - 2;  /* Leave room for status line */
     if (max_visible < 1) max_visible = 1;
     if (max_visible > state->count) max_visible = state->count;
@@ -400,7 +511,7 @@ static void render_view(SelectState *state, PrintContext *ctx, CollapsedSet *col
     int new_visible = (end - state->scroll_offset) + 1;  /* +1 for status */
 
     for (int i = state->scroll_offset; i < end; i++) {
-        render_line(state, i, i == state->cursor, ctx, collapsed);
+        render_line(state, i, i == state->cursor, ctx, expanded);
     }
 
     /* Status line */
@@ -443,6 +554,33 @@ static int find_next_file(SelectState *state, int from, int direction) {
         }
     }
     return -1;  /* No files found */
+}
+
+/* Snap cursor to nearest valid position. In files_only mode, finds the
+ * closest file entry; otherwise just clamps to bounds. */
+static void snap_cursor(SelectState *state, int files_only) {
+    if (state->count == 0) { state->cursor = 0; return; }
+    if (state->cursor >= state->count)
+        state->cursor = state->count - 1;
+
+    if (!files_only || !node_is_directory(state->items[state->cursor].node))
+        return;
+
+    /* Search forward and backward for the nearest file */
+    int fwd = -1, bwd = -1;
+    for (int i = state->cursor + 1; i < state->count; i++) {
+        if (!node_is_directory(state->items[i].node)) { fwd = i; break; }
+    }
+    for (int i = state->cursor - 1; i >= 0; i--) {
+        if (!node_is_directory(state->items[i].node)) { bwd = i; break; }
+    }
+    if (fwd >= 0 && bwd >= 0)
+        state->cursor = (fwd - state->cursor <= state->cursor - bwd) ? fwd : bwd;
+    else if (fwd >= 0)
+        state->cursor = fwd;
+    else if (bwd >= 0)
+        state->cursor = bwd;
+    /* else: no files at all, stay put */
 }
 
 /* ============================================================================
@@ -530,8 +668,13 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
     SelectState state;
     state_init(&state);
 
-    CollapsedSet collapsed;
-    collapsed_init(&collapsed);
+    ExpandedSet expanded;
+    expanded_init(&expanded);
+
+    /* Seed expanded set from the initially-built tree */
+    for (int i = 0; i < tree_count; i++) {
+        expanded_seed_from_tree(&expanded, trees[i]);
+    }
 
     /* Filter mode: 0 = all, 1 = files only */
     int files_only = 0;
@@ -540,11 +683,11 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
     int continuation[L_MAX_DEPTH] = {0};
 
     /* Flatten all trees into visible node list */
-    flatten_all(&state, trees, tree_count, ctx->cfg, &collapsed);
+    flatten_all(&state, trees, tree_count, ctx->cfg, &expanded);
 
     if (state.count == 0) {
         state_free(&state);
-        collapsed_free(&collapsed);
+        expanded_free(&expanded);
         return NULL;
     }
 
@@ -559,13 +702,65 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
 
     /* Enter raw mode and render */
     term_enable_raw();
-    render_view(&state, &render_ctx, &collapsed, files_only);
+    render_view(&state, &render_ctx, &expanded, files_only);
 
     char *result = NULL;
+
+    /* Live refresh timers */
+    struct timespec last_git_refresh = timespec_now();
 
     while (1) {
         /* Safety check - exit if tree becomes empty */
         if (state.count == 0) break;
+
+        /* Poll stdin with timeout for live refresh */
+        int ready = poll_stdin(REFRESH_INTERVAL_MS);
+        if (ready == 0) {
+            /* Check if root directories still exist */
+            int any_alive = 0;
+            for (int i = 0; i < tree_count; i++) {
+                struct stat st;
+                if (stat(trees[i]->entry.path, &st) == 0) {
+                    any_alive = 1;
+                    break;
+                }
+            }
+            if (!any_alive) break;
+
+            /* Timeout — check for filesystem changes */
+            struct timespec now = timespec_now();
+            int do_git = timespec_diff_ms(now, last_git_refresh) >= GIT_REFRESH_INTERVAL_MS;
+            int old_cursor = state.cursor;
+            char *cur_path = strdup(state.items[state.cursor].node->entry.path);
+
+            if (check_and_rescan(&state, trees, tree_count, ctx, &expanded, do_git)) {
+                if (do_git) last_git_refresh = now;
+
+                /* Restore cursor: try same path, fall back to same position */
+                int found = 0;
+                if (cur_path) {
+                    for (int i = 0; i < state.count; i++) {
+                        if (strcmp(state.items[i].node->entry.path, cur_path) == 0) {
+                            state.cursor = i;
+                            found = 1;
+                            break;
+                        }
+                    }
+                }
+                if (!found) {
+                    state.cursor = old_cursor;
+                }
+                snap_cursor(&state, files_only);
+
+                get_terminal_size(&state.term_rows);
+                render_view(&state, &render_ctx, &expanded, files_only);
+            } else if (do_git) {
+                last_git_refresh = now;
+            }
+            free(cur_path);
+            continue;
+        }
+        if (ready < 0) continue;  /* Signal interrupted poll */
 
         KeyPress key = term_read_key();
         FlatNode *current = &state.items[state.cursor];
@@ -578,7 +773,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                 } else {
                     state.cursor = (state.cursor - 1 + state.count) % state.count;
                 }
-                render_view(&state, &render_ctx, &collapsed, files_only);
+                render_view(&state, &render_ctx, &expanded, files_only);
                 break;
 
             case KEY_DOWN:
@@ -588,57 +783,49 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                 } else {
                     state.cursor = (state.cursor + 1) % state.count;
                 }
-                render_view(&state, &render_ctx, &collapsed, files_only);
+                render_view(&state, &render_ctx, &expanded, files_only);
                 break;
 
             case KEY_LEFT:
-                /* Collapse current directory (or parent if file/already collapsed) */
+                /* Collapse current directory if it's expanded */
                 if (node_is_directory(current->node) &&
-                    !collapsed_contains(&collapsed, current->node->entry.path) &&
-                    (current->node->child_count > 0 || current->node->was_expanded)) {
-                    /* Collapse this directory (including empty expanded dirs) */
-                    collapsed_toggle(&collapsed, current->node->entry.path);
+                    expanded_contains(&expanded, current->node->entry.path)) {
+                    expanded_remove(&expanded, current->node->entry.path);
                     const char *cur_path = current->node->entry.path;
-                    flatten_all(&state, trees, tree_count, ctx->cfg, &collapsed);
+                    flatten_all(&state, trees, tree_count, ctx->cfg, &expanded);
                     recalculate_columns(&state, ctx->columns, ctx->icons);
-                    /* Find the cursor position again */
-                    state.cursor = 0;  /* Default to first item */
+                    state.cursor = 0;
                     for (int i = 0; i < state.count; i++) {
                         if (strcmp(state.items[i].node->entry.path, cur_path) == 0) {
                             state.cursor = i;
                             break;
                         }
                     }
-                    render_view(&state, &render_ctx, &collapsed, files_only);
+                    render_view(&state, &render_ctx, &expanded, files_only);
                 }
                 break;
 
             case KEY_RIGHT:
-                /* Expand current directory if collapsed or not loaded */
-                if (node_is_directory(current->node)) {
-                    if (collapsed_contains(&collapsed, current->node->entry.path)) {
-                        /* Was manually collapsed - uncollapse */
-                        collapsed_toggle(&collapsed, current->node->entry.path);
-                    } else if (current->node->child_count == 0 && !current->node->was_expanded) {
-                        /* Not loaded yet - dynamically expand */
+                /* Expand current directory */
+                if (node_is_directory(current->node) &&
+                    !expanded_contains(&expanded, current->node->entry.path)) {
+                    /* Load children if not yet loaded */
+                    if (current->node->child_count == 0 && !current->node->was_expanded) {
                         tree_expand_node_from_config(current->node, ctx->columns, ctx->git,
                                          ctx->cfg, ctx->icons);
-                    } else {
-                        /* Already expanded (including empty dirs), nothing to do */
-                        break;
                     }
+                    expanded_add(&expanded, current->node->entry.path);
                     const char *cur_path = current->node->entry.path;
-                    flatten_all(&state, trees, tree_count, ctx->cfg, &collapsed);
+                    flatten_all(&state, trees, tree_count, ctx->cfg, &expanded);
                     recalculate_columns(&state, ctx->columns, ctx->icons);
-                    /* Find the cursor position again */
-                    state.cursor = 0;  /* Default to first item */
+                    state.cursor = 0;
                     for (int i = 0; i < state.count; i++) {
                         if (strcmp(state.items[i].node->entry.path, cur_path) == 0) {
                             state.cursor = i;
                             break;
                         }
                     }
-                    render_view(&state, &render_ctx, &collapsed, files_only);
+                    render_view(&state, &render_ctx, &expanded, files_only);
                 }
                 break;
 
@@ -660,32 +847,33 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                 } else {
                     files_only = 0;
                 }
-                render_view(&state, &render_ctx, &collapsed, files_only);
+                render_view(&state, &render_ctx, &expanded, files_only);
                 break;
 
             case KEY_OPEN:
                 if (node_is_directory(current->node)) {
-                    /* Toggle expand/collapse for directories */
-                    if (current->node->child_count > 0 || current->node->was_expanded) {
-                        /* Has children or was already expanded (empty dir) - toggle */
-                        collapsed_toggle(&collapsed, current->node->entry.path);
+                    /* Toggle expand/collapse */
+                    if (expanded_contains(&expanded, current->node->entry.path)) {
+                        expanded_remove(&expanded, current->node->entry.path);
                     } else {
-                        /* Not yet expanded - dynamically expand */
-                        tree_expand_node_from_config(current->node, ctx->columns, ctx->git,
-                                         ctx->cfg, ctx->icons);
+                        /* Load children if not yet loaded */
+                        if (current->node->child_count == 0 && !current->node->was_expanded) {
+                            tree_expand_node_from_config(current->node, ctx->columns, ctx->git,
+                                             ctx->cfg, ctx->icons);
+                        }
+                        expanded_add(&expanded, current->node->entry.path);
                     }
                     const char *cur_path = current->node->entry.path;
-                    flatten_all(&state, trees, tree_count, ctx->cfg, &collapsed);
+                    flatten_all(&state, trees, tree_count, ctx->cfg, &expanded);
                     recalculate_columns(&state, ctx->columns, ctx->icons);
-                    /* Find the cursor position again */
-                    state.cursor = 0;  /* Default to first item */
+                    state.cursor = 0;
                     for (int i = 0; i < state.count; i++) {
                         if (strcmp(state.items[i].node->entry.path, cur_path) == 0) {
                             state.cursor = i;
                             break;
                         }
                     }
-                    render_view(&state, &render_ctx, &collapsed, files_only);
+                    render_view(&state, &render_ctx, &expanded, files_only);
                 } else {
                     /* Open file: use system handler for binary, EDITOR for text */
                     char cmd[PATH_MAX + 64];
@@ -710,7 +898,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                     if (system(cmd)) { /* ignore */ }
 
                     state_free(&state);
-                    collapsed_free(&collapsed);
+                    expanded_free(&expanded);
                     return NULL;
                 }
                 break;
@@ -739,6 +927,6 @@ cleanup:
     printf("\r\033[K\n");
     term_disable_raw();
     state_free(&state);
-    collapsed_free(&collapsed);
+    expanded_free(&expanded);
     return result;
 }
