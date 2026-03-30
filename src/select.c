@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <signal.h>
 #include <poll.h>
+#include <time.h>
 
 /* ============================================================================
  * Terminal Handling
