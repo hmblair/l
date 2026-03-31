@@ -442,9 +442,10 @@ int git_get_branch_info(const char *repo_path, GitBranchInfo *info) {
     return 1;
 }
 
+#ifndef HAVE_LIBGIT2
 char *git_get_latest_tag(const char *repo_path) {
     char cmd[PATH_MAX + 64];
-    snprintf(cmd, sizeof(cmd), "git -C '%s' describe --tags --abbrev=0 2>/dev/null", repo_path);
+    snprintf(cmd, sizeof(cmd), "git -C '%s' describe --tags 2>/dev/null", repo_path);
     FILE *fp = popen(cmd, "r");
     if (!fp) return NULL;
 
@@ -457,6 +458,7 @@ char *git_get_latest_tag(const char *repo_path) {
     pclose(fp);
     return result;
 }
+#endif /* !HAVE_LIBGIT2 */
 
 char *git_get_remote_url(const char *repo_path) {
     char config_path[PATH_MAX];
@@ -702,6 +704,35 @@ void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_
     if (include_diff_stats) {
         git_populate_diff_stats_shell(cache, repo_path);
     }
+}
+
+char *git_get_latest_tag(const char *repo_path) {
+    git_repository *repo = NULL;
+    git_describe_result *result = NULL;
+    git_buf buf = {0};
+    char *tag_str = NULL;
+
+    if (git_repository_open(&repo, repo_path) != 0)
+        return NULL;
+
+    git_describe_options desc_opts = GIT_DESCRIBE_OPTIONS_INIT;
+    desc_opts.describe_strategy = GIT_DESCRIBE_TAGS;
+
+    if (git_describe_workdir(&result, repo, &desc_opts) != 0)
+        goto cleanup;
+
+    git_describe_format_options fmt_opts = GIT_DESCRIBE_FORMAT_OPTIONS_INIT;
+    if (git_describe_format(&buf, result, &fmt_opts) != 0)
+        goto cleanup;
+
+    if (buf.ptr && buf.ptr[0])
+        tag_str = xstrdup(buf.ptr);
+
+cleanup:
+    git_buf_dispose(&buf);
+    git_describe_result_free(result);
+    git_repository_free(repo);
+    return tag_str;
 }
 
 #else
