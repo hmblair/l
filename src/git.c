@@ -198,6 +198,14 @@ int git_deleted_lines_recursive(GitCache *cache, const char *dir_path) {
     return git_walk_deleted(cache, dir_path, 0, 0);
 }
 
+/* Check if a path under dir_path has a hidden first component.
+ * Returns 1 if the first path component after dir_path/ starts with '.'. */
+static int is_under_hidden_child(const char *node_path, const char *dir_path, size_t dir_len) {
+    if (strncmp(node_path, dir_path, dir_len) != 0 || node_path[dir_len] != '/')
+        return 0;
+    return node_path[dir_len + 1] == '.';
+}
+
 int git_dir_has_hidden_status(GitCache *cache, const char *dir_path) {
     if (!cache || !dir_path) return 0;
 
@@ -206,18 +214,10 @@ int git_dir_has_hidden_status(GitCache *cache, const char *dir_path) {
     for (int i = 0; i < L_HASH_SIZE; i++) {
         GitStatusNode *node = cache->buckets[i];
         while (node) {
-            /* Check if this is a direct child of dir_path */
-            if (strncmp(node->path, dir_path, dir_len) == 0 &&
-                node->path[dir_len] == '/' &&
-                strchr(node->path + dir_len + 1, '/') == NULL) {
-                /* Get the filename (part after dir_path/) */
-                const char *filename = node->path + dir_len + 1;
-                /* Check if it's hidden and has git status */
-                if (filename[0] == '.' &&
-                    node->status[0] != '\0' &&
-                    strcmp(node->status, "!!") != 0) {
-                    return 1;
-                }
+            if (is_under_hidden_child(node->path, dir_path, dir_len) &&
+                node->status[0] != '\0' &&
+                strcmp(node->status, "!!") != 0) {
+                return 1;
             }
             node = node->next;
         }
@@ -234,28 +234,20 @@ GitSummary git_get_hidden_dir_summary(GitCache *cache, const char *dir_path) {
     for (int i = 0; i < L_HASH_SIZE; i++) {
         GitStatusNode *node = cache->buckets[i];
         while (node) {
-            /* Check if this is a direct child of dir_path */
-            if (strncmp(node->path, dir_path, dir_len) == 0 &&
-                node->path[dir_len] == '/' &&
-                strchr(node->path + dir_len + 1, '/') == NULL) {
-                /* Get the filename (part after dir_path/) */
-                const char *filename = node->path + dir_len + 1;
-                /* Only count hidden files */
-                if (filename[0] == '.') {
-                    const char *status = node->status;
-                    if (strcmp(status, "!!") == 0) {
-                        /* Ignored - skip */
-                    } else if (strcmp(status, "??") == 0) {
-                        summary.untracked++;
-                    } else {
-                        if (status[0] != ' ' && status[0] != '?' && status[0] != '!') {
-                            summary.staged++;
-                        }
-                        if (status[1] == 'M') {
-                            summary.modified++;
-                        } else if (status[1] == 'D') {
-                            summary.deleted++;
-                        }
+            if (is_under_hidden_child(node->path, dir_path, dir_len)) {
+                const char *status = node->status;
+                if (strcmp(status, "!!") == 0) {
+                    /* Ignored - skip */
+                } else if (strcmp(status, "??") == 0) {
+                    summary.untracked++;
+                } else {
+                    if (status[0] != ' ' && status[0] != '?' && status[0] != '!') {
+                        summary.staged++;
+                    }
+                    if (status[1] == 'M') {
+                        summary.modified++;
+                    } else if (status[1] == 'D') {
+                        summary.deleted++;
                     }
                 }
             }
