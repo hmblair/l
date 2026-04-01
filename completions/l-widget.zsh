@@ -74,6 +74,9 @@ _l_complete() {
   local -a candidates
   candidates=("${_l_captured_candidates[@]}")
 
+  # Deduplicate candidates
+  candidates=(${(u)candidates})
+
   # No candidates
   if (( ${#candidates} == 0 )); then
     return
@@ -94,7 +97,8 @@ _l_complete() {
     if (( is_command )); then
       LBUFFER+="${candidates[1]} "
     else
-      LBUFFER+="${(q)${_l_captured_prefix}${candidates[1]}}"
+      local _result="${_l_captured_prefix}${candidates[1]}"
+      LBUFFER+="${(q)_result}"
     fi
     zle reset-prompt
     return
