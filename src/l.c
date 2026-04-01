@@ -75,6 +75,7 @@ static void print_usage(void) {
     printf("  -g                      Show only git-modified/untracked files (implies -at)\n");
     printf("  -f, --filter STRING     Show only files/folders matching pattern (glob or substring)\n");
     printf("  --min-size SIZE         Show only entries >= SIZE (e.g., 100M, 1G)\n");
+    printf("  --dir-only              Show only directories\n");
     printf("  -i, --interactive       Interactive selection mode\n");
     printf("\n");
     printf("Sorting:\n");
@@ -223,6 +224,7 @@ static void parse_args(int argc, char **argv, Config *cfg,
             else if (MATCH_LONG("color-all")) { cfg->color_all = 1; }
             else if (MATCH_LONG("interactive")) { cfg->interactive = 1; }
             else if (MATCH_LONG("tty"))         { cfg->is_tty = 1; }
+            else if (MATCH_LONG("dir-only"))    { cfg->dir_only = 1; }
             /* Options with arguments */
             else if ((val = match_opt_with_arg(arg, &i, argc, argv, 'd', "depth"))) {
                 check_conflict(&set.depth, "--depth", cfg);
@@ -345,6 +347,7 @@ int main(int argc, char **argv) {
         .show_ancestry = 0,
         .color_all = 0,
         .interactive = 0,
+        .dir_only = 0,
         .is_tty = isatty(STDOUT_FILENO),
         .sort_by = SORT_NONE,
         .cwd = "",

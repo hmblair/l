@@ -25,6 +25,7 @@ _l() {
         '-g[Show only git-modified/untracked files (implies -at)]' \
         '(-f --filter)'{-f,--filter}'[Show only files/folders matching pattern (glob or substring)]:pattern:' \
         '--min-size[Show only entries >= SIZE (e.g., 100M, 1G)]:size:' \
+        '--dir-only[Show only directories]' \
         '(-i --interactive)'{-i,--interactive}'[Interactive selection mode]' \
         '--tty[Force TTY mode (colors, icons) even when piped]' \
         '-S[Sort by size (largest first)]' \

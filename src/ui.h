@@ -27,6 +27,7 @@ typedef struct {
     int show_ancestry;
     int color_all;
     int interactive;
+    int dir_only;
     int is_tty;
     SortMode sort_by;
     char cwd[PATH_MAX];

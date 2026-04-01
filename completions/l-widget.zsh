@@ -1,89 +1,129 @@
 # l-widget.zsh — Use `l -i` as a Tab-triggered file completion widget
 #
 # Source this file in your .zshrc (after compinit) to replace the default
-# Tab file completion with an interactive `l -i` picker for file arguments.
+# Tab completion menu with an interactive `l -i` picker for file/directory
+# completions. Non-file completions fall back to zsh defaults.
 
+# Global state shared between the completion widget and the zle widget
+typeset -ga _l_captured_candidates=()
+typeset -g  _l_captured_prefix=""
+
+# Completion widget function — runs inside a real completion context
+_l_capture_complete() {
+  _l_captured_candidates=()
+  _l_captured_prefix=""
+
+  # Override compadd to capture candidates
+  compadd() {
+    # Use builtin compadd with -O to capture candidates into an array
+    local -a _matches
+    builtin compadd -O _matches "$@"
+    _l_captured_candidates+=("${_matches[@]}")
+  }
+
+  # Run the real completion system
+  _main_complete
+
+  # Restore builtin compadd
+  unfunction compadd 2>/dev/null
+
+  # Signal: don't insert anything yet
+  compstate[insert]=''
+  compstate[list]=''
+}
+
+# Register as a completion widget (runs in completion context)
+zle -C _l_capture complete-word _l_capture_complete
+
+# Main zle widget bound to Tab
 _l_complete() {
+  # Run capture in completion context
   local -a tokens
   tokens=(${(z)LBUFFER})
 
-  # First word (command position) -- fall back to normal completion
+  # Determine if we're completing the first word (command position)
+  local is_command=0
   if (( ${#tokens} == 0 )) || [[ ${#tokens} -eq 1 && "$LBUFFER" != *" " ]]; then
-    zle expand-or-complete
+    is_command=1
+  fi
+
+  # Capture candidates from zsh's completion system
+  # Save terminal cursor position and buffer state since complete-word
+  # redraws the line (destroying syntax highlighting)
+  # Clear autosuggestion ghost text before capturing
+  POSTDISPLAY=""
+  _zsh_autosuggest_clear 2>/dev/null
+  zle -R
+  local saved_lbuffer="$LBUFFER"
+  local saved_rbuffer="$RBUFFER"
+  zle _l_capture
+  LBUFFER="$saved_lbuffer"
+  RBUFFER="$saved_rbuffer"
+
+  local -a candidates
+  candidates=("${_l_captured_candidates[@]}")
+
+  # No candidates
+  if (( ${#candidates} == 0 )); then
     return
   fi
 
   # Current word being completed
   local current=""
-  if [[ "$LBUFFER" != *" " ]]; then
+  if [[ "$LBUFFER" != *" " && ${#tokens} -gt 0 ]]; then
     current="${tokens[-1]}"
   fi
 
-  # Flags -- fall back to normal completion
-  if [[ "$current" == -* ]]; then
-    zle expand-or-complete
-    return
-  fi
-
-  # Split current into directory and prefix components
-  local dir prefix
-  if [[ "$current" == */* ]]; then
-    dir="${current%/*}/"
-    prefix="${current##*/}"
-  else
-    dir=""
-    prefix="$current"
-  fi
-
-  # Check matches with glob first
-  local target="${dir:-.}"
-  local -a matches
-  if [[ -n "$prefix" ]]; then
-    matches=("${target}"/${prefix}*(N))
-  else
-    matches=("${target}"/*(N))
-  fi
-
-  # No matches
-  if (( ${#matches} == 0 )); then
-    zle expand-or-complete
-    return
-  fi
-
-  # Single match -- insert directly
-  if (( ${#matches} == 1 )); then
-    local selected="${matches[1]}"
+  # Single candidate -- insert directly
+  if (( ${#candidates} == 1 )); then
     if [[ -n "$current" ]]; then
       LBUFFER="${LBUFFER%"$current"}"
     fi
     [[ -n "$LBUFFER" && "$LBUFFER" != *" " ]] && LBUFFER+=" "
-    LBUFFER+="${(q)selected}"
+    if (( is_command )); then
+      LBUFFER+="${candidates[1]} "
+    else
+      LBUFFER+="${(q)candidates[1]}"
+    fi
     zle reset-prompt
     return
   fi
 
-  # Multiple matches -- use l -i
-  local -a cmd
-  cmd=(l -i --tty)
-  if [[ -n "$prefix" ]]; then
-    cmd+=(-f "${prefix}*")
-  fi
-  if [[ -n "$dir" ]]; then
-    cmd+=("$dir")
+  # Multiple candidates -- resolve to full paths for l -i
+  local -a paths
+  if (( is_command )); then
+    for c in "${candidates[@]}"; do
+      local full=$(whence -p "$c" 2>/dev/null)
+      [[ -n "$full" ]] && paths+=("$full")
+    done
+  else
+    paths=("${candidates[@]}")
   fi
 
+  # If we couldn't resolve any paths, fall back
+  if (( ${#paths} == 0 )); then
+    zle expand-or-complete
+    return
+  fi
+
+  print -n "\n" >/dev/tty
   local selected
-  selected=$("${cmd[@]}" </dev/tty)
+  selected=$(l -i --tty -d0 "${paths[@]}" </dev/tty)
+  # Move back up to the prompt line and let zle redraw
+  print -n "\r\033[A" >/dev/tty
 
   if [[ -n "$selected" ]]; then
-    # Remove the partial word we're completing
     if [[ -n "$current" ]]; then
       LBUFFER="${LBUFFER%"$current"}"
     fi
     [[ -n "$LBUFFER" && "$LBUFFER" != *" " ]] && LBUFFER+=" "
-    LBUFFER+="${(q)selected}"
+    if (( is_command )); then
+      LBUFFER+="${selected:t} "
+    else
+      LBUFFER+="${(q)selected}"
+      zle accept-line
+    fi
     zle reset-prompt
-    zle accept-line
   else
     zle reset-prompt
   fi
