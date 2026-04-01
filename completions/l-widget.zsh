@@ -15,6 +15,17 @@ _l_capture_complete() {
 
   # Override compadd to capture candidates
   compadd() {
+    # Extract prefix (-p) from args
+    local _prefix=""
+    local -a _args=("$@")
+    for (( i=1; i<=${#_args}; i++ )); do
+      if [[ "${_args[$i]}" == "-p" && $i -lt ${#_args} ]]; then
+        _prefix="${_args[$((i+1))]}"
+        break
+      fi
+    done
+    [[ -n "$_prefix" ]] && _l_captured_prefix="$_prefix"
+
     # Use builtin compadd with -O to capture candidates into an array
     local -a _matches
     builtin compadd -O _matches "$@"
@@ -83,7 +94,7 @@ _l_complete() {
     if (( is_command )); then
       LBUFFER+="${candidates[1]} "
     else
-      LBUFFER+="${(q)candidates[1]}"
+      LBUFFER+="${(q)${_l_captured_prefix}${candidates[1]}}"
     fi
     zle reset-prompt
     return
@@ -97,7 +108,9 @@ _l_complete() {
       [[ -n "$full" ]] && paths+=("$full")
     done
   else
-    paths=("${candidates[@]}")
+    for c in "${candidates[@]}"; do
+      paths+=("${_l_captured_prefix}${c}")
+    done
   fi
 
   # If we couldn't resolve any paths, fall back
@@ -106,9 +119,11 @@ _l_complete() {
     return
   fi
 
+  # Expand tildes in paths
+  paths=("${paths[@]/#\~/$HOME}")
   print -n "\n" >/dev/tty
   local selected
-  selected=$(l -i --tty -d0 "${paths[@]}" </dev/tty)
+  selected=$(l -i --tty -d0 "${paths[@]}" </dev/tty 2>/dev/tty)
   # Clear everything from cursor to end of screen, then move to prompt line
   print -n "\033[J\033[A\r\033[K" >/dev/tty
 
