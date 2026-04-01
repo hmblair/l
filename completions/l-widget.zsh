@@ -109,8 +109,8 @@ _l_complete() {
   print -n "\n" >/dev/tty
   local selected
   selected=$(l -i --tty -d0 "${paths[@]}" </dev/tty)
-  # Move back up to the prompt line and let zle redraw
-  print -n "\r\033[A" >/dev/tty
+  # Clear everything from cursor to end of screen, then move to prompt line
+  print -n "\033[J\033[A\r\033[K" >/dev/tty
 
   if [[ -n "$selected" ]]; then
     if [[ -n "$current" ]]; then

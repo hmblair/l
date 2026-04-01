@@ -19,6 +19,7 @@
 static struct termios orig_termios;
 static int raw_mode_enabled = 0;
 static int saved_stdout_fd = -1;  /* Original stdout, saved before tty redirect */
+static int sigint_visible_lines = 0;  /* Lines on screen, for cleanup in signal handler */
 
 static void term_disable_raw(void) {
     if (raw_mode_enabled) {
@@ -30,21 +31,11 @@ static void term_disable_raw(void) {
     }
 }
 
+static volatile sig_atomic_t sigint_received = 0;
+
 static void sigint_handler(int sig) {
-    ssize_t r;
-    if (raw_mode_enabled) {
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
-        r = write(STDOUT_FILENO, "\033[?7h\033[?25h\n", 13);
-    } else {
-        r = write(STDOUT_FILENO, "\n", 1);
-    }
-    (void)r;
-    /* Restore original stdout before exit */
-    if (saved_stdout_fd >= 0) {
-        dup2(saved_stdout_fd, STDOUT_FILENO);
-        close(saved_stdout_fd);
-    }
-    _exit(128 + sig);
+    (void)sig;
+    sigint_received = 1;
 }
 
 static void term_enable_raw(void) {
@@ -61,7 +52,7 @@ static void term_enable_raw(void) {
     sigaction(SIGINT, &sa, NULL);
 
     struct termios raw = orig_termios;
-    raw.c_lflag &= ~(ECHO | ICANON);
+    raw.c_lflag &= ~(ECHO | ICANON | ISIG);
     raw.c_cc[VMIN] = 1;
     raw.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
@@ -96,6 +87,7 @@ static KeyPress term_read_key(void) {
     if (read(STDIN_FILENO, &c, 1) != 1) return KEY_NONE;
 
     if (c == '\t') return KEY_DOWN;          /* Tab cycles down */
+    if (c == 3) return KEY_QUIT;              /* Ctrl+C */
     if (c == '\n' || c == '\r') return KEY_ENTER;
     if (c == 'q' || c == 'Q') return KEY_QUIT;
     if (c == 'k' || c == 'K') return KEY_UP;
@@ -555,6 +547,7 @@ static void render_view(SelectState *state, PrintContext *ctx, ExpandedSet *expa
 
     /* Track how many lines we printed */
     state->visible_lines = new_visible;
+    sigint_visible_lines = new_visible;
 }
 
 /* ============================================================================
@@ -743,8 +736,12 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
         /* Safety check - exit if tree becomes empty */
         if (state.count == 0) break;
 
+        /* Check for Ctrl+C */
+        if (sigint_received) goto cleanup;
+
         /* Poll stdin with timeout for live refresh */
         int ready = poll_stdin(REFRESH_INTERVAL_MS);
+        if (sigint_received) goto cleanup;
         if (ready == 0) {
             /* Check if root directories still exist */
             int any_alive = 0;
