@@ -23,8 +23,12 @@ typedef struct GitStatusNode {
     struct GitStatusNode *next;
 } GitStatusNode;
 
+#define L_MAX_GIT_ROOTS 256
+
 typedef struct {
     GitStatusNode *buckets[L_HASH_SIZE];
+    char *repo_roots[L_MAX_GIT_ROOTS];
+    int repo_root_count;
 #ifdef _OPENMP
     omp_lock_t lock;
 #endif

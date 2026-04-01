@@ -508,7 +508,10 @@ void tree_expand_node(TreeNode *node, const TreeBuildOpts *opts,
 
         if (git_status && git_status[0] != '\0' && strcmp(git_status, "!!") != 0) {
             child->has_git_status = 1;
-            node->has_git_status = 1;
+            /* Only propagate to parent if parent is inside a git repo;
+             * don't bubble git status across repo boundaries */
+            if (in_git_repo)
+                node->has_git_status = 1;
         }
     }
 

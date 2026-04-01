@@ -26,6 +26,28 @@ void git_cache_init(GitCache *cache) {
 #endif
 }
 
+static void git_cache_register_root(GitCache *cache, const char *repo_path) {
+    /* Don't add duplicates */
+    for (int i = 0; i < cache->repo_root_count; i++) {
+        if (strcmp(cache->repo_roots[i], repo_path) == 0) return;
+    }
+    if (cache->repo_root_count < L_MAX_GIT_ROOTS) {
+        cache->repo_roots[cache->repo_root_count++] = strdup(repo_path);
+    }
+}
+
+/* Check if dir_path is inside (or equal to) any known git repo root */
+static int git_cache_path_in_repo(GitCache *cache, const char *dir_path) {
+    for (int i = 0; i < cache->repo_root_count; i++) {
+        size_t root_len = strlen(cache->repo_roots[i]);
+        if (strncmp(dir_path, cache->repo_roots[i], root_len) == 0 &&
+            (dir_path[root_len] == '/' || dir_path[root_len] == '\0')) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void git_cache_free(GitCache *cache) {
     for (int i = 0; i < L_HASH_SIZE; i++) {
         GitStatusNode *node = cache->buckets[i];
@@ -37,6 +59,10 @@ void git_cache_free(GitCache *cache) {
         }
         cache->buckets[i] = NULL;
     }
+    for (int i = 0; i < cache->repo_root_count; i++) {
+        free(cache->repo_roots[i]);
+    }
+    cache->repo_root_count = 0;
 #ifdef _OPENMP
     omp_destroy_lock(&cache->lock);
 #endif
@@ -145,6 +171,11 @@ void git_cache_add_diff(GitCache *cache, const char *path, int added, int remove
 
 GitSummary git_get_dir_summary(GitCache *cache, const char *dir_path) {
     GitSummary summary = {0, 0, 0, 0};
+
+    /* Only return git status for directories inside a known git repo */
+    if (!git_cache_path_in_repo(cache, dir_path))
+        return summary;
+
     size_t dir_len = strlen(dir_path);
 
     /* Iterate through all buckets */
@@ -649,6 +680,8 @@ static void git_populate_diff_stats_shell(GitCache *cache, const char *repo_path
 }
 
 void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_stats) {
+    git_cache_register_root(cache, repo_path);
+
     git_repository *repo = NULL;
     git_status_list *status_list = NULL;
     git_status_options opts = {0};
@@ -812,6 +845,8 @@ int git_find_root(const char *path, char *root, size_t root_len) {
 }
 
 void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_stats) {
+    git_cache_register_root(cache, repo_path);
+
     char *escaped = shell_escape(repo_path);
     if (!escaped) return;  /* Path too long or malformed */
 

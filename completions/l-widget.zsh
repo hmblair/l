@@ -98,7 +98,9 @@ _l_complete() {
       LBUFFER+="${candidates[1]} "
     else
       local _result="${_l_captured_prefix}${candidates[1]}"
-      LBUFFER+="${(q)_result}"
+      _result="${(q)_result}"
+      _result="${_result/#\\~/~}"
+      LBUFFER+="$_result"
     fi
     zle reset-prompt
     return
@@ -139,7 +141,10 @@ _l_complete() {
     if (( is_command )); then
       LBUFFER+="${selected:t} "
     else
-      LBUFFER+="${(q)selected}"
+      selected="${selected/#$HOME/~}"
+      local _qsel="${(q)selected}"
+      _qsel="${_qsel/#\\~/~}"
+      LBUFFER+="$_qsel"
       zle accept-line
     fi
     zle reset-prompt
