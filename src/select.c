@@ -8,6 +8,7 @@
 #include <sys/select.h>
 #include <sys/stat.h>
 #include <signal.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <time.h>
 
@@ -17,6 +18,7 @@
 
 static struct termios orig_termios;
 static int raw_mode_enabled = 0;
+static int saved_stdout_fd = -1;  /* Original stdout, saved before tty redirect */
 
 static void term_disable_raw(void) {
     if (raw_mode_enabled) {
@@ -37,6 +39,11 @@ static void sigint_handler(int sig) {
         r = write(STDOUT_FILENO, "\n", 1);
     }
     (void)r;
+    /* Restore original stdout before exit */
+    if (saved_stdout_fd >= 0) {
+        dup2(saved_stdout_fd, STDOUT_FILENO);
+        close(saved_stdout_fd);
+    }
     _exit(128 + sig);
 }
 
@@ -88,6 +95,7 @@ static KeyPress term_read_key(void) {
     char c;
     if (read(STDIN_FILENO, &c, 1) != 1) return KEY_NONE;
 
+    if (c == '\t') return KEY_DOWN;          /* Tab cycles down */
     if (c == '\n' || c == '\r') return KEY_ENTER;
     if (c == 'q' || c == 'Q') return KEY_QUIT;
     if (c == 'k' || c == 'K') return KEY_UP;
@@ -113,6 +121,7 @@ static KeyPress term_read_key(void) {
                     if (seq[1] == 'B') return KEY_DOWN;
                     if (seq[1] == 'D') return KEY_LEFT;
                     if (seq[1] == 'C') return KEY_RIGHT;
+                    if (seq[1] == 'Z') return KEY_UP;   /* Shift+Tab */
                 }
             }
         }
@@ -252,12 +261,15 @@ static void state_free(SelectState *state) {
  * Tree Flattening
  * ============================================================================ */
 
-/* Count visible children for a node (only if expanded) */
+/* Count visible children for a node (only if expanded).
+ * Filtering only applies within the initial tree depth; nodes expanded
+ * interactively beyond that depth are always visible. */
 static int count_visible_children(const TreeNode *node, const Config *cfg,
-                                   ExpandedSet *expanded) {
+                                   ExpandedSet *expanded, int depth,
+                                   int filter_depth) {
     if (!node_is_directory(node)) return 0;
     if (!expanded_contains(expanded, node->entry.path)) return 0;
-    int filtering = is_filtering_active(cfg);
+    int filtering = (depth < filter_depth) && is_filtering_active(cfg);
     int count = 0;
     for (size_t i = 0; i < node->child_count; i++) {
         if (!filtering || node_is_visible(&node->children[i], cfg)) {
@@ -269,12 +281,13 @@ static int count_visible_children(const TreeNode *node, const Config *cfg,
 
 static void flatten_children(SelectState *state, const TreeNode *parent,
                              int depth, int *continuation, const Config *cfg,
-                             ExpandedSet *expanded);
+                             ExpandedSet *expanded, int filter_depth);
 
 static void flatten_node(SelectState *state, TreeNode *node, int depth,
                          int *continuation, const Config *cfg,
-                         ExpandedSet *expanded) {
-    int has_visible_children = count_visible_children(node, cfg, expanded) > 0;
+                         ExpandedSet *expanded, int filter_depth) {
+    int has_visible_children = count_visible_children(node, cfg, expanded,
+                                                      depth, filter_depth) > 0;
 
     /* Add this node */
     state_add(state, node, depth, has_visible_children, continuation);
@@ -282,16 +295,19 @@ static void flatten_node(SelectState *state, TreeNode *node, int depth,
     /* Recurse into children only if this dir is in the expanded set */
     int is_expanded = expanded_contains(expanded, node->entry.path);
     if (node->child_count > 0 && is_expanded) {
-        flatten_children(state, node, depth, continuation, cfg, expanded);
+        flatten_children(state, node, depth, continuation, cfg, expanded,
+                         filter_depth);
     }
 }
 
 static void flatten_children(SelectState *state, const TreeNode *parent,
                              int depth, int *continuation, const Config *cfg,
-                             ExpandedSet *expanded) {
+                             ExpandedSet *expanded, int filter_depth) {
     if (parent->child_count == 0) return;
 
-    int filtering = is_filtering_active(cfg);
+    /* Filter only within the original tree depth; interactively expanded
+     * nodes beyond that are always visible. */
+    int filtering = (depth < filter_depth) && is_filtering_active(cfg);
 
     /* Build list of visible children indices */
     size_t *visible_indices = malloc(parent->child_count * sizeof(size_t));
@@ -313,7 +329,8 @@ static void flatten_children(SelectState *state, const TreeNode *parent,
         /* Set continuation for this depth */
         continuation[depth] = !is_last;
 
-        flatten_node(state, child, depth + 1, continuation, cfg, expanded);
+        flatten_node(state, child, depth + 1, continuation, cfg, expanded,
+                     filter_depth);
     }
 
     free(visible_indices);
@@ -325,7 +342,8 @@ static void flatten_all(SelectState *state, TreeNode **trees, int tree_count,
     state_clear(state);
     for (int i = 0; i < tree_count; i++) {
         memset(continuation, 0, sizeof(continuation));
-        flatten_node(state, trees[i], 0, continuation, cfg, expanded);
+        flatten_node(state, trees[i], 0, continuation, cfg, expanded,
+                     cfg->max_depth);
     }
 }
 
@@ -683,7 +701,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
     /* We need a continuation array for rendering */
     int continuation[L_MAX_DEPTH] = {0};
 
-    /* Flatten all trees into visible node list */
+    /* Flatten all trees into visible node list (with filter applied) */
     flatten_all(&state, trees, tree_count, ctx->cfg, &expanded);
 
     if (state.count == 0) {
@@ -700,6 +718,17 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
     render_ctx.continuation = continuation;
     render_ctx.line_prefix = NULL;
     render_ctx.term_width = get_terminal_width();
+
+    /* Redirect stdout to /dev/tty so UI output doesn't mix with the
+     * result path when stdout is captured (e.g. in a shell widget).
+     * The original stdout fd is restored after cleanup so the caller
+     * can still printf the selected path to the real stdout. */
+    int tty_fd = open("/dev/tty", O_WRONLY);
+    if (tty_fd >= 0) {
+        saved_stdout_fd = dup(STDOUT_FILENO);
+        dup2(tty_fd, STDOUT_FILENO);
+        close(tty_fd);
+    }
 
     /* Enter raw mode and render */
     term_enable_raw();
@@ -898,6 +927,14 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                     }
                     if (system(cmd)) { /* ignore */ }
 
+                    /* Restore original stdout */
+                    if (saved_stdout_fd >= 0) {
+                        fflush(stdout);
+                        dup2(saved_stdout_fd, STDOUT_FILENO);
+                        close(saved_stdout_fd);
+                        saved_stdout_fd = -1;
+                    }
+
                     state_free(&state);
                     expanded_free(&expanded);
                     return NULL;
@@ -925,8 +962,27 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
     }
 
 cleanup:
-    printf("\r\033[K\n");
+    /* Erase the entire interactive display */
+    if (state.visible_lines > 1) {
+        printf("\033[%dA", state.visible_lines - 1);  /* Move to top */
+    }
+    for (int i = 0; i < state.visible_lines; i++) {
+        printf("\r\033[K\n");  /* Clear each line */
+    }
+    if (state.visible_lines > 0) {
+        printf("\033[%dA", state.visible_lines);  /* Move back up */
+    }
+    fflush(stdout);
     term_disable_raw();
+
+    /* Restore original stdout so the caller can print the result path */
+    if (saved_stdout_fd >= 0) {
+        fflush(stdout);
+        dup2(saved_stdout_fd, STDOUT_FILENO);
+        close(saved_stdout_fd);
+        saved_stdout_fd = -1;
+    }
+
     state_free(&state);
     expanded_free(&expanded);
     return result;

@@ -5,6 +5,7 @@
 #include "tree.h"
 #include "cache.h"
 #include <dirent.h>
+#include <fnmatch.h>
 #include <string.h>
 
 /* ============================================================================
@@ -721,8 +722,14 @@ int compute_git_status_flags(TreeNode *node, GitCache *git, int show_hidden) {
     return result;
 }
 
+static int is_glob_pattern(const char *s) {
+    return (strchr(s, '*') || strchr(s, '?') || strchr(s, '['));
+}
+
 int compute_grep_flags(TreeNode *node, const char *pattern) {
-    int result = (strcasestr(node->entry.name, pattern) != NULL);
+    int result = is_glob_pattern(pattern)
+        ? (fnmatch(pattern, node->entry.name, 0) == 0)
+        : (strcasestr(node->entry.name, pattern) != NULL);
 
     for (size_t i = 0; i < node->child_count; i++) {
         if (compute_grep_flags(&node->children[i], pattern)) {

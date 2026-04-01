@@ -130,7 +130,8 @@ install: all
 	@mkdir -p $(ZSH_COMPLETIONS)
 	install -m 644 completions/_l $(ZSH_COMPLETIONS)/_l
 	install -m 644 completions/_cl $(ZSH_COMPLETIONS)/_cl
-	@echo "Installed zsh completions to $(ZSH_COMPLETIONS)"
+	install -m 644 completions/l-widget.zsh $(ZSH_COMPLETIONS)/l-widget.zsh
+	@echo "Installed zsh completions and widget to $(ZSH_COMPLETIONS)"
 	@if command -v zsh >/dev/null 2>&1 && ! zsh -ic 'echo "$$fpath"' 2>/dev/null | grep -qF "$(ZSH_COMPLETIONS)"; then \
 		printf "\033[33mWarning:\033[0m $(ZSH_COMPLETIONS) is not in your zsh fpath\n"; \
 		echo "  Add this to your .zshrc: fpath=($(ZSH_COMPLETIONS) \$$fpath)"; \
@@ -144,7 +145,7 @@ uninstall:
 	rm -f $(DESTBINDIR)/l $(DESTBINDIR)/l-cached $(DESTBINDIR)/cl
 	rm -f $(CONFIGDIR)/$(CONFIG_FILE)
 	rmdir $(CONFIGDIR) 2>/dev/null || true
-	rm -f $(ZSH_COMPLETIONS)/_l $(ZSH_COMPLETIONS)/_cl
+	rm -f $(ZSH_COMPLETIONS)/_l $(ZSH_COMPLETIONS)/_cl $(ZSH_COMPLETIONS)/l-widget.zsh
 	rm -f $(BASH_COMPLETIONS)/l $(BASH_COMPLETIONS)/cl
 	@echo "Uninstalled l"
 
