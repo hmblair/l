@@ -127,6 +127,22 @@ void git_cache_set_diff(GitCache *cache, const char *path, int added, int remove
 #endif
 }
 
+void git_cache_add_diff(GitCache *cache, const char *path, int added, int removed) {
+#ifdef _OPENMP
+    omp_set_lock(&cache->lock);
+#endif
+
+    GitStatusNode *node = git_cache_get_node(cache, path);
+    if (node) {
+        node->lines_added += added;
+        node->lines_removed += removed;
+    }
+
+#ifdef _OPENMP
+    omp_unset_lock(&cache->lock);
+#endif
+}
+
 GitSummary git_get_dir_summary(GitCache *cache, const char *dir_path) {
     GitSummary summary = {0, 0, 0, 0};
     size_t dir_len = strlen(dir_path);
@@ -567,6 +583,24 @@ char *shell_escape(const char *path) {
  * Git Repository Functions
  * ============================================================================ */
 
+/* Parse numstat output lines, accumulating diff stats into cache */
+static void git_parse_numstat(FILE *fp, GitCache *cache, const char *repo_path) {
+    char line[PATH_MAX + 64];
+    while (fgets(line, sizeof(line), fp)) {
+        int added, removed;
+        char path[PATH_SCANF_WIDTH + 1];
+
+        /* Stop at separator (used when combining multiple outputs) */
+        if (strcmp(line, "---\n") == 0 || strcmp(line, "---") == 0) break;
+
+        if (sscanf(line, "%d\t%d\t" SCANF_PATH, &added, &removed, path) == 3) {
+            char full_path[PATH_MAX];
+            path_join(full_path, sizeof(full_path), repo_path, path);
+            git_cache_add_diff(cache, full_path, added, removed);
+        }
+    }
+}
+
 #ifdef HAVE_LIBGIT2
 
 /* libgit2 implementation - faster, no fork/exec overhead */
@@ -598,24 +632,19 @@ int git_find_root(const char *path, char *root, size_t root_len) {
 /* Shell-based diff stats (faster than libgit2's patch-based approach) */
 static void git_populate_diff_stats_shell(GitCache *cache, const char *repo_path) {
     char cmd[L_SHELL_CMD_BUF_SIZE];
-    char line[PATH_MAX + 64];
 
+    /* Get both unstaged and staged diff stats */
     snprintf(cmd, sizeof(cmd),
-             "git -C '%s' diff --numstat 2>/dev/null", repo_path);
+             "git -C '%s' diff --numstat 2>/dev/null && "
+             "echo '---' && "
+             "git -C '%s' diff --cached --numstat 2>/dev/null",
+             repo_path, repo_path);
 
     FILE *fp = popen(cmd, "r");
     if (!fp) return;
 
-    while (fgets(line, sizeof(line), fp)) {
-        int added, removed;
-        char path[PATH_SCANF_WIDTH + 1];
-
-        if (sscanf(line, "%d\t%d\t" SCANF_PATH, &added, &removed, path) == 3) {
-            char full_path[PATH_MAX];
-            path_join(full_path, sizeof(full_path), repo_path, path);
-            git_cache_set_diff(cache, full_path, added, removed);
-        }
-    }
+    git_parse_numstat(fp, cache, repo_path);
+    git_parse_numstat(fp, cache, repo_path);
     pclose(fp);
 }
 
@@ -792,7 +821,10 @@ void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_
         snprintf(cmd, sizeof(cmd),
                  "git -C '%s' status --porcelain -uall --ignored=matching 2>/dev/null && "
                  "echo '---' && "
-                 "git -C '%s' diff --numstat 2>/dev/null", escaped, escaped);
+                 "git -C '%s' diff --numstat 2>/dev/null && "
+                 "echo '---' && "
+                 "git -C '%s' diff --cached --numstat 2>/dev/null",
+                 escaped, escaped, escaped);
     } else {
         snprintf(cmd, sizeof(cmd),
                  "git -C '%s' status --porcelain -uall --ignored=matching 2>/dev/null", escaped);
@@ -803,19 +835,10 @@ void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_
         /* Parse status output until separator */
         git_parse_status_output(fp, cache, repo_path);
 
-        /* If we included diff stats, parse them after the separator */
+        /* If we included diff stats, parse unstaged and staged numstat */
         if (include_diff_stats) {
-            char line[PATH_MAX + 64];
-            while (fgets(line, sizeof(line), fp)) {
-                int added, removed;
-                char path[PATH_SCANF_WIDTH + 1];
-
-                if (sscanf(line, "%d\t%d\t" SCANF_PATH, &added, &removed, path) == 3) {
-                    char full_path[PATH_MAX];
-                    path_join(full_path, sizeof(full_path), repo_path, path);
-                    git_cache_set_diff(cache, full_path, added, removed);
-                }
-            }
+            git_parse_numstat(fp, cache, repo_path);
+            git_parse_numstat(fp, cache, repo_path);
         }
         pclose(fp);
     }

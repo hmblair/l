@@ -54,6 +54,9 @@ void git_cache_add(GitCache *cache, const char *path, const char *status);
 /* Set diff stats for a cached path */
 void git_cache_set_diff(GitCache *cache, const char *path, int added, int removed);
 
+/* Add diff stats to existing values for a cached path (accumulates) */
+void git_cache_add_diff(GitCache *cache, const char *path, int added, int removed);
+
 /* Look up status for a path (returns NULL if not found) */
 const char *git_cache_get(GitCache *cache, const char *path);
 
