@@ -438,8 +438,9 @@ static int has_isobmff_audio_extension(const char *path) {
     return 0;
 }
 
-/* Forward declaration for Matroska parser */
+/* Forward declarations */
 static int get_matroska_duration(const char *path);
+static int get_flac_duration(const char *path);
 
 /* Check if file has a WAV extension */
 static int has_wav_extension(const char *path) {
@@ -503,11 +504,68 @@ static int get_wav_duration(const char *path) {
     return (int)(data_size / byte_rate);
 }
 
-/* Get audio/video duration from ISOBMFF container (M4B, M4A, MP4, MOV, etc.)
+/* Get duration from FLAC file via STREAMINFO block. Returns seconds, or -1. */
+static int get_flac_duration(const char *path) {
+    const char *dot = strrchr(path, '/');
+    dot = dot ? strrchr(dot, '.') : strrchr(path, '.');
+    if (!dot || strcasecmp(dot + 1, "flac") != 0) return -1;
+
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+
+    /* "fLaC" magic followed by STREAMINFO metadata block header (4 bytes) */
+    unsigned char header[8];
+    if (fread(header, 1, 8, f) < 8 ||
+        memcmp(header, "fLaC", 4) != 0) {
+        fclose(f);
+        return -1;
+    }
+
+    /* STREAMINFO block type must be 0 (low 7 bits of header[4]) */
+    if ((header[4] & 0x7F) != 0) { fclose(f); return -1; }
+
+    uint32_t block_len = (header[5] << 16) | (header[6] << 8) | header[7];
+    if (block_len < 34) { fclose(f); return -1; }
+
+    unsigned char si[34];
+    if (fread(si, 1, 34, f) < 34) { fclose(f); return -1; }
+    fclose(f);
+
+    /* Bytes 10-17 of STREAMINFO:
+     *   [10-12]  bits 0-19: min frame size (unused here)
+     *            Actually the layout starting at byte 10 is:
+     *   [10] ssss ssss  (sample rate bits 19-12)
+     *   [11] ssss ssss  (sample rate bits 11-4)
+     *   [12] ssss cccc  (sample rate bits 3-0, channels bits 2-0 + 1 unused)
+     *            but we need to read from the right offset.
+     *
+     * STREAMINFO layout (34 bytes):
+     *   [0-1]   min block size
+     *   [2-3]   max block size
+     *   [4-6]   min frame size
+     *   [7-9]   max frame size
+     *   [10-13] sample rate (20 bits), channels-1 (3 bits), bps-1 (5 bits), total samples high 4 bits
+     *   [14-17] total samples low 32 bits
+     *   [18-33] MD5 signature
+     */
+    uint32_t sample_rate = (si[10] << 12) | (si[11] << 4) | ((si[12] >> 4) & 0x0F);
+    uint64_t total_samples = ((uint64_t)(si[13] & 0x0F) << 32) |
+                             ((uint64_t)si[14] << 24) | (si[15] << 16) |
+                             (si[16] << 8) | si[17];
+
+    if (sample_rate == 0) return -1;
+    return (int)(total_samples / sample_rate);
+}
+
+/* Get audio/video duration from supported containers.
  * Returns duration in seconds, or -1 on failure. */
 int get_audio_duration(const char *path) {
     /* Try WAV (RIFF) */
     int dur = get_wav_duration(path);
+    if (dur >= 0) return dur;
+
+    /* Try FLAC */
+    dur = get_flac_duration(path);
     if (dur >= 0) return dur;
 
     /* Try Matroska (MKV, WebM) */
