@@ -420,20 +420,24 @@ int get_image_megapixels(const char *path) {
  * Audio Duration Parsing
  * ============================================================================ */
 
-/* Check if file has an audio/video extension that uses ISOBMFF container */
-static int has_isobmff_audio_extension(const char *path) {
-    const char *dot = strrchr(path, '/');
-    dot = dot ? strrchr(dot, '.') : strrchr(path, '.');
-    if (!dot) return 0;
-    dot++;
+/* Extract the file extension from a path (after the last dot in the basename).
+ * Returns lowercase-comparable pointer into path, or NULL if no extension. */
+static const char *get_extension(const char *path) {
+    const char *slash = strrchr(path, '/');
+    const char *dot = slash ? strrchr(slash, '.') : strrchr(path, '.');
+    return (dot && dot[1]) ? dot + 1 : NULL;
+}
 
-    static const char *exts[] = {
-        "m4b", "m4a", "mp4", "m4v", "mov", "3gp", "3g2",
-        "aac",  /* AAC in ADTS container won't work, but .aac could be ISOBMFF */
-        NULL
-    };
-    for (const char **e = exts; *e; e++) {
-        if (strcasecmp(dot, *e) == 0) return 1;
+static int has_extension(const char *path, const char *ext) {
+    const char *e = get_extension(path);
+    return e && strcasecmp(e, ext) == 0;
+}
+
+static int has_extension_list(const char *path, const char **exts) {
+    const char *e = get_extension(path);
+    if (!e) return 0;
+    for (; *exts; exts++) {
+        if (strcasecmp(e, *exts) == 0) return 1;
     }
     return 0;
 }
@@ -442,18 +446,9 @@ static int has_isobmff_audio_extension(const char *path) {
 static int get_matroska_duration(const char *path);
 static int get_flac_duration(const char *path);
 
-/* Check if file has a WAV extension */
-static int has_wav_extension(const char *path) {
-    const char *dot = strrchr(path, '/');
-    dot = dot ? strrchr(dot, '.') : strrchr(path, '.');
-    if (!dot) return 0;
-    dot++;
-    return strcasecmp(dot, "wav") == 0;
-}
-
 /* Get duration from WAV (RIFF) file. Returns duration in seconds, or -1. */
 static int get_wav_duration(const char *path) {
-    if (!has_wav_extension(path)) return -1;
+    if (!has_extension(path, "wav")) return -1;
 
     FILE *f = fopen(path, "rb");
     if (!f) return -1;
@@ -474,15 +469,15 @@ static int get_wav_duration(const char *path) {
     /* Walk chunks looking for "fmt " and "data" */
     unsigned char chunk_hdr[8];
     while (fread(chunk_hdr, 1, 8, f) == 8) {
-        uint32_t chunk_size = chunk_hdr[4] | (chunk_hdr[5] << 8) |
-                              (chunk_hdr[6] << 16) | (chunk_hdr[7] << 24);
+        uint32_t chunk_size = chunk_hdr[4] | ((uint32_t)chunk_hdr[5] << 8) |
+                              ((uint32_t)chunk_hdr[6] << 16) | ((uint32_t)chunk_hdr[7] << 24);
 
         if (memcmp(chunk_hdr, "fmt ", 4) == 0) {
             if (chunk_size < 16) break;
             unsigned char fmt[16];
             if (fread(fmt, 1, 16, f) < 16) break;
             /* byte_rate is at offset 8 in fmt chunk (little-endian) */
-            byte_rate = fmt[8] | (fmt[9] << 8) | (fmt[10] << 16) | (fmt[11] << 24);
+            byte_rate = fmt[8] | ((uint32_t)fmt[9] << 8) | ((uint32_t)fmt[10] << 16) | ((uint32_t)fmt[11] << 24);
             found_fmt = 1;
             /* Skip remainder of fmt chunk */
             if (chunk_size > 16) fseek(f, chunk_size - 16, SEEK_CUR);
@@ -506,9 +501,7 @@ static int get_wav_duration(const char *path) {
 
 /* Get duration from FLAC file via STREAMINFO block. Returns seconds, or -1. */
 static int get_flac_duration(const char *path) {
-    const char *dot = strrchr(path, '/');
-    dot = dot ? strrchr(dot, '.') : strrchr(path, '.');
-    if (!dot || strcasecmp(dot + 1, "flac") != 0) return -1;
+    if (!has_extension(path, "flac")) return -1;
 
     FILE *f = fopen(path, "rb");
     if (!f) return -1;
@@ -531,15 +524,7 @@ static int get_flac_duration(const char *path) {
     if (fread(si, 1, 34, f) < 34) { fclose(f); return -1; }
     fclose(f);
 
-    /* Bytes 10-17 of STREAMINFO:
-     *   [10-12]  bits 0-19: min frame size (unused here)
-     *            Actually the layout starting at byte 10 is:
-     *   [10] ssss ssss  (sample rate bits 19-12)
-     *   [11] ssss ssss  (sample rate bits 11-4)
-     *   [12] ssss cccc  (sample rate bits 3-0, channels bits 2-0 + 1 unused)
-     *            but we need to read from the right offset.
-     *
-     * STREAMINFO layout (34 bytes):
+    /* STREAMINFO layout (34 bytes):
      *   [0-1]   min block size
      *   [2-3]   max block size
      *   [4-6]   min frame size
@@ -550,7 +535,7 @@ static int get_flac_duration(const char *path) {
      */
     uint32_t sample_rate = (si[10] << 12) | (si[11] << 4) | ((si[12] >> 4) & 0x0F);
     uint64_t total_samples = ((uint64_t)(si[13] & 0x0F) << 32) |
-                             ((uint64_t)si[14] << 24) | (si[15] << 16) |
+                             ((uint64_t)si[14] << 24) | ((uint32_t)si[15] << 16) |
                              (si[16] << 8) | si[17];
 
     if (sample_rate == 0) return -1;
@@ -560,9 +545,7 @@ static int get_flac_duration(const char *path) {
 /* Get duration from MP3 file. Reads Xing/VBRI header for VBR files,
  * falls back to CBR estimation from bitrate and file size. Returns seconds, or -1. */
 static int get_mp3_duration(const char *path) {
-    const char *dot = strrchr(path, '/');
-    dot = dot ? strrchr(dot, '.') : strrchr(path, '.');
-    if (!dot || strcasecmp(dot + 1, "mp3") != 0) return -1;
+    if (!has_extension(path, "mp3")) return -1;
 
     FILE *f = fopen(path, "rb");
     if (!f) return -1;
@@ -579,23 +562,24 @@ static int get_mp3_duration(const char *path) {
 
     /* Find sync: 11 set bits (0xFF followed by 0xE0 mask) */
     unsigned char frame_hdr[4];
-    int found = 0;
+    long frame_start = -1;
     for (int tries = 0; tries < 8192; tries++) {
         int b = fgetc(f);
         if (b == EOF) break;
         if (b == 0xFF) {
+            long pos = ftell(f) - 1;
             int b2 = fgetc(f);
             if (b2 == EOF) break;
             if ((b2 & 0xE0) == 0xE0) {
                 frame_hdr[0] = b;
                 frame_hdr[1] = b2;
                 if (fread(frame_hdr + 2, 1, 2, f) < 2) break;
-                found = 1;
+                frame_start = pos;
                 break;
             }
         }
     }
-    if (!found) { fclose(f); return -1; }
+    if (frame_start < 0) { fclose(f); return -1; }
 
     /* Parse MPEG frame header */
     int version_bits = (frame_hdr[1] >> 3) & 0x03;
@@ -668,19 +652,18 @@ static int get_mp3_duration(const char *path) {
     if (fread(xing, 1, 12, f) == 12) {
         if ((memcmp(xing, "Xing", 4) == 0 || memcmp(xing, "Info", 4) == 0) &&
             (xing[7] & 0x01)) {
-            uint32_t frames = (xing[8] << 24) | (xing[9] << 16) |
-                              (xing[10] << 8) | xing[11];
+            uint32_t frames = ((uint32_t)xing[8] << 24) | ((uint32_t)xing[9] << 16) |
+                              ((uint32_t)xing[10] << 8) | xing[11];
             fclose(f);
             if (sample_rate == 0) return -1;
             return (int)((uint64_t)frames * samples_per_frame / sample_rate);
         }
-        /* Check for VBRI header (always at offset 32 after frame sync) */
-        long vbri_pos = audio_start + 4 + 32;
-        fseek(f, vbri_pos, SEEK_SET);
+        /* VBRI header is always at offset 32 after the frame header start */
+        fseek(f, frame_start + 4 + 32, SEEK_SET);
         unsigned char vbri[26];
         if (fread(vbri, 1, 26, f) == 26 && memcmp(vbri, "VBRI", 4) == 0) {
-            uint32_t frames = (vbri[14] << 24) | (vbri[15] << 16) |
-                              (vbri[16] << 8) | vbri[17];
+            uint32_t frames = ((uint32_t)vbri[14] << 24) | ((uint32_t)vbri[15] << 16) |
+                              ((uint32_t)vbri[16] << 8) | vbri[17];
             fclose(f);
             if (sample_rate == 0) return -1;
             return (int)((uint64_t)frames * samples_per_frame / sample_rate);
@@ -697,26 +680,15 @@ static int get_mp3_duration(const char *path) {
     return (int)(audio_size / (bitrate * 125)); /* bitrate is kbps; 125 = 1000/8 */
 }
 
-/* Get audio/video duration from supported containers.
+/* Get duration from ISOBMFF container (M4B, M4A, MP4, MOV, etc.)
  * Returns duration in seconds, or -1 on failure. */
-int get_audio_duration(const char *path) {
-    /* Try WAV (RIFF) */
-    int dur = get_wav_duration(path);
-    if (dur >= 0) return dur;
-
-    /* Try FLAC */
-    dur = get_flac_duration(path);
-    if (dur >= 0) return dur;
-
-    /* Try MP3 */
-    dur = get_mp3_duration(path);
-    if (dur >= 0) return dur;
-
-    /* Try Matroska (MKV, WebM) */
-    dur = get_matroska_duration(path);
-    if (dur >= 0) return dur;
-
-    if (!has_isobmff_audio_extension(path)) return -1;
+static int get_isobmff_duration(const char *path) {
+    static const char *isobmff_exts[] = {
+        "m4b", "m4a", "mp4", "m4v", "mov", "3gp", "3g2",
+        "aac",  /* AAC in ADTS container won't work, but .aac could be ISOBMFF */
+        NULL
+    };
+    if (!has_extension_list(path, isobmff_exts)) return -1;
 
     FILE *f = fopen(path, "rb");
     if (!f) return -1;
@@ -734,7 +706,7 @@ int get_audio_duration(const char *path) {
     }
 
     /* Skip past ftyp box */
-    uint32_t ftyp_size = (header[0] << 24) | (header[1] << 16) | (header[2] << 8) | header[3];
+    uint32_t ftyp_size = ((uint32_t)header[0] << 24) | ((uint32_t)header[1] << 16) | ((uint32_t)header[2] << 8) | header[3];
     if (ftyp_size < 8) {
         fclose(f);
         return -1;
@@ -744,7 +716,7 @@ int get_audio_duration(const char *path) {
     /* Search for moov box */
     unsigned char box[8];
     while (fread(box, 1, 8, f) == 8) {
-        uint32_t size = (box[0] << 24) | (box[1] << 16) | (box[2] << 8) | box[3];
+        uint32_t size = ((uint32_t)box[0] << 24) | ((uint32_t)box[1] << 16) | ((uint32_t)box[2] << 8) | box[3];
         if (size < 8) break;
 
         if (memcmp(box + 4, "moov", 4) == 0) {
@@ -752,7 +724,7 @@ int get_audio_duration(const char *path) {
 
             /* Search within moov for mvhd */
             while (ftell(f) < moov_end && fread(box, 1, 8, f) == 8) {
-                uint32_t inner_size = (box[0] << 24) | (box[1] << 16) | (box[2] << 8) | box[3];
+                uint32_t inner_size = ((uint32_t)box[0] << 24) | ((uint32_t)box[1] << 16) | ((uint32_t)box[2] << 8) | box[3];
                 if (inner_size < 8) break;
 
                 if (memcmp(box + 4, "mvhd", 4) == 0) {
@@ -770,22 +742,22 @@ int get_audio_duration(const char *path) {
                          * [0] version, [1-3] flags
                          * [4-7] creation_time, [8-11] modification_time
                          * [12-15] timescale, [16-19] duration */
-                        timescale = (mvhd[12] << 24) | (mvhd[13] << 16) | (mvhd[14] << 8) | mvhd[15];
-                        duration = (mvhd[16] << 24) | (mvhd[17] << 16) | (mvhd[18] << 8) | mvhd[19];
+                        timescale = ((uint32_t)mvhd[12] << 24) | ((uint32_t)mvhd[13] << 16) | ((uint32_t)mvhd[14] << 8) | mvhd[15];
+                        duration = ((uint32_t)mvhd[16] << 24) | ((uint32_t)mvhd[17] << 16) | ((uint32_t)mvhd[18] << 8) | mvhd[19];
                     } else {
                         /* Version 1: 8-byte time fields
                          * [0] version, [1-3] flags
                          * [4-11] creation_time, [12-19] modification_time
                          * [20-23] timescale, [24-31] duration */
                         if (mvhd_read < 28) break;
-                        timescale = (mvhd[20] << 24) | (mvhd[21] << 16) | (mvhd[22] << 8) | mvhd[23];
+                        timescale = ((uint32_t)mvhd[20] << 24) | ((uint32_t)mvhd[21] << 16) | ((uint32_t)mvhd[22] << 8) | mvhd[23];
                         duration = ((uint64_t)mvhd[24] << 56) | ((uint64_t)mvhd[25] << 48) |
                                    ((uint64_t)mvhd[26] << 40) | ((uint64_t)mvhd[27] << 32);
                         /* Need to read 4 more bytes for full duration */
                         unsigned char dur_rest[4];
                         if (fread(dur_rest, 1, 4, f) == 4) {
-                            duration |= (dur_rest[0] << 24) | (dur_rest[1] << 16) |
-                                        (dur_rest[2] << 8) | dur_rest[3];
+                            duration |= ((uint32_t)dur_rest[0] << 24) | ((uint32_t)dur_rest[1] << 16) |
+                                        ((uint32_t)dur_rest[2] << 8) | dur_rest[3];
                         }
                     }
 
@@ -804,18 +776,21 @@ int get_audio_duration(const char *path) {
     return -1;
 }
 
-/* Check if file has a Matroska/WebM extension */
-static int has_matroska_extension(const char *path) {
-    const char *dot = strrchr(path, '/');
-    dot = dot ? strrchr(dot, '.') : strrchr(path, '.');
-    if (!dot) return 0;
-    dot++;
+/* Get audio/video duration from supported formats.
+ * Returns duration in seconds, or -1 on failure. */
+int get_audio_duration(const char *path) {
+    int dur;
+    if ((dur = get_wav_duration(path)) >= 0) return dur;
+    if ((dur = get_flac_duration(path)) >= 0) return dur;
+    if ((dur = get_mp3_duration(path)) >= 0) return dur;
+    if ((dur = get_matroska_duration(path)) >= 0) return dur;
+    if ((dur = get_isobmff_duration(path)) >= 0) return dur;
+    return -1;
+}
 
+static int has_matroska_extension(const char *path) {
     static const char *exts[] = { "mkv", "webm", "mka", NULL };
-    for (const char **e = exts; *e; e++) {
-        if (strcasecmp(dot, *e) == 0) return 1;
-    }
-    return 0;
+    return has_extension_list(path, exts);
 }
 
 /* Read EBML variable-length integer, return number of bytes read (0 on error) */
@@ -913,8 +888,8 @@ static int get_matroska_duration(const char *path) {
                 } else if (id == 0x4489 && size == 4) { /* Duration (float32) */
                     unsigned char buf[4];
                     if (fread(buf, 1, 4, f) == 4) {
-                        uint32_t bits = (buf[0] << 24) | (buf[1] << 16) |
-                                        (buf[2] << 8) | buf[3];
+                        uint32_t bits = ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16) |
+                                        ((uint32_t)buf[2] << 8) | buf[3];
                         float f32;
                         memcpy(&f32, &bits, 4);
                         duration = f32;
