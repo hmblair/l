@@ -197,6 +197,28 @@ int get_image_megapixels(const char *path) {
         int h = header[22] | (header[23] << 8) | (header[24] << 16) | (header[25] << 24);
         height = h < 0 ? -h : h;  /* Height can be negative (top-down DIB) */
     }
+    /* WebP: RIFF....WEBP, then VP8/VP8L/VP8X chunk */
+    else if (n >= 30 && memcmp(header, "RIFF", 4) == 0 && memcmp(header + 8, "WEBP", 4) == 0) {
+        if (memcmp(header + 12, "VP8X", 4) == 0) {
+            /* Extended: 4-byte chunk size, 4-byte flags, 24-bit width-1, 24-bit height-1 */
+            width = 1 + (header[24] | (header[25] << 8) | (header[26] << 16));
+            height = 1 + (header[27] | (header[28] << 8) | (header[29] << 16));
+        } else if (memcmp(header + 12, "VP8L", 4) == 0 && header[21] == 0x2F) {
+            /* Lossless: chunk size(4), signature(1), then 14-bit width-1, 14-bit height-1 */
+            uint32_t bits = header[22] | (header[23] << 8) | (header[24] << 16) | (header[25] << 24);
+            width = 1 + (bits & 0x3FFF);
+            height = 1 + ((bits >> 14) & 0x3FFF);
+        } else if (memcmp(header + 12, "VP8 ", 4) == 0) {
+            /* Lossy: chunk size(4), 3-byte frame tag, 3-byte sync code, then dimensions */
+            unsigned char vp8[14];
+            fseek(f, 20, SEEK_SET);
+            if (fread(vp8, 1, 10, f) == 10 &&
+                vp8[3] == 0x9D && vp8[4] == 0x01 && vp8[5] == 0x2A) {
+                width = (vp8[6] | (vp8[7] << 8)) & 0x3FFF;
+                height = (vp8[8] | (vp8[9] << 8)) & 0x3FFF;
+            }
+        }
+    }
     /* HEIC/HEIF: ftyp box with heic/mif1 brand, dimensions in ispe box */
     else if (n >= 12 && memcmp(header + 4, "ftyp", 4) == 0 &&
              (memcmp(header + 8, "heic", 4) == 0 ||
