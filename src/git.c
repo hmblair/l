@@ -736,13 +736,15 @@ char *git_get_latest_tag(const char *repo_path) {
     if (git_repository_open(&repo, repo_path) != 0)
         return NULL;
 
-    git_describe_options desc_opts = GIT_DESCRIBE_OPTIONS_INIT;
+    git_describe_options desc_opts = {0};
+    git_describe_options_init(&desc_opts, GIT_DESCRIBE_OPTIONS_VERSION);
     desc_opts.describe_strategy = GIT_DESCRIBE_TAGS;
 
     if (git_describe_workdir(&result, repo, &desc_opts) != 0)
         goto cleanup;
 
-    git_describe_format_options fmt_opts = GIT_DESCRIBE_FORMAT_OPTIONS_INIT;
+    git_describe_format_options fmt_opts = {0};
+    git_describe_format_options_init(&fmt_opts, GIT_DESCRIBE_FORMAT_OPTIONS_VERSION);
     if (git_describe_format(&buf, result, &fmt_opts) != 0)
         goto cleanup;
 
