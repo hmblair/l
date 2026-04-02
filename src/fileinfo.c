@@ -557,6 +557,146 @@ static int get_flac_duration(const char *path) {
     return (int)(total_samples / sample_rate);
 }
 
+/* Get duration from MP3 file. Reads Xing/VBRI header for VBR files,
+ * falls back to CBR estimation from bitrate and file size. Returns seconds, or -1. */
+static int get_mp3_duration(const char *path) {
+    const char *dot = strrchr(path, '/');
+    dot = dot ? strrchr(dot, '.') : strrchr(path, '.');
+    if (!dot || strcasecmp(dot + 1, "mp3") != 0) return -1;
+
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+
+    /* Skip ID3v2 tag if present */
+    unsigned char id3[10];
+    long audio_start = 0;
+    if (fread(id3, 1, 10, f) == 10 && memcmp(id3, "ID3", 3) == 0) {
+        uint32_t tag_size = ((id3[6] & 0x7F) << 21) | ((id3[7] & 0x7F) << 14) |
+                            ((id3[8] & 0x7F) << 7) | (id3[9] & 0x7F);
+        audio_start = 10 + tag_size;
+    }
+    fseek(f, audio_start, SEEK_SET);
+
+    /* Find sync: 11 set bits (0xFF followed by 0xE0 mask) */
+    unsigned char frame_hdr[4];
+    int found = 0;
+    for (int tries = 0; tries < 8192; tries++) {
+        int b = fgetc(f);
+        if (b == EOF) break;
+        if (b == 0xFF) {
+            int b2 = fgetc(f);
+            if (b2 == EOF) break;
+            if ((b2 & 0xE0) == 0xE0) {
+                frame_hdr[0] = b;
+                frame_hdr[1] = b2;
+                if (fread(frame_hdr + 2, 1, 2, f) < 2) break;
+                found = 1;
+                break;
+            }
+        }
+    }
+    if (!found) { fclose(f); return -1; }
+
+    /* Parse MPEG frame header */
+    int version_bits = (frame_hdr[1] >> 3) & 0x03;
+    int layer_bits   = (frame_hdr[1] >> 1) & 0x03;
+    int bitrate_idx  = (frame_hdr[2] >> 4) & 0x0F;
+    int srate_idx    = (frame_hdr[2] >> 2) & 0x03;
+
+    if (bitrate_idx == 0 || bitrate_idx == 15 || srate_idx == 3) {
+        fclose(f); return -1;
+    }
+
+    /* MPEG version: 0=2.5, 1=reserved, 2=2, 3=1 */
+    int is_mpeg1 = (version_bits == 3);
+    if (version_bits == 1) { fclose(f); return -1; } /* reserved */
+
+    /* Layer: 1=III, 2=II, 3=I */
+    if (layer_bits == 0) { fclose(f); return -1; } /* reserved */
+
+    static const uint16_t bitrates_v1_l3[] = {
+        0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0
+    };
+    static const uint16_t bitrates_v2_l3[] = {
+        0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0
+    };
+    static const uint16_t bitrates_v1_l2[] = {
+        0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 0
+    };
+    static const uint16_t bitrates_v1_l1[] = {
+        0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 0
+    };
+    static const uint16_t bitrates_v2_l1[] = {
+        0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256, 0
+    };
+
+    int bitrate;
+    if (is_mpeg1) {
+        if (layer_bits == 1)      bitrate = bitrates_v1_l3[bitrate_idx];
+        else if (layer_bits == 2) bitrate = bitrates_v1_l2[bitrate_idx];
+        else                      bitrate = bitrates_v1_l1[bitrate_idx];
+    } else {
+        if (layer_bits == 3)      bitrate = bitrates_v2_l1[bitrate_idx];
+        else                      bitrate = bitrates_v2_l3[bitrate_idx];
+    }
+    if (bitrate == 0) { fclose(f); return -1; }
+
+    static const int sample_rates[][3] = {
+        {44100, 48000, 32000}, /* MPEG1 */
+        {22050, 24000, 16000}, /* MPEG2 */
+        {11025, 12000,  8000}, /* MPEG2.5 */
+    };
+    int ver_row = is_mpeg1 ? 0 : (version_bits == 2 ? 1 : 2);
+    int sample_rate = sample_rates[ver_row][srate_idx];
+
+    int samples_per_frame;
+    if (layer_bits == 3)      samples_per_frame = 384;                        /* Layer I */
+    else if (layer_bits == 2) samples_per_frame = 1152;                       /* Layer II */
+    else                      samples_per_frame = is_mpeg1 ? 1152 : 576;      /* Layer III */
+
+    /* Xing/VBRI header sits inside the first frame, after the side information */
+    int side_info_size;
+    if (is_mpeg1)
+        side_info_size = ((frame_hdr[3] >> 6) & 0x03) == 3 ? 17 : 32; /* mono : stereo */
+    else
+        side_info_size = ((frame_hdr[3] >> 6) & 0x03) == 3 ? 9 : 17;
+
+    /* We already read 4 bytes of header; seek past side info */
+    fseek(f, side_info_size, SEEK_CUR);
+
+    unsigned char xing[12];
+    if (fread(xing, 1, 12, f) == 12) {
+        if ((memcmp(xing, "Xing", 4) == 0 || memcmp(xing, "Info", 4) == 0) &&
+            (xing[7] & 0x01)) {
+            uint32_t frames = (xing[8] << 24) | (xing[9] << 16) |
+                              (xing[10] << 8) | xing[11];
+            fclose(f);
+            if (sample_rate == 0) return -1;
+            return (int)((uint64_t)frames * samples_per_frame / sample_rate);
+        }
+        /* Check for VBRI header (always at offset 32 after frame sync) */
+        long vbri_pos = audio_start + 4 + 32;
+        fseek(f, vbri_pos, SEEK_SET);
+        unsigned char vbri[26];
+        if (fread(vbri, 1, 26, f) == 26 && memcmp(vbri, "VBRI", 4) == 0) {
+            uint32_t frames = (vbri[14] << 24) | (vbri[15] << 16) |
+                              (vbri[16] << 8) | vbri[17];
+            fclose(f);
+            if (sample_rate == 0) return -1;
+            return (int)((uint64_t)frames * samples_per_frame / sample_rate);
+        }
+    }
+
+    /* CBR fallback: estimate from file size */
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+    fclose(f);
+
+    long audio_size = file_size - audio_start;
+    if (audio_size <= 0) return -1;
+    return (int)(audio_size / (bitrate * 125)); /* bitrate is kbps; 125 = 1000/8 */
+}
+
 /* Get audio/video duration from supported containers.
  * Returns duration in seconds, or -1 on failure. */
 int get_audio_duration(const char *path) {
@@ -566,6 +706,10 @@ int get_audio_duration(const char *path) {
 
     /* Try FLAC */
     dur = get_flac_duration(path);
+    if (dur >= 0) return dur;
+
+    /* Try MP3 */
+    dur = get_mp3_duration(path);
     if (dur >= 0) return dur;
 
     /* Try Matroska (MKV, WebM) */
