@@ -49,6 +49,23 @@ _l_capture_complete() {
 # Register as a completion widget (runs in completion context)
 zle -C _l_capture complete-word _l_capture_complete
 
+# Insert a completed filesystem path into LBUFFER, replacing the current word.
+# Appends "/" for directories (so completion advances) and a trailing space for
+# runnable non-directory completions in command position. $1 = full path
+# (prefix already applied), $2 = current word to strip, $3 = is_command flag.
+_l_insert_path() {
+  local _path="$1" _strip="$2" _cmd="$3"
+  [[ -n "$_strip" ]] && LBUFFER="${LBUFFER%"$_strip"}"
+  [[ -n "$LBUFFER" && "$LBUFFER" != *" " ]] && LBUFFER+=" "
+  local _is_dir=0
+  [[ -d "${_path/#\~/$HOME}" ]] && _is_dir=1
+  (( _is_dir )) && _path+="/"
+  _path="${(q)_path}"
+  _path="${_path/#\\~/~}"
+  LBUFFER+="$_path"
+  (( _cmd && ! _is_dir )) && LBUFFER+=" "
+}
+
 # Main zle widget bound to Tab
 _l_complete() {
   # Run capture in completion context
@@ -107,26 +124,10 @@ _l_complete() {
     fi
   fi
 
-  # Single candidate -- insert directly
+  # Single candidate -- insert directly. The prefix carries any path prefix
+  # (e.g. "./" for a runnable script); a bare command name has an empty prefix.
   if (( ${#candidates} == 1 )); then
-    if [[ -n "$current" ]]; then
-      LBUFFER="${LBUFFER%"$current"}"
-    fi
-    [[ -n "$LBUFFER" && "$LBUFFER" != *" " ]] && LBUFFER+=" "
-    # Always include the captured prefix: in command position it carries path
-    # prefixes like "./" or "../" for runnable scripts (a bare command name just
-    # has an empty prefix).
-    local _result="${_l_captured_prefix}${candidates[1]}"
-    local _is_dir=0
-    [[ -d "${_result/#\~/$HOME}" ]] && _is_dir=1
-    # Append a slash for directories so completion advances (matches native zsh)
-    # instead of re-inserting the same text and stalling.
-    (( _is_dir )) && _result+="/"
-    _result="${(q)_result}"
-    _result="${_result/#\\~/~}"
-    LBUFFER+="$_result"
-    # In command position a complete non-directory is runnable, so add a space.
-    (( is_command && ! _is_dir )) && LBUFFER+=" "
+    _l_insert_path "${_l_captured_prefix}${candidates[1]}" "$current" "$is_command"
     zle reset-prompt
     return
   fi
@@ -151,6 +152,15 @@ _l_complete() {
   # If we couldn't resolve any paths, fall back
   if (( ${#paths} == 0 )); then
     zle expand-or-complete
+    return
+  fi
+
+  # After filtering spurious candidates, a single real path should be inserted
+  # directly rather than shown in a one-item picker. (Command position keeps the
+  # picker, which inserts the basename of the chosen binary.)
+  if (( ! is_command && ${#paths} == 1 )); then
+    _l_insert_path "${paths[1]}" "$current" "$is_command"
+    zle reset-prompt
     return
   fi
 
