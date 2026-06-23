@@ -458,10 +458,11 @@ int main(int argc, char **argv) {
         cache_load();
     }
 
-    /* Validate all inputs first */
+    /* Validate all inputs first. Use lstat so a broken symlink (whose target
+     * is missing) still counts as existing — the link entry itself is real. */
     for (int i = 0; i < dir_count; i++) {
         struct stat st;
-        if (stat(dirs[i], &st) != 0) {
+        if (lstat(dirs[i], &st) != 0) {
             fprintf(stderr, "%sError:%s '%s' does not exist\n",
                     CLR(&cfg, COLOR_RED), RST(&cfg), dirs[i]);
             return 1;
