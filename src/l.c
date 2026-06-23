@@ -332,6 +332,14 @@ int main(int argc, char **argv) {
     atexit(cleanup_libgit2);
 #endif
 
+#ifdef _OPENMP
+    /* Cap the thread pool to avoid spin-up overhead on many-core machines.
+     * Only lowers the count, so a smaller OMP_NUM_THREADS set by the user wins. */
+    if (L_MAX_THREADS > 0 && omp_get_max_threads() > L_MAX_THREADS) {
+        omp_set_num_threads(L_MAX_THREADS);
+    }
+#endif
+
     /* Initialize config with defaults */
     Config cfg = {
         .max_depth = 1,

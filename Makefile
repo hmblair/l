@@ -19,6 +19,10 @@ CC = cc
 CFLAGS = -O2 -Wall -Wextra -std=c99 -DVERSION=\"$(VERSION)\"
 LIBS = -lsqlite3 -lpthread -lz
 
+# Cap on OpenMP threads (avoids thread-pool spin-up overhead on many-core
+# machines). Override with `make MAX_THREADS=N`; set to 0 for no cap.
+MAX_THREADS ?= 8
+
 # OpenMP support (use homebrew clang on macOS)
 UNAME := $(shell uname)
 ifeq ($(UNAME),Darwin)
@@ -48,6 +52,9 @@ ifdef DEBUG
     CFLAGS += -DHAVE_LIBGIT2 $(shell pkg-config --cflags libgit2)
   endif
 endif
+
+# Thread cap (applied after the DEBUG reset so it affects both builds)
+CFLAGS += -DL_MAX_THREADS=$(MAX_THREADS)
 
 # Source directory
 SRCDIR = src

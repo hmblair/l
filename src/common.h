@@ -55,6 +55,15 @@
 /* Size limits */
 #define L_HASH_SIZE             4096
 #define L_MAX_DEPTH             50
+
+/* Maximum OpenMP threads. Caps thread-pool spin-up overhead on machines with
+ * very high core counts (e.g. HPC login nodes), where spawning one worker per
+ * core costs more than the parallel work itself. Override at build time with
+ * -DL_MAX_THREADS=N; set to 0 to use the OpenMP runtime default (no cap). */
+#ifndef L_MAX_THREADS
+#define L_MAX_THREADS           8
+#endif
+
 #define L_MAX_ICON_LEN          16
 #define L_MAX_EXT_LEN           16
 #define L_MAX_EXT_ICONS         256
