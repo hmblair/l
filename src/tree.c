@@ -260,16 +260,6 @@ static char **find_git_repo_roots(FileList *list, int in_git_repo,
     return git_repos;
 }
 
-/* Check if all children are ignored */
-static int all_children_ignored(TreeNode *children, size_t child_count) {
-    for (size_t i = 0; i < child_count; i++) {
-        if (!children[i].entry.is_ignored) {
-            return 0;
-        }
-    }
-    return 1;
-}
-
 static void build_tree_children(TreeNode *parent, int depth,
                                  const TreeBuildOpts *opts, GitCache *git,
                                  int in_git_repo, int parent_is_ignored) {
@@ -347,12 +337,6 @@ static void build_tree_children(TreeNode *parent, int depth,
             !(opts->skip_fn && opts->skip_fn(&child->entry, opts->skip_ctx))) {
             int child_in_git_repo = in_git_repo || is_git_repo_root[i];
             build_tree_children(child, depth + 1, opts, git, child_in_git_repo, child->entry.is_ignored);
-
-            /* Mark directory as ignored if all children are ignored */
-            if (!child->entry.is_ignored && child->child_count > 0 &&
-                all_children_ignored(child->children, child->child_count)) {
-                child->entry.is_ignored = 1;
-            }
 
             if (opts->compute.git_diff) {
                 child->entry.diff_removed = git_deleted_lines_direct(git, child->entry.path);
@@ -446,12 +430,6 @@ TreeNode *build_tree(const char *path, const TreeBuildOpts *opts,
 
     if (is_dir) {
         build_tree_children(root, 0, opts, git, in_git_repo, root->entry.is_ignored);
-
-        /* Mark root as ignored if all children are ignored */
-        if (!root->entry.is_ignored && root->child_count > 0 &&
-            all_children_ignored(root->children, root->child_count)) {
-            root->entry.is_ignored = 1;
-        }
     }
 
     return root;
