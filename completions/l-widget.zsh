@@ -15,10 +15,13 @@ _l_capture_complete() {
 
   # Override compadd to capture candidates
   compadd() {
-    # Extract prefix (-p) from args
+    # Extract the compadd prefix (-p). Only scan the option portion: anything
+    # after the '--' separator is a candidate word (e.g. l's own '-p' flag), not
+    # a compadd option, so misreading it would corrupt the inserted text.
     local _prefix=""
     local -a _args=("$@")
     for (( i=1; i<=${#_args}; i++ )); do
+      [[ "${_args[$i]}" == "--" ]] && break
       if [[ "${_args[$i]}" == "-p" && $i -lt ${#_args} ]]; then
         _prefix="${_args[$((i+1))]}"
         break
@@ -86,6 +89,22 @@ _l_complete() {
   local current=""
   if [[ "$LBUFFER" != *" " && ${#tokens} -gt 0 ]]; then
     current="${tokens[-1]}"
+  fi
+
+  # Only take over for filesystem-path completions. If none of the candidates
+  # resolve to a real path (e.g. they're flags, options, or subcommands), defer
+  # to zsh's native completion instead of the l -i picker.
+  if (( ! is_command )); then
+    local _c _p _is_path=0
+    for _c in "${candidates[@]}"; do
+      _p="${_l_captured_prefix}${_c}"
+      _p="${_p/#\~/$HOME}"
+      [[ -e "$_p" || -L "$_p" ]] && { _is_path=1; break; }
+    done
+    if (( ! _is_path )); then
+      zle expand-or-complete
+      return
+    fi
   fi
 
   # Single candidate -- insert directly
