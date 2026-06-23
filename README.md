@@ -16,6 +16,7 @@ Enhanced directory listing with tree view, icons, and git integration.
 - Configurable depth limiting, filtering, and sorting
 - Automatic network filesystem detection
 - Shell completions for zsh and bash
+- Optional zsh Tab widget that turns path completion into an `l -i` picker
 
 ## Installation
 
@@ -104,6 +105,18 @@ Use `-i` to enter interactive selection mode:
 | `q` or `Esc` | Quit |
 
 Text files open in `$EDITOR` (default: `vim`). Binary files (images, PDFs, videos, etc.) open with the system handler (`open` on macOS, `xdg-open` on Linux). Directories can be dynamically expanded beyond the initial depth limit.
+
+### Tab Completion Widget (zsh)
+
+An optional zsh widget rebinds Tab to use `l -i` as an interactive picker for file and directory completions. When a completion resolves to multiple paths it opens the `l -i` picker instead of the default menu; a single match inserts directly (directories gain a trailing slash), and non-path completions (flags, subcommands) fall through to zsh's normal completion.
+
+It is installed but not enabled automatically. Source it from your `.zshrc`, after `compinit`:
+
+```zsh
+source ~/.local/share/zsh/site-functions/l-widget.zsh
+```
+
+Completion changes need a shell reload (`exec zsh`) to take effect.
 
 ### `cl` Command
 

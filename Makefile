@@ -147,6 +147,7 @@ install: all
 	install -m 644 completions/l.bash $(BASH_COMPLETIONS)/l
 	ln -sf l $(BASH_COMPLETIONS)/cl
 	@echo "Installed bash completions to $(BASH_COMPLETIONS)"
+	@printf "\n\033[33mNote:\033[0m completion changes need a shell reload.\n"
 
 uninstall:
 	rm -f $(DESTBINDIR)/l $(DESTBINDIR)/l-cached $(DESTBINDIR)/cl
