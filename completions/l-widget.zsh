@@ -113,17 +113,20 @@ _l_complete() {
       LBUFFER="${LBUFFER%"$current"}"
     fi
     [[ -n "$LBUFFER" && "$LBUFFER" != *" " ]] && LBUFFER+=" "
-    if (( is_command )); then
-      LBUFFER+="${candidates[1]} "
-    else
-      local _result="${_l_captured_prefix}${candidates[1]}"
-      # Append a slash for directories so completion advances (matches native
-      # zsh) instead of re-inserting the same text and stalling.
-      [[ -d "${_result/#\~/$HOME}" ]] && _result+="/"
-      _result="${(q)_result}"
-      _result="${_result/#\\~/~}"
-      LBUFFER+="$_result"
-    fi
+    # Always include the captured prefix: in command position it carries path
+    # prefixes like "./" or "../" for runnable scripts (a bare command name just
+    # has an empty prefix).
+    local _result="${_l_captured_prefix}${candidates[1]}"
+    local _is_dir=0
+    [[ -d "${_result/#\~/$HOME}" ]] && _is_dir=1
+    # Append a slash for directories so completion advances (matches native zsh)
+    # instead of re-inserting the same text and stalling.
+    (( _is_dir )) && _result+="/"
+    _result="${(q)_result}"
+    _result="${_result/#\\~/~}"
+    LBUFFER+="$_result"
+    # In command position a complete non-directory is runnable, so add a space.
+    (( is_command && ! _is_dir )) && LBUFFER+=" "
     zle reset-prompt
     return
   fi
