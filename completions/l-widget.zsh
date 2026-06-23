@@ -117,6 +117,9 @@ _l_complete() {
       LBUFFER+="${candidates[1]} "
     else
       local _result="${_l_captured_prefix}${candidates[1]}"
+      # Append a slash for directories so completion advances (matches native
+      # zsh) instead of re-inserting the same text and stalling.
+      [[ -d "${_result/#\~/$HOME}" ]] && _result+="/"
       _result="${(q)_result}"
       _result="${_result/#\\~/~}"
       LBUFFER+="$_result"
@@ -133,8 +136,12 @@ _l_complete() {
       [[ -n "$full" ]] && paths+=("$full")
     done
   else
+    # Only include candidates that resolve to a real path. Completion helpers
+    # (e.g. _cd's named-directory probe) can inject spurious candidates; a single
+    # nonexistent argument would make `l -i` abort entirely, so drop them here.
     for c in "${candidates[@]}"; do
-      paths+=("${_l_captured_prefix}${c}")
+      local _full="${_l_captured_prefix}${c}"
+      [[ -e "${_full/#\~/$HOME}" || -L "${_full/#\~/$HOME}" ]] && paths+=("$_full")
     done
   fi
 
