@@ -8,6 +8,10 @@
 typeset -ga _l_captured_candidates=()
 typeset -g  _l_captured_prefix=""
 
+# Debug trace: set _L_WIDGET_DEBUG=<file> to append a decision trace (and skip
+# launching the interactive picker). See tools/widget-debug.zsh.
+_l_debug() { [[ -n "$_L_WIDGET_DEBUG" ]] && print -r -- "$@" >> "$_L_WIDGET_DEBUG"; }
+
 # Completion widget function — runs inside a real completion context
 _l_capture_complete() {
   _l_captured_candidates=()
@@ -33,6 +37,7 @@ _l_capture_complete() {
     local -a _matches
     builtin compadd -O _matches "$@"
     _l_captured_candidates+=("${_matches[@]}")
+    _l_debug "  compadd${_prefix:+ (prefix=$_prefix)}: ${#_matches} match(es)${_matches:+ -> ${(j:, :)_matches}}"
   }
 
   # Run the real completion system
@@ -97,8 +102,11 @@ _l_complete() {
   # Deduplicate candidates
   candidates=(${(u)candidates})
 
+  _l_debug "fire: LBUFFER=[$LBUFFER] is_command=$is_command prefix=[$_l_captured_prefix] candidates=(${(j: :)candidates})"
+
   # No candidates
   if (( ${#candidates} == 0 )); then
+    _l_debug "-> no candidates"
     return
   fi
 
@@ -119,6 +127,7 @@ _l_complete() {
       [[ -e "$_p" || -L "$_p" ]] && { _is_path=1; break; }
     done
     if (( ! _is_path )); then
+      _l_debug "-> defer to native (no candidate is a real path)"
       zle expand-or-complete
       return
     fi
@@ -128,6 +137,7 @@ _l_complete() {
   # (e.g. "./" for a runnable script); a bare command name has an empty prefix.
   if (( ${#candidates} == 1 )); then
     _l_insert_path "${_l_captured_prefix}${candidates[1]}" "$current" "$is_command"
+    _l_debug "-> single candidate insert: LBUFFER=[$LBUFFER]"
     zle reset-prompt
     return
   fi
@@ -151,6 +161,7 @@ _l_complete() {
 
   # If we couldn't resolve any paths, fall back
   if (( ${#paths} == 0 )); then
+    _l_debug "-> defer to native (no resolved paths)"
     zle expand-or-complete
     return
   fi
@@ -160,6 +171,15 @@ _l_complete() {
   # picker, which inserts the basename of the chosen binary.)
   if (( ! is_command && ${#paths} == 1 )); then
     _l_insert_path "${paths[1]}" "$current" "$is_command"
+    _l_debug "-> single filtered path insert: LBUFFER=[$LBUFFER]"
+    zle reset-prompt
+    return
+  fi
+
+  _l_debug "-> picker: paths=(${(j: :)paths})"
+  # In debug mode, don't launch the interactive picker (it would block a
+  # headless trace); report the paths it would have shown and stop.
+  if [[ -n "$_L_WIDGET_DEBUG" ]]; then
     zle reset-prompt
     return
   fi
