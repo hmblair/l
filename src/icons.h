@@ -73,7 +73,6 @@ typedef struct {
     X(symlink_file,     "symlink_file")     \
     X(closed_directory, "closed_directory") \
     X(open_directory,   "open_directory")   \
-    X(locked_dir,       "locked_dir")       \
     X(executable,       "executable")       \
     X(device,           "device")           \
     X(socket,           "socket")           \
@@ -114,7 +113,7 @@ typedef struct Icons {
 void icons_init_defaults(Icons *icons);
 void icons_load(Icons *icons, const char *script_dir);
 const char *get_icon(const Icons *icons, FileType type, int is_expanded,
-                     int is_locked, int is_binary, const char *name);
+                     int is_binary, const char *name);
 const char *get_ext_icon(const Icons *icons, const char *name);
 
 /* File type functions */

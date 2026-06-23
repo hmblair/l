@@ -141,10 +141,9 @@ const char *get_ext_icon(const Icons *icons, const char *name) {
 }
 
 const char *get_icon(const Icons *icons, FileType type, int is_expanded,
-                     int is_locked, int is_binary, const char *name) {
+                     int is_binary, const char *name) {
     switch (type) {
         case FTYPE_DIR:
-            if (is_locked) return icons->locked_dir;
             return is_expanded ? icons->open_directory : icons->closed_directory;
         case FTYPE_FILE: {
             const char *ext_icon = get_ext_icon(icons, name);

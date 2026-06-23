@@ -550,10 +550,12 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
 
     emit_prefix(line, &pos, ENTRY_BUF_SIZE, depth, ctx->continuation, ctx->cfg);
 
-    int is_readonly = (access(fe->path, W_OK) != 0 && access(fe->path, R_OK) == 0);
+    int is_readonly = (access(fe->path, W_OK) != 0);
     int is_dir = (fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR);
-    if (!ctx->cfg->no_icons && is_readonly && !is_dir) {
-        EMIT(line, pos, ENTRY_BUF_SIZE, "%s%s%s ", CLR(ctx->cfg, COLOR_YELLOW), ctx->icons->readonly, RST(ctx->cfg));
+    /* Grey lock before any entry you can't write to (read-only or no access).
+     * A writable-but-unreadable dir (drop-box) stays unlocked but renders red. */
+    if (!ctx->cfg->no_icons && is_readonly) {
+        EMIT(line, pos, ENTRY_BUF_SIZE, "%s%s%s ", CLR(ctx->cfg, COLOR_GREY), ctx->icons->readonly, RST(ctx->cfg));
     }
 
     if (is_dir && !has_visible_children && !ctx->cfg->no_icons) {
@@ -600,7 +602,6 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
         EMIT(line, pos, ENTRY_BUF_SIZE, "%s", git_ind);
     }
 
-    int is_locked = (fe->type == FTYPE_DIR && (fe->size < 0 || is_readonly));
     const char *color = (fe->type == FTYPE_DIR && fe->size < 0) ? CLR(ctx->cfg, COLOR_RED) :
                         get_file_color(fe->type, is_cwd, fe->is_ignored, ctx->cfg->is_tty, ctx->cfg->color_all);
     const char *style = is_hidden ? CLR(ctx->cfg, STYLE_ITALIC) : "";
@@ -614,7 +615,7 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
         if ((fe->is_mount_point || is_root) && fe->type == FTYPE_DIR) {
             icon = ctx->icons->mount_point;
         } else {
-            icon = get_icon(ctx->icons, fe->type, is_expanded, is_locked, is_binary, fe->name);
+            icon = get_icon(ctx->icons, fe->type, is_expanded, is_binary, fe->name);
         }
         EMIT(line, pos, ENTRY_BUF_SIZE, "%s%s%s ", color, icon, RST(ctx->cfg));
     }
@@ -1028,11 +1029,10 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
     card_init(&card);
 
     /* Header line: icon + name */
-    int is_locked = (fe->type == FTYPE_DIR && access(fe->path, R_OK) != 0);
     const char *color = get_file_color(fe->type, is_cwd, fe->is_ignored, cfg->is_tty, cfg->color_all);
     const char *style = is_hidden ? CLR(cfg, STYLE_ITALIC) : "";
     int is_binary = (fe->file_count < 0 && fe->line_count == -1);
-    const char *icon = cfg->no_icons ? "" : get_icon(ctx->icons, fe->type, node->was_expanded, is_locked, is_binary, fe->name);
+    const char *icon = cfg->no_icons ? "" : get_icon(ctx->icons, fe->type, node->was_expanded, is_binary, fe->name);
     const char *icon_space = cfg->no_icons ? "" : " ";
 
     if (fe->has_git_repo_info && fe->branch) {
