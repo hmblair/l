@@ -28,6 +28,7 @@ void file_list_add(FileList *list, FileEntry *entry) {
 
 void file_entry_free(FileEntry *entry) {
     free(entry->path);
+    free(entry->abs_path);
     free(entry->symlink_target);
     free(entry->branch);
     free(entry->tag);
@@ -315,6 +316,12 @@ static void build_tree_children(TreeNode *parent, int depth,
         child->entry = list.entries[i];
         /* Mark mount boundaries (different filesystem than parent) */
         child->entry.is_mount_point = (child->entry.dev != parent->entry.dev);
+        /* Derive canonical path from the parent's (no realpath syscall). */
+        if (parent->entry.abs_path) {
+            size_t n = strlen(parent->entry.abs_path) + 1 + strlen(child->entry.name) + 1;
+            child->entry.abs_path = xmalloc(n);
+            snprintf(child->entry.abs_path, n, "%s/%s", parent->entry.abs_path, child->entry.name);
+        }
     }
 
     /* Set git status and recurse */
@@ -386,6 +393,11 @@ TreeNode *build_tree(const char *path, const TreeBuildOpts *opts,
     root->entry.path = xstrdup(abs_path);
     root->entry.name = strrchr(root->entry.path, '/');
     root->entry.name = root->entry.name ? root->entry.name + 1 : root->entry.path;
+    /* Resolve the root once; children derive their canonical paths by appending
+     * their names, so realpath() runs once per tree instead of once per entry. */
+    char root_real[PATH_MAX];
+    path_get_realpath(abs_path, root_real, opts->cwd);
+    root->entry.abs_path = xstrdup(root_real);
     root->entry.type = type;
     root->entry.symlink_target = symlink_target;
     root->entry.mode = st.st_mode;

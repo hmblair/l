@@ -38,6 +38,9 @@ typedef struct {
 typedef struct FileEntry {
     /* --- Identity --- */
     char *path;                  /* Display path (may be relative) */
+    char *abs_path;              /* Canonical absolute path, precomputed at build
+                                  * time to avoid a realpath() per entry at print
+                                  * time. NULL if not precomputed (callers fall back). */
     char *name;                  /* Filename component */
     char *symlink_target;        /* Target if symlink, NULL otherwise */
     FileType type;               /* Detected file type (C, Python, etc.) */

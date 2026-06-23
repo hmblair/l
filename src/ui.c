@@ -485,8 +485,14 @@ static void emit_prefix(char *buf, int *pos, int size, int depth, int *continuat
 }
 
 void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visible_children, const PrintContext *ctx) {
-    char abs_path[PATH_MAX];
-    get_realpath(fe->path, abs_path, ctx->cfg);
+    /* Use the canonical path precomputed at build time; fall back to realpath()
+     * only when it wasn't precomputed (e.g. ancestry mode). */
+    char abs_path_buf[PATH_MAX];
+    const char *abs_path = fe->abs_path;
+    if (!abs_path) {
+        get_realpath(fe->path, abs_path_buf, ctx->cfg);
+        abs_path = abs_path_buf;
+    }
 
     int is_cwd = (strcmp(abs_path, ctx->cfg->cwd) == 0);
     int is_hidden = (fe->name[0] == '.');
