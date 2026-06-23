@@ -314,6 +314,15 @@ int main(int argc, char **argv) {
                 return 1;
             }
             printf("l %s\n", VERSION);
+#ifdef HAVE_LIBGIT2
+            {
+                int major = 0, minor = 0, rev = 0;
+                git_libgit2_version(&major, &minor, &rev);
+                printf("libgit2: %d.%d.%d\n", major, minor, rev);
+            }
+#else
+            printf("libgit2: disabled\n");
+#endif
             return 0;
         }
         if (strcmp(argv[1], "--daemon") == 0) {
