@@ -37,11 +37,11 @@ This installs three binaries (`l`, `l-cached`, `cl`), the default `config.toml` 
 ### Dependencies
 
 **Required:**
-- sqlite3
 - pthread
 - zlib
 
 **Optional:**
+- sqlite3 (size caching daemon; auto-detected at build time)
 - libgit2 (faster git status)
 - LLVM/Clang with OpenMP (parallel directory scanning)
 
@@ -49,6 +49,12 @@ On macOS with Homebrew:
 ```bash
 brew install libgit2 llvm
 ```
+
+sqlite3 is detected automatically via `pkg-config`. When present, the size
+caching daemon (`l-cached`) is built and `l` reads cached directory sizes. When
+absent, `l` still builds and runs — it just computes sizes with a live scan
+every time, and `l --daemon` reports that the daemon is unavailable. To skip
+sqlite even when it is installed, build with `make HAVE_SQLITE=no`.
 
 A [Nerd Font](https://www.nerdfonts.com/) is recommended for proper icon display.
 
@@ -140,6 +146,10 @@ l --daemon status    # Check daemon status non-interactively
 ## Daemon
 
 The size caching daemon (`l-cached`) runs in the background to pre-calculate directory sizes, making `l` display sizes instantly even for large directories.
+
+> Requires sqlite3 at build time. If `l` was built without sqlite (see
+> [Dependencies](#dependencies)), the daemon is unavailable: `l --daemon`
+> reports this and exits, and `l` computes sizes with a live scan instead.
 
 ```bash
 l --daemon           # Interactive daemon management

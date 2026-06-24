@@ -3,6 +3,9 @@
  */
 
 #include "daemon.h"
+
+#ifdef HAVE_SQLITE
+
 #include <termios.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
@@ -937,3 +940,21 @@ void daemon_run(const char *binary_path, const char *subcmd) {
         print_status();
     }
 }
+
+#else /* !HAVE_SQLITE */
+
+/*
+ * Built without SQLite: the size-caching daemon cannot exist (l-cached is not
+ * built and there is no cache to read). Report that clearly instead of offering
+ * a menu or any start option.
+ */
+void daemon_run(const char *binary_path, const char *subcmd) {
+    (void)binary_path;
+    (void)subcmd;
+    fprintf(stderr, "  %s●%s Daemon    %sunavailable%s %s(l was built without SQLite support)%s\n",
+            COLOR_RED, COLOR_RESET, COLOR_RED, COLOR_RESET,
+            COLOR_GREY, COLOR_RESET);
+    exit(1);
+}
+
+#endif /* HAVE_SQLITE */

@@ -17,7 +17,7 @@ BINDIR = bin
 
 CC = cc
 CFLAGS = -O2 -Wall -Wextra -std=c99 -DVERSION=\"$(VERSION)\"
-LIBS = -lsqlite3 -lpthread -lz
+LIBS = -lpthread -lz
 
 # Cap on OpenMP threads (avoids thread-pool spin-up overhead on many-core
 # machines). Override with `make MAX_THREADS=N`; set to 0 for no cap.
@@ -44,6 +44,17 @@ ifeq ($(HAVE_LIBGIT2),yes)
   LIBS += $(shell pkg-config --libs libgit2)
 endif
 
+# Optional sqlite support (auto-detected; override with `make HAVE_SQLITE=no`).
+# Without it, l builds with no size cache and l-cached is not built; otherwise
+# unchanged. -DHAVE_SQLITE is appended after the DEBUG reset (see below) so it
+# survives both build modes; the link libs are added here (LIBS is not reset).
+SQLITE_DETECTED := $(shell pkg-config --exists sqlite3 2>/dev/null && echo yes || echo no)
+HAVE_SQLITE ?= $(SQLITE_DETECTED)
+ifeq ($(HAVE_SQLITE),yes)
+  SQLITE_CFLAGS := $(shell pkg-config --cflags sqlite3)
+  LIBS += $(shell pkg-config --libs sqlite3)
+endif
+
 # Debug build
 ifdef DEBUG
   CFLAGS = -g -O0 -Wall -Wextra -std=c99 -fsanitize=address,undefined -DDEBUG
@@ -55,6 +66,11 @@ endif
 
 # Thread cap (applied after the DEBUG reset so it affects both builds)
 CFLAGS += -DL_MAX_THREADS=$(MAX_THREADS)
+
+# SQLite define (applied after the DEBUG reset so it affects both builds)
+ifeq ($(HAVE_SQLITE),yes)
+  CFLAGS += -DHAVE_SQLITE $(SQLITE_CFLAGS)
+endif
 
 # Source directory
 SRCDIR = src
@@ -70,8 +86,13 @@ UI_OBJS = $(SRCDIR)/ui.o $(SRCDIR)/icons.o $(SRCDIR)/fileinfo.o
 DAEMON_OBJS = $(SRCDIR)/daemon.o
 SELECT_OBJS = $(SRCDIR)/select.o
 
-# Main targets
-all: $(BINDIR)/l $(BINDIR)/l-cached $(BINDIR)/cl
+# Main targets (l-cached is only built when SQLite is available)
+BINARIES = $(BINDIR)/l $(BINDIR)/cl
+ifeq ($(HAVE_SQLITE),yes)
+  BINARIES += $(BINDIR)/l-cached
+endif
+
+all: $(BINARIES)
 
 $(BINDIR):
 	mkdir -p $(BINDIR)
@@ -129,10 +150,16 @@ install: all
 	@mkdir -p $(DESTBINDIR)
 	@mkdir -p $(CONFIGDIR)
 	install -m 755 $(BINDIR)/l $(DESTBINDIR)/l
+ifeq ($(HAVE_SQLITE),yes)
 	install -m 755 $(BINDIR)/l-cached $(DESTBINDIR)/l-cached
+endif
 	install -m 755 $(SRCDIR)/cl $(DESTBINDIR)/cl
 	install -m 644 $(CONFIG_FILE) $(CONFIGDIR)/$(CONFIG_FILE)
+ifeq ($(HAVE_SQLITE),yes)
 	@echo "Installed l, l-cached, and cl to $(DESTBINDIR)"
+else
+	@echo "Installed l and cl to $(DESTBINDIR) (without SQLite; l-cached not built)"
+endif
 	@echo "Installed $(CONFIG_FILE) to $(CONFIGDIR)"
 	@mkdir -p $(ZSH_COMPLETIONS)
 	install -m 644 completions/_l $(ZSH_COMPLETIONS)/_l

@@ -4,12 +4,18 @@
 
 #include "cache.h"
 #include "scan.h"
-#include <sqlite3.h>
 #include <pthread.h>
 
 /* ============================================================================
  * Client-side Cache (read-only)
+ *
+ * When built without SQLite (HAVE_SQLITE undefined) the cache reader compiles
+ * to no-op stubs: every lookup misses, so get_dir_stats_cached() below always
+ * falls back to a live scan -- the same behavior as a machine with no daemon.
  * ============================================================================ */
+
+#ifdef HAVE_SQLITE
+#include <sqlite3.h>
 
 static sqlite3 *g_db = NULL;
 static sqlite3_stmt *g_lookup_stmt = NULL;
@@ -80,6 +86,15 @@ void cache_unload(void) {
         g_db = NULL;
     }
 }
+
+#else /* !HAVE_SQLITE -- no-op stubs; lookups always miss */
+
+int cache_load(void) { return -1; }
+int cache_lookup(const char *path, CacheEntry *out) { (void)path; (void)out; return 0; }
+const CacheEntry *cache_lookup_entry(const char *path) { (void)path; return NULL; }
+void cache_unload(void) {}
+
+#endif /* HAVE_SQLITE */
 
 /* ============================================================================
  * Directory Statistics (uses shared scan.c implementation)
