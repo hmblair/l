@@ -301,6 +301,41 @@ static void parse_args(int argc, char **argv, Config *cfg,
  * Main
  * ============================================================================ */
 
+/* When stat/lstat on a path fails, walk up its ancestor directories to find the
+ * deepest one the user cannot search into. This distinguishes a genuinely
+ * missing path from one hidden behind an inaccessible parent. Returns 1 and
+ * writes the offending directory into buf if found, else 0. */
+static int find_inaccessible_ancestor(const char *path, char *buf, size_t buflen) {
+    char work[PATH_MAX];
+    if (strlen(path) >= sizeof(work)) return 0;
+    strcpy(work, path);
+
+    /* Strip trailing slashes so the leaf component is well-defined. */
+    size_t len = strlen(work);
+    while (len > 1 && work[len - 1] == '/') work[--len] = '\0';
+
+    for (;;) {
+        /* Ascend to the parent directory. */
+        char *slash = strrchr(work, '/');
+        if (!slash) return 0;       /* no parent component to inspect */
+        if (slash == work) work[1] = '\0';  /* keep root "/" */
+        else *slash = '\0';
+
+        struct stat st;
+        if (stat(work, &st) != 0) {
+            /* Can't even stat this ancestor (e.g. a higher dir denies search);
+             * keep climbing until we reach one we can examine. */
+            continue;
+        }
+        if (S_ISDIR(st.st_mode) && access(work, X_OK) != 0) {
+            snprintf(buf, buflen, "%s", work);
+            return 1;
+        }
+        /* Reached an accessible ancestor: the missing leaf is genuinely absent. */
+        return 0;
+    }
+}
+
 #ifndef VERSION
 #define VERSION "unknown"
 #endif
@@ -463,8 +498,14 @@ int main(int argc, char **argv) {
     for (int i = 0; i < dir_count; i++) {
         struct stat st;
         if (lstat(dirs[i], &st) != 0) {
-            fprintf(stderr, "%sError:%s '%s' does not exist\n",
-                    CLR(&cfg, COLOR_RED), RST(&cfg), dirs[i]);
+            char blocker[PATH_MAX];
+            if (find_inaccessible_ancestor(dirs[i], blocker, sizeof(blocker))) {
+                fprintf(stderr, "%sError:%s '%s' is inaccessible\n",
+                        CLR(&cfg, COLOR_RED), RST(&cfg), blocker);
+            } else {
+                fprintf(stderr, "%sError:%s '%s' does not exist\n",
+                        CLR(&cfg, COLOR_RED), RST(&cfg), dirs[i]);
+            }
             return 1;
         }
     }
