@@ -192,7 +192,11 @@ _l_complete() {
   paths=("${paths[@]/#\~/$HOME}")
   print -n "\n" >/dev/tty
   local selected
-  selected=$(l -i --tty -d0 "${paths[@]}" </dev/tty 2>/dev/tty)
+  # When completing a command, the candidates are binaries on $PATH; don't gray
+  # out any that happen to live in a gitignored directory (-c, --color-all).
+  local -a _picker_opts=(-i --tty -d0)
+  (( is_command )) && _picker_opts+=(-c)
+  selected=$(l "${_picker_opts[@]}" "${paths[@]}" </dev/tty 2>/dev/tty)
   # Clear everything from cursor to end of screen, then move to prompt line
   print -n "\033[J\033[A\r\033[K" >/dev/tty
 
