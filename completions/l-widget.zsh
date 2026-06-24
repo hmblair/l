@@ -204,12 +204,19 @@ _l_complete() {
     if (( is_command )); then
       LBUFFER+="${selected:t} "
     else
-      # Map the absolute path l -i echoed back to the candidate we passed in,
-      # so the inserted text keeps the relative/~-prefixed form the user typed.
-      local _ins="${selected/#$HOME/~}" _i
+      # l -i echoes an absolute path, which may be a file the user descended
+      # into from a candidate directory (via 'o'/nested folds). Match the
+      # selection against each candidate root as a path prefix and re-attach the
+      # remainder to that candidate's display form, so the inserted text keeps
+      # the relative/~-prefixed form the user typed at any nesting depth.
+      local _ins="${selected/#$HOME/~}" _i _selA="${selected:A}"
       for _i in {1..${#paths}}; do
-        if [[ "${paths[$_i]:A}" == "${selected:A}" ]]; then
+        local _pa="${paths[$_i]:A}"
+        if [[ "$_selA" == "$_pa" ]]; then
           _ins="${rels[$_i]}"
+          break
+        elif [[ "$_selA" == "$_pa"/* ]]; then
+          _ins="${rels[$_i]}/${_selA#$_pa/}"
           break
         fi
       done
