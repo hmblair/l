@@ -143,7 +143,7 @@ _l_complete() {
   fi
 
   # Multiple candidates -- resolve to full paths for l -i
-  local -a paths
+  local -a paths rels
   if (( is_command )); then
     for c in "${candidates[@]}"; do
       local full=$(whence -p "$c" 2>/dev/null)
@@ -153,9 +153,13 @@ _l_complete() {
     # Only include candidates that resolve to a real path. Completion helpers
     # (e.g. _cd's named-directory probe) can inject spurious candidates; a single
     # nonexistent argument would make `l -i` abort entirely, so drop them here.
+    # Keep a parallel `rels` array of the candidate strings (relative or
+    # ~-prefixed) to insert: `l -i` echoes an absolute path, so we map its
+    # selection back to the matching candidate to preserve the typed form.
     for c in "${candidates[@]}"; do
       local _full="${_l_captured_prefix}${c}"
-      [[ -e "${_full/#\~/$HOME}" || -L "${_full/#\~/$HOME}" ]] && paths+=("$_full")
+      local _exp="${_full/#\~/$HOME}"
+      [[ -e "$_exp" || -L "$_exp" ]] && { paths+=("$_exp"); rels+=("$_full"); }
     done
   fi
 
@@ -170,7 +174,7 @@ _l_complete() {
   # directly rather than shown in a one-item picker. (Command position keeps the
   # picker, which inserts the basename of the chosen binary.)
   if (( ! is_command && ${#paths} == 1 )); then
-    _l_insert_path "${paths[1]}" "$current" "$is_command"
+    _l_insert_path "${rels[1]}" "$current" "$is_command"
     _l_debug "-> single filtered path insert: LBUFFER=[$LBUFFER]"
     zle reset-prompt
     return
@@ -200,11 +204,19 @@ _l_complete() {
     if (( is_command )); then
       LBUFFER+="${selected:t} "
     else
-      selected="${selected/#$HOME/~}"
-      local _qsel="${(q)selected}"
+      # Map the absolute path l -i echoed back to the candidate we passed in,
+      # so the inserted text keeps the relative/~-prefixed form the user typed.
+      local _ins="${selected/#$HOME/~}" _i
+      for _i in {1..${#paths}}; do
+        if [[ "${paths[$_i]:A}" == "${selected:A}" ]]; then
+          _ins="${rels[$_i]}"
+          break
+        fi
+      done
+      [[ -d "${_ins/#\~/$HOME}" ]] && _ins+="/"
+      local _qsel="${(q)_ins}"
       _qsel="${_qsel/#\\~/~}"
       LBUFFER+="$_qsel"
-      zle accept-line
     fi
     zle reset-prompt
   else
