@@ -27,13 +27,27 @@ void git_cache_init(GitCache *cache) {
 }
 
 static void git_cache_register_root(GitCache *cache, const char *repo_path) {
+    /* Guard the shared repo_roots array: git_populate_repo (and hence this
+     * function) runs concurrently across OpenMP threads, so the duplicate
+     * scan, the bounds check, and the count increment must be atomic. */
+#ifdef _OPENMP
+    omp_set_lock(&cache->lock);
+#endif
     /* Don't add duplicates */
     for (int i = 0; i < cache->repo_root_count; i++) {
-        if (strcmp(cache->repo_roots[i], repo_path) == 0) return;
+        if (strcmp(cache->repo_roots[i], repo_path) == 0) {
+#ifdef _OPENMP
+            omp_unset_lock(&cache->lock);
+#endif
+            return;
+        }
     }
     if (cache->repo_root_count < L_MAX_GIT_ROOTS) {
         cache->repo_roots[cache->repo_root_count++] = strdup(repo_path);
     }
+#ifdef _OPENMP
+    omp_unset_lock(&cache->lock);
+#endif
 }
 
 /* Check if dir_path is inside (or equal to) any known git repo root */
