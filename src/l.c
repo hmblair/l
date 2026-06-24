@@ -536,9 +536,13 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "%sError:%s '%s' is inaccessible\n",
                         CLR(&cfg, COLOR_RED), RST(&cfg), blocker);
             } else if (find_missing_boundary(dirs[i], &split)) {
-                /* Truncate the path after the first dir that does not exist. */
-                fprintf(stderr, "%sError:%s '%.*s' does not exist\n",
-                        CLR(&cfg, COLOR_RED), RST(&cfg), (int)split, dirs[i]);
+                /* Truncate the path after the first dir that does not exist,
+                 * re-abbreviating the home prefix the shell expanded away. */
+                char missing[PATH_MAX], shown[PATH_MAX];
+                snprintf(missing, sizeof(missing), "%.*s", (int)split, dirs[i]);
+                abbreviate_home(missing, shown, sizeof(shown), &cfg);
+                fprintf(stderr, "%sError:%s '%s' does not exist\n",
+                        CLR(&cfg, COLOR_RED), RST(&cfg), shown);
             } else {
                 fprintf(stderr, "%sError:%s '%s' does not exist\n",
                         CLR(&cfg, COLOR_RED), RST(&cfg), dirs[i]);
