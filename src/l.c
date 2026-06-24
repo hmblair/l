@@ -336,6 +336,38 @@ static int find_inaccessible_ancestor(const char *path, char *buf, size_t buflen
     }
 }
 
+/* For a genuinely missing path, find where the chain of directories stops
+ * existing. Writes into *split the byte offset in `path` at which the
+ * nonexistent portion begins: path[0..*split) is the deepest existing ancestor
+ * plus the first component that does not exist, and path[*split..] is the rest.
+ * Returns 1 if an existing ancestor was found, else 0. */
+static int find_missing_boundary(const char *path, size_t *split) {
+    char work[PATH_MAX];
+    if (strlen(path) >= sizeof(work)) return 0;
+    strcpy(work, path);
+
+    size_t len = strlen(work);
+    while (len > 1 && work[len - 1] == '/') work[--len] = '\0';
+
+    for (;;) {
+        char *slash = strrchr(work, '/');
+        if (!slash) return 0;       /* no ancestor to anchor to */
+        if (slash == work) work[1] = '\0';  /* keep root "/" */
+        else *slash = '\0';
+
+        struct stat st;
+        if (stat(work, &st) != 0) continue;  /* this ancestor is missing too */
+
+        /* `work` is the deepest existing ancestor; the boundary is the end of
+         * the next path component, i.e. the first name that does not exist. */
+        size_t i = strlen(work);
+        if (path[i] == '/') i++;             /* skip the separating slash */
+        while (path[i] && path[i] != '/') i++;
+        *split = i;
+        return 1;
+    }
+}
+
 #ifndef VERSION
 #define VERSION "unknown"
 #endif
@@ -499,9 +531,16 @@ int main(int argc, char **argv) {
         struct stat st;
         if (lstat(dirs[i], &st) != 0) {
             char blocker[PATH_MAX];
+            size_t split;
             if (find_inaccessible_ancestor(dirs[i], blocker, sizeof(blocker))) {
                 fprintf(stderr, "%sError:%s '%s' is inaccessible\n",
                         CLR(&cfg, COLOR_RED), RST(&cfg), blocker);
+            } else if (find_missing_boundary(dirs[i], &split) && dirs[i][split] != '\0') {
+                /* Grey out the part of the path below the first missing dir. */
+                fprintf(stderr, "%sError:%s '%.*s%s%s%s' does not exist\n",
+                        CLR(&cfg, COLOR_RED), RST(&cfg),
+                        (int)split, dirs[i],
+                        CLR(&cfg, COLOR_GREY), dirs[i] + split, RST(&cfg));
             } else {
                 fprintf(stderr, "%sError:%s '%s' does not exist\n",
                         CLR(&cfg, COLOR_RED), RST(&cfg), dirs[i]);
