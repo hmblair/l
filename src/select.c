@@ -703,6 +703,22 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
         return NULL;
     }
 
+    /* Redirect stdout to /dev/tty so UI output doesn't mix with the
+     * result path when stdout is captured (e.g. in a shell widget).
+     * The original stdout fd is restored after cleanup so the caller
+     * can still printf the selected path to the real stdout.
+     *
+     * This happens before the terminal-size queries below: they read
+     * STDOUT_FILENO, so they must run after the redirect. Otherwise, when
+     * stdout is a captured pipe, the ioctl fails and the picker falls back
+     * to a bogus 24x80, desyncing the cursor math from the real terminal. */
+    int tty_fd = open("/dev/tty", O_WRONLY);
+    if (tty_fd >= 0) {
+        saved_stdout_fd = dup(STDOUT_FILENO);
+        dup2(tty_fd, STDOUT_FILENO);
+        close(tty_fd);
+    }
+
     /* Get terminal size */
     get_terminal_size(&state.term_rows);
 
@@ -711,17 +727,6 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
     render_ctx.continuation = continuation;
     render_ctx.line_prefix = NULL;
     render_ctx.term_width = get_terminal_width();
-
-    /* Redirect stdout to /dev/tty so UI output doesn't mix with the
-     * result path when stdout is captured (e.g. in a shell widget).
-     * The original stdout fd is restored after cleanup so the caller
-     * can still printf the selected path to the real stdout. */
-    int tty_fd = open("/dev/tty", O_WRONLY);
-    if (tty_fd >= 0) {
-        saved_stdout_fd = dup(STDOUT_FILENO);
-        dup2(tty_fd, STDOUT_FILENO);
-        close(tty_fd);
-    }
 
     /* Enter raw mode and render */
     term_enable_raw();
