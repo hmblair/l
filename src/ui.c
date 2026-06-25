@@ -283,24 +283,32 @@ static int count_digits(int n) {
     return count;
 }
 
+/* Grow the diff-column widths to fit one entry. Directories use their
+ * recursive deleted-line count (the maximum possible value), so the width
+ * always fits whatever a row later draws. A resulting width of 0 means no
+ * entry has changes and the column is omitted entirely (see print_entry). */
+void diff_widths_update(int *add_width, int *del_width, const FileEntry *fe,
+                        GitCache *git) {
+    if (fe->diff_added > 0) {
+        int w = count_digits(fe->diff_added);
+        if (w > *add_width) *add_width = w;
+    }
+    int diff_removed = fe->diff_removed;
+    if (fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR) {
+        int recursive = git_deleted_lines_recursive(git, fe->path);
+        if (recursive > diff_removed) diff_removed = recursive;
+    }
+    if (diff_removed > 0) {
+        int w = count_digits(diff_removed);
+        if (w > *del_width) *del_width = w;
+    }
+}
+
 static void compute_diff_widths_recursive(const TreeNode *node, GitCache *git,
                                           int *add_width, int *del_width,
                                           const Config *cfg) {
     if (node_is_visible(node, cfg)) {
-        if (node->entry.diff_added > 0) {
-            int w = count_digits(node->entry.diff_added);
-            if (w > *add_width) *add_width = w;
-        }
-        /* For directories, use recursive count (maximum possible value) */
-        int diff_removed = node->entry.diff_removed;
-        if (node->entry.type == FTYPE_DIR || node->entry.type == FTYPE_SYMLINK_DIR) {
-            int recursive = git_deleted_lines_recursive(git, node->entry.path);
-            if (recursive > diff_removed) diff_removed = recursive;
-        }
-        if (diff_removed > 0) {
-            int w = count_digits(diff_removed);
-            if (w > *del_width) *del_width = w;
-        }
+        diff_widths_update(add_width, del_width, &node->entry, git);
     }
     for (size_t i = 0; i < node->child_count; i++) {
         compute_diff_widths_recursive(&node->children[i], git, add_width, del_width, cfg);

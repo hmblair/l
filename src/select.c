@@ -72,7 +72,11 @@ typedef enum {
     KEY_QUIT,
     KEY_OPEN,
     KEY_YANK,
-    KEY_FILTER_FILES
+    KEY_FILTER_FILES,
+    KEY_FILTER,       /* '/' — enter interactive filter mode */
+    KEY_CHAR,         /* a printable character typed in filter mode */
+    KEY_BACKSPACE,    /* delete last filter character */
+    KEY_ESC           /* leave filter mode / clear query */
 } KeyPress;
 
 /* Wait for stdin to become readable within timeout_ms.
@@ -82,13 +86,56 @@ static int poll_stdin(int timeout_ms) {
     return poll(&pfd, 1, timeout_ms);
 }
 
-static KeyPress term_read_key(void) {
+/* Read one escape sequence after ESC. Returns the mapped arrow KeyPress, or
+ * KEY_NONE if a sequence was consumed but unrecognized, or KEY_ESC if ESC was
+ * pressed alone (no sequence followed within the timeout). */
+static KeyPress read_escape_sequence(void) {
+    fd_set fds;
+    struct timeval tv = { .tv_sec = 0, .tv_usec = 50000 };  /* 50ms */
+    FD_ZERO(&fds);
+    FD_SET(STDIN_FILENO, &fds);
+
+    if (select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv) > 0) {
+        char seq[2];
+        if (read(STDIN_FILENO, &seq[0], 1) == 1 && seq[0] == '[') {
+            if (read(STDIN_FILENO, &seq[1], 1) == 1) {
+                if (seq[1] == 'A') return KEY_UP;
+                if (seq[1] == 'B') return KEY_DOWN;
+                if (seq[1] == 'D') return KEY_LEFT;
+                if (seq[1] == 'C') return KEY_RIGHT;
+                if (seq[1] == 'Z') return KEY_UP;   /* Shift+Tab */
+            }
+        }
+        return KEY_NONE;  /* consumed an unrecognized sequence */
+    }
+    return KEY_ESC;  /* ESC pressed alone */
+}
+
+/* Read a key. In filter mode, printable characters are returned as KEY_CHAR
+ * (with the byte stored in *out_char) so the caller can build a query, and
+ * bare ESC leaves filter mode; in normal mode the vim-style navigation keys
+ * apply and ESC quits. */
+static KeyPress term_read_key(int filter_mode, char *out_char) {
     char c;
     if (read(STDIN_FILENO, &c, 1) != 1) return KEY_NONE;
 
-    if (c == '\t') return KEY_DOWN;          /* Tab cycles down */
     if (c == 3) return KEY_QUIT;              /* Ctrl+C */
     if (c == '\n' || c == '\r') return KEY_ENTER;
+    if (c == '\t') return KEY_DOWN;           /* Tab cycles down */
+
+    if (filter_mode) {
+        if (c == 127 || c == 8) return KEY_BACKSPACE;
+        if (c == '\033') {
+            KeyPress k = read_escape_sequence();
+            return k;  /* arrows navigate; bare ESC (KEY_ESC) leaves filter */
+        }
+        if ((unsigned char)c >= 0x20 && (unsigned char)c < 0x7f) {
+            if (out_char) *out_char = c;
+            return KEY_CHAR;
+        }
+        return KEY_NONE;  /* ignore other control bytes while typing */
+    }
+
     if (c == 'q' || c == 'Q') return KEY_QUIT;
     if (c == 'k' || c == 'K') return KEY_UP;
     if (c == 'j' || c == 'J') return KEY_DOWN;
@@ -97,28 +144,12 @@ static KeyPress term_read_key(void) {
     if (c == 'o' || c == 'O') return KEY_OPEN;
     if (c == 'y' || c == 'Y') return KEY_YANK;
     if (c == 'f' || c == 'F') return KEY_FILTER_FILES;
+    if (c == '/') return KEY_FILTER;
 
     if (c == '\033') {
-        /* Check if more data available (arrow key sequence) with timeout */
-        fd_set fds;
-        struct timeval tv = { .tv_sec = 0, .tv_usec = 50000 };  /* 50ms */
-        FD_ZERO(&fds);
-        FD_SET(STDIN_FILENO, &fds);
-
-        if (select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv) > 0) {
-            char seq[2];
-            if (read(STDIN_FILENO, &seq[0], 1) == 1 && seq[0] == '[') {
-                if (read(STDIN_FILENO, &seq[1], 1) == 1) {
-                    if (seq[1] == 'A') return KEY_UP;
-                    if (seq[1] == 'B') return KEY_DOWN;
-                    if (seq[1] == 'D') return KEY_LEFT;
-                    if (seq[1] == 'C') return KEY_RIGHT;
-                    if (seq[1] == 'Z') return KEY_UP;   /* Shift+Tab */
-                }
-            }
-        }
-        /* ESC alone or unrecognized sequence */
-        return KEY_QUIT;
+        KeyPress k = read_escape_sequence();
+        /* In normal mode, ESC alone or an unrecognized sequence quits. */
+        return (k == KEY_ESC || k == KEY_NONE) ? KEY_QUIT : k;
     }
     return KEY_NONE;
 }
@@ -207,6 +238,12 @@ typedef struct {
     int term_rows;         /* Terminal height */
     int visible_lines;     /* Lines currently displayed */
     int first_render;      /* Is this the first render? */
+    int filter_mode;       /* Currently typing an interactive filter */
+    int filter_active;     /* A non-empty filter query is applied */
+    int filter_len;        /* Length of the filter query */
+    char filter[256];      /* Interactive substring/glob filter query */
+    int diff_add_width;    /* Live diff +column width over visible rows (0=hide) */
+    int diff_del_width;    /* Live diff -column width over visible rows (0=hide) */
 } SelectState;
 
 static void state_init(SelectState *state) {
@@ -218,6 +255,12 @@ static void state_init(SelectState *state) {
     state->term_rows = 24;
     state->visible_lines = 0;
     state->first_render = 1;
+    state->filter_mode = 0;
+    state->filter_active = 0;
+    state->filter_len = 0;
+    state->filter[0] = '\0';
+    state->diff_add_width = 0;
+    state->diff_del_width = 0;
 }
 
 static void state_clear(SelectState *state) {
@@ -256,17 +299,18 @@ static void state_free(SelectState *state) {
 /* Count visible children for a node (only if expanded).
  * Filtering only applies within the initial tree depth; nodes expanded
  * interactively beyond that depth are always visible. */
-static int count_visible_children(const TreeNode *node, const Config *cfg,
-                                   ExpandedSet *expanded, int depth,
-                                   int filter_depth) {
+static int count_visible_children(const SelectState *state, const TreeNode *node,
+                                   const Config *cfg, ExpandedSet *expanded,
+                                   int depth, int filter_depth) {
     if (!node_is_directory(node)) return 0;
     if (!expanded_contains(expanded, node->entry.path)) return 0;
     int filtering = (depth < filter_depth) && is_filtering_active(cfg);
     int count = 0;
     for (size_t i = 0; i < node->child_count; i++) {
-        if (!filtering || node_is_visible(&node->children[i], cfg)) {
-            count++;
-        }
+        const TreeNode *child = &node->children[i];
+        if (filtering && !node_is_visible(child, cfg)) continue;
+        if (state->filter_active && !child->matches_grep) continue;
+        count++;
     }
     return count;
 }
@@ -278,7 +322,13 @@ static void flatten_children(SelectState *state, const TreeNode *parent,
 static void flatten_node(SelectState *state, TreeNode *node, int depth,
                          int *continuation, const Config *cfg,
                          ExpandedSet *expanded, int filter_depth) {
-    int has_visible_children = count_visible_children(node, cfg, expanded,
+    /* When an interactive filter is active, hide non-matching nodes at every
+     * depth — including top-level roots, which flatten_children's pre-filter
+     * never sees. matches_grep is recomputed from the live query in
+     * apply_filter(); a directory still shows if any descendant matches. */
+    if (state->filter_active && !node->matches_grep) return;
+
+    int has_visible_children = count_visible_children(state, node, cfg, expanded,
                                                       depth, filter_depth) > 0;
 
     /* Add this node */
@@ -307,9 +357,10 @@ static void flatten_children(SelectState *state, const TreeNode *parent,
     size_t visible_count = 0;
 
     for (size_t i = 0; i < parent->child_count; i++) {
-        if (!filtering || node_is_visible(&parent->children[i], cfg)) {
-            visible_indices[visible_count++] = i;
-        }
+        TreeNode *child = &parent->children[i];
+        if (filtering && !node_is_visible(child, cfg)) continue;
+        if (state->filter_active && !child->matches_grep) continue;
+        visible_indices[visible_count++] = i;
     }
 
     /* Flatten each visible child */
@@ -340,16 +391,47 @@ static void flatten_all(SelectState *state, TreeNode **trees, int tree_count,
 }
 
 /* Recalculate column widths based on visible (flattened) items only */
-static void recalculate_columns(SelectState *state, Column *cols, const Icons *icons) {
-    if (!cols) return;  /* No columns in short format */
-    /* Reset to minimum widths */
+/* Re-measure the display widths over the currently visible rows. Interactive
+ * mode owns which entries are visible; the per-entry measurement (column widths
+ * and whether the diff columns appear at all) is the renderer's, so this just
+ * iterates the visible set and defers to ui.c's column/diff measurers. Must run
+ * whenever the visible set changes (filter, expand/collapse, rescan). */
+static void recalculate_widths(SelectState *state, const PrintContext *ctx) {
+    state->diff_add_width = 0;
+    state->diff_del_width = 0;
+    if (!ctx->columns) return;  /* short format: no columns, no diff columns */
+
     for (int i = 0; i < NUM_COLUMNS; i++) {
-        cols[i].width = 1;
+        ctx->columns[i].width = 1;
     }
-    /* Update based on visible items */
     for (int i = 0; i < state->count; i++) {
-        columns_update_widths(cols, &state->items[i].node->entry, icons);
+        const FileEntry *fe = &state->items[i].node->entry;
+        columns_update_widths(ctx->columns, fe, ctx->icons);
+        diff_widths_update(&state->diff_add_width, &state->diff_del_width,
+                           fe, ctx->git);
     }
+}
+
+/* Recompute the interactive filter: refresh per-node match flags from the
+ * current query (reusing the grep matcher), re-flatten the visible list, and
+ * reset the cursor to the first match. A cleared query disables filtering. */
+static void apply_filter(SelectState *state, TreeNode **trees, int tree_count,
+                         PrintContext *ctx, ExpandedSet *expanded) {
+    state->filter_active = state->filter_len > 0;
+    /* Recompute match flags from the live query while filtering; when the query
+     * is cleared, restore any CLI filter pattern (-f/--filter) so its flags
+     * aren't left holding our query's results. */
+    const char *pattern = state->filter_active ? state->filter
+                                               : ctx->cfg->grep_pattern;
+    if (pattern) {
+        for (int i = 0; i < tree_count; i++) {
+            compute_grep_flags(trees[i], pattern);
+        }
+    }
+    flatten_all(state, trees, tree_count, ctx->cfg, expanded);
+    recalculate_widths(state, ctx);
+    state->cursor = 0;
+    state->scroll_offset = 0;
 }
 
 /* ============================================================================
@@ -430,8 +512,15 @@ static int check_and_rescan(SelectState *state, TreeNode **trees, int tree_count
     }
 
     if (changed) {
+        /* A rescan rebuilds child nodes, dropping their match flags; recompute
+         * them so an active interactive filter keeps applying after refresh. */
+        if (state->filter_active) {
+            for (int i = 0; i < tree_count; i++) {
+                compute_grep_flags(trees[i], state->filter);
+            }
+        }
         flatten_all(state, trees, tree_count, ctx->cfg, expanded);
-        recalculate_columns(state, ctx->columns, ctx->icons);
+        recalculate_widths(state, ctx);
 
         /* Remove stale paths (deleted directories) from expanded set */
         for (int i = expanded->count - 1; i >= 0; i--) {
@@ -487,11 +576,15 @@ static void render_line(SelectState *state, int index, int is_selected,
     int is_expanded = node_is_directory(item->node) &&
                       expanded_contains(expanded, item->node->entry.path);
 
-    /* Create a modified context with the line prefix */
+    /* Create a modified context with the line prefix. The diff-column widths
+     * are taken from the live measurement over the visible rows (0 hides the
+     * column) rather than the stale startup widths in ctx. */
     PrintContext line_ctx = *ctx;
     line_ctx.line_prefix = prefix;
     line_ctx.continuation = ctx->continuation;
     line_ctx.selected = is_selected;
+    line_ctx.diff_add_width = state->diff_add_width;
+    line_ctx.diff_del_width = state->diff_del_width;
 
     /* Call the real print_entry */
     print_entry(&item->node->entry, item->depth, is_expanded, has_visible, &line_ctx);
@@ -526,11 +619,16 @@ static void render_view(SelectState *state, PrintContext *ctx, ExpandedSet *expa
     }
 
     /* Status line */
-    if (files_only) {
-        printf("\r\033[K%s[j/k] files  [f] all  [h/l] fold  [o] open  [y] yank  [Enter] select  [q] quit%s",
+    if (state->filter_mode) {
+        printf("\r\033[K%s/%s%s   %s%d match%s   [Enter] select  [Esc] cancel%s",
+               COLOR_CYAN, COLOR_RESET, state->filter,
+               COLOR_GREY, state->count, state->count == 1 ? "" : "es",
+               COLOR_RESET);
+    } else if (files_only) {
+        printf("\r\033[K%s[j/k] files  [f] all  [/] filter  [h/l] fold  [o] open  [y] yank  [Enter] select  [q] quit%s",
                COLOR_GREY, COLOR_RESET);
     } else {
-        printf("\r\033[K%s[j/k] move  [f] files  [h/l] fold  [o] open  [y] yank  [Enter] select  [q] quit%s",
+        printf("\r\033[K%s[j/k] move  [f] files  [/] filter  [h/l] fold  [o] open  [y] yank  [Enter] select  [q] quit%s",
                COLOR_GREY, COLOR_RESET);
     }
 
@@ -728,6 +826,9 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
     render_ctx.line_prefix = NULL;
     render_ctx.term_width = get_terminal_width();
 
+    /* Measure column and diff-column widths over the initial visible set. */
+    recalculate_widths(&state, &render_ctx);
+
     /* Enter raw mode and render */
     term_enable_raw();
     render_view(&state, &render_ctx, &expanded, files_only);
@@ -738,8 +839,9 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
     struct timespec last_git_refresh = timespec_now();
 
     while (1) {
-        /* Safety check - exit if tree becomes empty */
-        if (state.count == 0) break;
+        /* Safety check - exit if tree becomes empty. Stay while filtering so a
+         * query that currently matches nothing can still be edited/cleared. */
+        if (state.count == 0 && !state.filter_mode) break;
 
         /* Check for Ctrl+C */
         if (sigint_received) goto cleanup;
@@ -763,7 +865,8 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
             struct timespec now = timespec_now();
             int do_git = timespec_diff_ms(now, last_git_refresh) >= GIT_REFRESH_INTERVAL_MS;
             int old_cursor = state.cursor;
-            char *cur_path = strdup(state.items[state.cursor].node->entry.path);
+            char *cur_path = state.count > 0
+                ? strdup(state.items[state.cursor].node->entry.path) : NULL;
 
             if (check_and_rescan(&state, trees, tree_count, ctx, &expanded, do_git)) {
                 if (do_git) last_git_refresh = now;
@@ -794,11 +897,13 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
         }
         if (ready < 0) continue;  /* Signal interrupted poll */
 
-        KeyPress key = term_read_key();
-        FlatNode *current = &state.items[state.cursor];
+        char typed = 0;
+        KeyPress key = term_read_key(state.filter_mode, &typed);
+        FlatNode *current = state.count > 0 ? &state.items[state.cursor] : NULL;
 
         switch (key) {
             case KEY_UP:
+                if (state.count == 0) break;
                 if (files_only) {
                     int next = find_next_file(&state, state.cursor, -1);
                     if (next >= 0) state.cursor = next;
@@ -809,6 +914,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                 break;
 
             case KEY_DOWN:
+                if (state.count == 0) break;
                 if (files_only) {
                     int next = find_next_file(&state, state.cursor, 1);
                     if (next >= 0) state.cursor = next;
@@ -820,12 +926,12 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
 
             case KEY_LEFT:
                 /* Collapse current directory if it's expanded */
-                if (node_is_directory(current->node) &&
+                if (current && node_is_directory(current->node) &&
                     expanded_contains(&expanded, current->node->entry.path)) {
                     expanded_remove(&expanded, current->node->entry.path);
                     const char *cur_path = current->node->entry.path;
                     flatten_all(&state, trees, tree_count, ctx->cfg, &expanded);
-                    recalculate_columns(&state, ctx->columns, ctx->icons);
+                    recalculate_widths(&state, ctx);
                     state.cursor = 0;
                     for (int i = 0; i < state.count; i++) {
                         if (strcmp(state.items[i].node->entry.path, cur_path) == 0) {
@@ -839,7 +945,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
 
             case KEY_RIGHT:
                 /* Expand current directory */
-                if (node_is_directory(current->node) &&
+                if (current && node_is_directory(current->node) &&
                     !expanded_contains(&expanded, current->node->entry.path)) {
                     /* Load children if not yet loaded */
                     if (current->node->child_count == 0 && !current->node->was_expanded) {
@@ -849,7 +955,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                     expanded_add(&expanded, current->node->entry.path);
                     const char *cur_path = current->node->entry.path;
                     flatten_all(&state, trees, tree_count, ctx->cfg, &expanded);
-                    recalculate_columns(&state, ctx->columns, ctx->icons);
+                    recalculate_widths(&state, ctx);
                     state.cursor = 0;
                     for (int i = 0; i < state.count; i++) {
                         if (strcmp(state.items[i].node->entry.path, cur_path) == 0) {
@@ -862,6 +968,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                 break;
 
             case KEY_FILTER_FILES:
+                if (!current) break;
                 if (!files_only) {
                     /* Check if there are any files before enabling */
                     int has_files = find_next_file(&state, state.cursor, 1) >= 0 ||
@@ -883,6 +990,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                 break;
 
             case KEY_OPEN:
+                if (!current) break;
                 if (node_is_directory(current->node)) {
                     /* Toggle expand/collapse */
                     if (expanded_contains(&expanded, current->node->entry.path)) {
@@ -897,7 +1005,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                     }
                     const char *cur_path = current->node->entry.path;
                     flatten_all(&state, trees, tree_count, ctx->cfg, &expanded);
-                    recalculate_columns(&state, ctx->columns, ctx->icons);
+                    recalculate_widths(&state, ctx);
                     state.cursor = 0;
                     for (int i = 0; i < state.count; i++) {
                         if (strcmp(state.items[i].node->entry.path, cur_path) == 0) {
@@ -944,16 +1052,53 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                 break;
 
             case KEY_ENTER:
+                if (!current) break;  /* filtering with no matches: do nothing */
                 result = strdup(current->node->entry.path);
                 goto cleanup;
 
             case KEY_YANK: {
+                if (!current) break;
                 copy_to_clipboard(current->node->entry.path);
                 printf("\r\033[K%sYanked: %s%s\n", COLOR_GREEN,
                        current->node->entry.path, COLOR_RESET);
                 fflush(stdout);
                 goto cleanup;
             }
+
+            case KEY_FILTER:
+                /* '/' opens the interactive filter; an existing query is kept
+                 * so it can be edited rather than retyped. */
+                state.filter_mode = 1;
+                render_view(&state, &render_ctx, &expanded, files_only);
+                break;
+
+            case KEY_CHAR:
+                if (state.filter_len < (int)sizeof(state.filter) - 1) {
+                    state.filter[state.filter_len++] = typed;
+                    state.filter[state.filter_len] = '\0';
+                    apply_filter(&state, trees, tree_count, ctx, &expanded);
+                    render_view(&state, &render_ctx, &expanded, files_only);
+                }
+                break;
+
+            case KEY_BACKSPACE:
+                if (state.filter_len > 0) {
+                    state.filter[--state.filter_len] = '\0';
+                    apply_filter(&state, trees, tree_count, ctx, &expanded);
+                    render_view(&state, &render_ctx, &expanded, files_only);
+                }
+                break;
+
+            case KEY_ESC:
+                /* Leave filter mode and restore the unfiltered list. */
+                state.filter_mode = 0;
+                if (state.filter_len > 0) {
+                    state.filter_len = 0;
+                    state.filter[0] = '\0';
+                    apply_filter(&state, trees, tree_count, ctx, &expanded);
+                }
+                render_view(&state, &render_ctx, &expanded, files_only);
+                break;
 
             case KEY_QUIT:
                 goto cleanup;

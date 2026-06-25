@@ -65,6 +65,8 @@ void columns_recalculate_visible(Column *cols, TreeNode **trees, int tree_count,
                                  const Icons *icons, const Config *cfg);
 void compute_diff_widths(TreeNode **trees, int tree_count, GitCache *gits,
                          int *add_width, int *del_width, const Config *cfg);
+void diff_widths_update(int *add_width, int *del_width, const FileEntry *fe,
+                        GitCache *git);
 
 /* Formatting helpers */
 void format_size(off_t bytes, char *buf, size_t len);

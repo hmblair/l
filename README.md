@@ -106,9 +106,12 @@ Use `-i` to enter interactive selection mode:
 | `h/l` or `←/→` | Collapse/expand directories |
 | `o` | Open file or toggle directory |
 | `f` | Toggle files-only navigation |
+| `/` | Filter entries by name (type to narrow, `Esc` to cancel) |
 | `Enter` | Print selected path and exit |
 | `y` | Copy path to clipboard |
 | `q` or `Esc` | Quit |
+
+Press `/` to filter the listing by name: type to narrow the entries live (case-insensitive substring, or a glob if the query contains `*`, `?`, or `[`), use `↑/↓` to move through the matches, `Enter` to select the highlighted one, and `Esc` to clear the filter and return to the full listing.
 
 Text files open in `$EDITOR` (default: `vim`). Binary files (images, PDFs, videos, etc.) open with the system handler (`open` on macOS, `xdg-open` on Linux). Directories can be dynamically expanded beyond the initial depth limit.
 
