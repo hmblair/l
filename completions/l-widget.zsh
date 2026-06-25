@@ -145,7 +145,9 @@ _l_complete() {
   # Multiple candidates -- resolve to full paths for l -i
   local -a paths rels
   if (( is_command )); then
-    for c in "${candidates[@]}"; do
+    # zsh yields command candidates in $PATH/readdir order; sort by name so the
+    # picker lists them alphabetically rather than grouped by $PATH directory.
+    for c in "${(@o)candidates}"; do
       local full=$(whence -p "$c" 2>/dev/null)
       [[ -n "$full" ]] && paths+=("$full")
     done
