@@ -151,6 +151,7 @@ typedef struct {
     ComputeOpts compute;       /* What metadata to compute */
     tree_skip_fn skip_fn;      /* Optional: skip recursion predicate */
     void *skip_ctx;            /* Context for skip_fn */
+    int ancestry_to_repo;      /* Ancestry base is the enclosing git repo root */
 } TreeBuildOpts;
 
 /* ============================================================================

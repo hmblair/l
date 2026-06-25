@@ -72,7 +72,7 @@ static void print_usage(void) {
     printf("  --summary               Show summary info for file/directory\n");
     printf("  --no-icons              Hide file/folder/git icons\n");
     printf("  -c, --color-all         Don't gray out gitignored files\n");
-    printf("  -g                      Show only git-modified/untracked files (implies -at)\n");
+    printf("  -g                      Git-changed files, rooted at the repo (fails outside a repo)\n");
     printf("  -f, --filter STRING     Show only files/folders matching pattern (glob or substring)\n");
     printf("  --min-size SIZE         Show only entries >= SIZE (e.g., 100M, 1G)\n");
     printf("  --dir-only              Show only directories\n");
@@ -484,6 +484,20 @@ int main(int argc, char **argv) {
     int dir_count;
     parse_args(argc, argv, &cfg, &dirs, &dir_count);
 
+    /* -g requires a git repo: fail outside one, otherwise show the ancestry up
+     * to the repo root (git_only filtering then collapses it to just the repo
+     * root when there are no changes). */
+    if (cfg.git_only) {
+        char repo_root[PATH_MAX];
+        const char *target = dir_count > 0 ? dirs[0] : ".";
+        if (!git_find_root(target, repo_root, sizeof(repo_root))) {
+            fprintf(stderr, "%sError:%s not in a git repository\n",
+                    CLR(&cfg, COLOR_RED), RST(&cfg));
+            return 1;
+        }
+        cfg.show_ancestry = 1;
+    }
+
     /* Auto-disable long format on network filesystems */
     if (cfg.long_format && !cfg.long_format_explicit) {
         const char *check_path = (dir_count > 0) ? dirs[0] : cfg.cwd;
@@ -637,8 +651,9 @@ int main(int argc, char **argv) {
     {
         /* Print all trees (using consistent column widths) */
         for (int i = 0; i < dir_count; i++) {
-            /* Check if filtering produced no visible children */
-            if (is_filtering_active(&cfg)) {
+            /* Check if filtering produced no visible children. For -g we still
+             * show the repo root even with no changes, so skip this. */
+            if (is_filtering_active(&cfg) && !cfg.git_only) {
                 int has_visible = 0;
                 for (size_t j = 0; j < trees[i]->child_count; j++) {
                     if (node_is_hidden(&trees[i]->children[j], &cfg)) continue;

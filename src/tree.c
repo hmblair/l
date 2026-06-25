@@ -604,18 +604,31 @@ TreeNode *build_ancestry_tree(const char *path, const TreeBuildOpts *opts,
         }
     }
 
-    /* Determine base path: home if path is under home, otherwise root */
+    /* Determine base path. With -g, anchor at the enclosing git repo root
+     * (found by walking up from the target); otherwise home if the path is under
+     * it, else /. */
     const char *home = getenv("HOME");
     const char *base = "/";
     size_t base_len = 1;
-    int use_home = 0;
+    char repo_base[PATH_MAX];
 
-    if (home && home[0] && strncmp(abs_path, home, strlen(home)) == 0) {
+    if (opts->ancestry_to_repo) {
+        strncpy(repo_base, abs_path, sizeof(repo_base) - 1);
+        repo_base[sizeof(repo_base) - 1] = '\0';
+        while (!path_is_git_root(repo_base)) {
+            char *slash = strrchr(repo_base, '/');
+            if (!slash || slash == repo_base) { repo_base[0] = '\0'; break; }
+            *slash = '\0';
+        }
+        if (repo_base[0]) {
+            base = repo_base;
+            base_len = strlen(repo_base);
+        }
+    } else if (home && home[0] && strncmp(abs_path, home, strlen(home)) == 0) {
         char after = abs_path[strlen(home)];
         if (after == '\0' || after == '/') {
             base = home;
             base_len = strlen(home);
-            use_home = 1;
         }
     }
 
@@ -662,13 +675,8 @@ TreeNode *build_ancestry_tree(const char *path, const TreeBuildOpts *opts,
         p = slash + 1;
     }
 
-    /* Build the root node (home or /) */
-    TreeNode *root;
-    if (use_home) {
-        root = build_ancestor_node(home, opts);
-    } else {
-        root = build_ancestor_node("/", opts);
-    }
+    /* Build the root node (repo root, home, or /) */
+    TreeNode *root = build_ancestor_node(base, opts);
 
     /* Build the chain of ancestors */
     TreeNode *current = root;

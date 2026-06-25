@@ -434,7 +434,8 @@ TreeBuildOpts config_to_build_opts(const Config *cfg) {
         .cwd = cfg->cwd,
         .compute = cfg->compute,
         .skip_fn = cfg->min_size > 0 ? skip_below_min_size : NULL,
-        .skip_ctx = (void *)&cfg->min_size
+        .skip_ctx = (void *)&cfg->min_size,
+        .ancestry_to_repo = cfg->git_only
     };
     return opts;
 }
