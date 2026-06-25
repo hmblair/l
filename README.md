@@ -32,7 +32,7 @@ Installs to `~/.local/bin` by default. Override with `PREFIX`:
 make install PREFIX=/usr/local
 ```
 
-This installs three binaries (`l`, `l-cached`, `cl`), the default `config.toml` to `~/.config/l/`, and shell completions for zsh and bash.
+This installs three binaries (`l`, `l-cached`, `cl`), the default `config.toml` to `~/.config/l/`, and shell completions for zsh and bash. An existing `config.toml` is left untouched, so reinstalling never clobbers local customizations.
 
 ### Dependencies
 

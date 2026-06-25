@@ -154,13 +154,17 @@ ifeq ($(HAVE_SQLITE),yes)
 	install -m 755 $(BINDIR)/l-cached $(DESTBINDIR)/l-cached
 endif
 	install -m 755 $(SRCDIR)/cl $(DESTBINDIR)/cl
-	install -m 644 $(CONFIG_FILE) $(CONFIGDIR)/$(CONFIG_FILE)
 ifeq ($(HAVE_SQLITE),yes)
 	@echo "Installed l, l-cached, and cl to $(DESTBINDIR)"
 else
 	@echo "Installed l and cl to $(DESTBINDIR) (without SQLite; l-cached not built)"
 endif
-	@echo "Installed $(CONFIG_FILE) to $(CONFIGDIR)"
+	@if [ -f $(CONFIGDIR)/$(CONFIG_FILE) ]; then \
+		echo "Kept existing $(CONFIG_FILE) in $(CONFIGDIR) (not overwritten)"; \
+	else \
+		install -m 644 $(CONFIG_FILE) $(CONFIGDIR)/$(CONFIG_FILE); \
+		echo "Installed $(CONFIG_FILE) to $(CONFIGDIR)"; \
+	fi
 	@mkdir -p $(ZSH_COMPLETIONS)
 	install -m 644 completions/_l $(ZSH_COMPLETIONS)/_l
 	install -m 644 completions/_cl $(ZSH_COMPLETIONS)/_cl
