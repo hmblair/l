@@ -719,10 +719,22 @@ static int is_glob_pattern(const char *s) {
     return (strchr(s, '*') || strchr(s, '?') || strchr(s, '['));
 }
 
+/* Smart-case (like vim): a pattern containing an uppercase letter matches
+ * case-sensitively, otherwise case-insensitively. */
+static int pattern_has_uppercase(const char *s) {
+    for (; *s; s++) {
+        if (*s >= 'A' && *s <= 'Z') return 1;
+    }
+    return 0;
+}
+
 int compute_grep_flags(TreeNode *node, const char *pattern) {
+    int case_sensitive = pattern_has_uppercase(pattern);
+    const char *name = node->entry.name;
     int result = is_glob_pattern(pattern)
-        ? (fnmatch(pattern, node->entry.name, 0) == 0)
-        : (strcasestr(node->entry.name, pattern) != NULL);
+        ? (fnmatch(pattern, name, case_sensitive ? 0 : FNM_CASEFOLD) == 0)
+        : ((case_sensitive ? strstr(name, pattern)
+                           : strcasestr(name, pattern)) != NULL);
 
     for (size_t i = 0; i < node->child_count; i++) {
         if (compute_grep_flags(&node->children[i], pattern)) {
