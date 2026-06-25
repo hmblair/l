@@ -641,6 +641,7 @@ int main(int argc, char **argv) {
             if (is_filtering_active(&cfg)) {
                 int has_visible = 0;
                 for (size_t j = 0; j < trees[i]->child_count; j++) {
+                    if (node_is_hidden(&trees[i]->children[j], &cfg)) continue;
                     if (node_is_visible(&trees[i]->children[j], &cfg)) {
                         has_visible = 1;
                         break;

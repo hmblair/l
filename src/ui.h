@@ -99,6 +99,7 @@ typedef struct {
 
 int is_filtering_active(const Config *cfg);
 int node_is_visible(const TreeNode *node, const Config *cfg);
+int node_is_hidden(const TreeNode *node, const Config *cfg);
 
 /* ============================================================================
  * Printing Functions

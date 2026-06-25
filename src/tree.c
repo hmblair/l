@@ -106,7 +106,9 @@ int read_directory(const char *dir_path, FileList *list,
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
         if (PATH_IS_DOT_OR_DOTDOT(entry->d_name)) continue;
-        if (!opts->show_hidden && entry->d_name[0] == '.') continue;
+        /* Hidden entries are always included in the tree; -a (show_hidden) only
+         * controls whether they are displayed (a visibility concern) and whether
+         * we recurse into hidden directories (see build_tree_children). */
 
         char full_path[PATH_MAX];
         path_join(full_path, sizeof(full_path), dir_path, entry->d_name);
@@ -333,7 +335,12 @@ static void build_tree_children(TreeNode *parent, int depth,
             child->entry.is_ignored = has_ignore_all_gitignore(child->entry.path);
         }
 
-        if (node_is_directory(child) && !should_skip_dir(child->entry.name, child->entry.is_ignored, opts->skip_gitignored) &&
+        /* Don't descend into hidden directories unless -a: their entries are
+         * kept in the tree, but scanning their contents (e.g. .git, .cache) is
+         * wasteful and their git status is read from the cache by path. */
+        int skip_hidden_dir = !opts->show_hidden && child->entry.name[0] == '.';
+        if (node_is_directory(child) && !skip_hidden_dir &&
+            !should_skip_dir(child->entry.name, child->entry.is_ignored, opts->skip_gitignored) &&
             !(opts->skip_fn && opts->skip_fn(&child->entry, opts->skip_ctx))) {
             int child_in_git_repo = in_git_repo || is_git_repo_root[i];
             build_tree_children(child, depth + 1, opts, git, child_in_git_repo, child->entry.is_ignored);

@@ -257,12 +257,21 @@ int node_is_visible(const TreeNode *node, const Config *cfg) {
     return 1;
 }
 
+/* A hidden entry (dotfile) is not displayed unless -a is given. This is kept
+ * separate from node_is_visible because, in the interactive picker, the content
+ * filters above only apply within the initial scan depth, whereas hidden entries
+ * stay hidden at every depth. */
+int node_is_hidden(const TreeNode *node, const Config *cfg) {
+    return !cfg->show_hidden && node->entry.name[0] == '.';
+}
+
 static void columns_update_visible_recursive(Column *cols, const TreeNode *node,
                                              const Icons *icons, const Config *cfg) {
     if (node_is_visible(node, cfg)) {
         columns_update_widths(cols, &node->entry, icons);
     }
     for (size_t i = 0; i < node->child_count; i++) {
+        if (node_is_hidden(&node->children[i], cfg)) continue;
         columns_update_visible_recursive(cols, &node->children[i], icons, cfg);
     }
 }
@@ -311,6 +320,7 @@ static void compute_diff_widths_recursive(const TreeNode *node, GitCache *git,
         diff_widths_update(add_width, del_width, &node->entry, git);
     }
     for (size_t i = 0; i < node->child_count; i++) {
+        if (node_is_hidden(&node->children[i], cfg)) continue;
         compute_diff_widths_recursive(&node->children[i], git, add_width, del_width, cfg);
     }
 }
@@ -346,10 +356,11 @@ const char *get_count_icon(const FileEntry *fe, const Icons *icons) {
  * ============================================================================ */
 
 static void columns_update_widths_recursive(Column *cols, const TreeNode *node,
-                                            const Icons *icons) {
+                                            const Icons *icons, const Config *cfg) {
     columns_update_widths(cols, &node->entry, icons);
     for (size_t i = 0; i < node->child_count; i++) {
-        columns_update_widths_recursive(cols, &node->children[i], icons);
+        if (node_is_hidden(&node->children[i], cfg)) continue;
+        columns_update_widths_recursive(cols, &node->children[i], icons, cfg);
     }
 }
 
@@ -380,7 +391,7 @@ TreeNode *build_tree_from_config(const char *path, Column *cols, GitCache *git,
 
     /* Update column widths if in long format */
     if (cfg->long_format && cols && tree) {
-        columns_update_widths_recursive(cols, tree, icons);
+        columns_update_widths_recursive(cols, tree, icons, cfg);
     }
 
     return tree;
@@ -393,7 +404,7 @@ TreeNode *build_ancestry_tree_from_config(const char *path, Column *cols, GitCac
 
     /* Update column widths if in long format */
     if (cfg->long_format && cols && tree) {
-        columns_update_widths_recursive(cols, tree, icons);
+        columns_update_widths_recursive(cols, tree, icons, cfg);
     }
 
     return tree;
@@ -407,6 +418,7 @@ void tree_expand_node_from_config(TreeNode *node, Column *cols, GitCache *git,
     /* Update column widths for newly expanded children */
     if (cfg->long_format && cols) {
         for (size_t i = 0; i < node->child_count; i++) {
+            if (node_is_hidden(&node->children[i], cfg)) continue;
             columns_update_widths(cols, &node->children[i].entry, icons);
         }
     }
@@ -702,43 +714,41 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
 
 static void print_tree_children(const TreeNode *parent, int depth, PrintContext *ctx);
 
+/* A child entry is shown if it isn't hidden (without -a) and, when content
+ * filters are active, passes them. */
+static int child_is_shown(const TreeNode *child, const Config *cfg, int filtering) {
+    if (node_is_hidden(child, cfg)) return 0;
+    if (filtering && !node_is_visible(child, cfg)) return 0;
+    return 1;
+}
+
+static int has_shown_children(const TreeNode *node, const Config *cfg, int filtering) {
+    for (size_t i = 0; i < node->child_count; i++) {
+        if (child_is_shown(&node->children[i], cfg, filtering)) return 1;
+    }
+    return 0;
+}
+
 void print_tree_node(const TreeNode *node, int depth, PrintContext *ctx) {
     int filtering = is_filtering_active(ctx->cfg);
 
     if (ctx->cfg->list_mode && node->entry.type == FTYPE_DIR) {
+        size_t *visible_indices = node->child_count
+            ? xmalloc(node->child_count * sizeof(size_t)) : NULL;
         size_t visible_count = 0;
-        size_t *visible_indices = NULL;
-
-        if (filtering) {
-            visible_indices = xmalloc(node->child_count * sizeof(size_t));
-            for (size_t i = 0; i < node->child_count; i++) {
-                if (node_is_visible(&node->children[i], ctx->cfg)) {
-                    visible_indices[visible_count++] = i;
-                }
+        for (size_t i = 0; i < node->child_count; i++) {
+            if (child_is_shown(&node->children[i], ctx->cfg, filtering)) {
+                visible_indices[visible_count++] = i;
             }
-        } else {
-            visible_count = node->child_count;
         }
 
         for (size_t vi = 0; vi < visible_count; vi++) {
-            size_t i = filtering ? visible_indices[vi] : vi;
+            size_t i = visible_indices[vi];
             const TreeNode *child = &node->children[i];
             int is_last = (vi == visible_count - 1);
             if (depth > 0) ctx->continuation[depth - 1] = !is_last;
 
-            int has_visible_children = 0;
-            if (child->child_count > 0) {
-                if (filtering) {
-                    for (size_t j = 0; j < child->child_count; j++) {
-                        if (node_is_visible(&child->children[j], ctx->cfg)) {
-                            has_visible_children = 1;
-                            break;
-                        }
-                    }
-                } else {
-                    has_visible_children = 1;
-                }
-            }
+            int has_visible_children = has_shown_children(child, ctx->cfg, filtering);
 
             print_entry(&child->entry, depth, child->was_expanded, has_visible_children, ctx);
 
@@ -750,19 +760,7 @@ void print_tree_node(const TreeNode *node, int depth, PrintContext *ctx) {
         return;
     }
 
-    int has_visible_children = 0;
-    if (node->child_count > 0) {
-        if (filtering) {
-            for (size_t i = 0; i < node->child_count; i++) {
-                if (node_is_visible(&node->children[i], ctx->cfg)) {
-                    has_visible_children = 1;
-                    break;
-                }
-            }
-        } else {
-            has_visible_children = 1;
-        }
-    }
+    int has_visible_children = has_shown_children(node, ctx->cfg, filtering);
 
     print_entry(&node->entry, depth, node->was_expanded, has_visible_children, ctx);
 
@@ -773,40 +771,23 @@ void print_tree_node(const TreeNode *node, int depth, PrintContext *ctx) {
 
 static void print_tree_children(const TreeNode *parent, int depth, PrintContext *ctx) {
     int filtering = is_filtering_active(ctx->cfg);
+    size_t *visible_indices = parent->child_count
+        ? xmalloc(parent->child_count * sizeof(size_t)) : NULL;
     size_t visible_count = 0;
-    size_t *visible_indices = NULL;
-
-    if (filtering) {
-        visible_indices = xmalloc(parent->child_count * sizeof(size_t));
-        for (size_t i = 0; i < parent->child_count; i++) {
-            if (node_is_visible(&parent->children[i], ctx->cfg)) {
-                visible_indices[visible_count++] = i;
-            }
+    for (size_t i = 0; i < parent->child_count; i++) {
+        if (child_is_shown(&parent->children[i], ctx->cfg, filtering)) {
+            visible_indices[visible_count++] = i;
         }
-    } else {
-        visible_count = parent->child_count;
     }
 
     for (size_t vi = 0; vi < visible_count; vi++) {
-        size_t i = filtering ? visible_indices[vi] : vi;
+        size_t i = visible_indices[vi];
         const TreeNode *child = &parent->children[i];
         int is_last = (vi == visible_count - 1);
 
         ctx->continuation[depth] = !is_last;
 
-        int has_visible_children = 0;
-        if (child->child_count > 0) {
-            if (filtering) {
-                for (size_t j = 0; j < child->child_count; j++) {
-                    if (node_is_visible(&child->children[j], ctx->cfg)) {
-                        has_visible_children = 1;
-                        break;
-                    }
-                }
-            } else {
-                has_visible_children = 1;
-            }
-        }
+        int has_visible_children = has_shown_children(child, ctx->cfg, filtering);
 
         print_entry(&child->entry, depth + 1, child->was_expanded, has_visible_children, ctx);
 
