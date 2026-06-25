@@ -73,6 +73,12 @@ typedef struct FileEntry {
     GitSummary git_dir_status;   /* Aggregated status for directory contents */
     int has_git_dir_status;      /* 1 if git_dir_status is valid */
 
+    /* --- Git status of descendants not shown in the current view --- */
+    GitSummary view_git_summary; /* Status of changed descendants whose nearest
+                                  * visible ancestor is this directory (not shown
+                                  * on their own row). Recomputed per view. */
+    int has_view_git_summary;    /* 1 if view_git_summary is valid */
+
     /* --- Git repository info (git roots only, requires git_repo_info) --- */
     char *branch;                /* Current branch name */
     char *tag;                   /* Latest tag, if any */
@@ -114,6 +120,8 @@ typedef struct TreeNode {
     int has_git_status;
     int matches_grep;
     int was_expanded;
+    int in_view;           /* Transient: shown on its own row in the current
+                            * interactive view (set during view-summary prep). */
 } TreeNode;
 
 void tree_node_free(TreeNode *node);

@@ -665,6 +665,11 @@ int main(int argc, char **argv) {
                 .diff_del_width = diff_del_width,
                 .term_width = cfg.is_tty ? get_terminal_width() : 0
             };
+            /* Data pass: precompute directory git summaries for the current
+             * view so printing only reads them. */
+            if (cfg.compute.git_status) {
+                compute_view_summaries(trees[i], &cfg, &gits[i]);
+            }
             if (cfg.summary_mode) {
                 print_summary(trees[i], &ctx);
             } else {

@@ -265,6 +265,46 @@ int node_is_hidden(const TreeNode *node, const Config *cfg) {
     return !cfg->show_hidden && node->entry.name[0] == '.';
 }
 
+/* Clamp a directory view summary to non-negative counts. Subtraction can
+ * under-run when a directory is not itself in a git repo (its total is 0) but
+ * contains shown sub-repository children whose own summaries are non-zero. */
+void git_summary_clamp(GitSummary *s) {
+    if (s->modified < 0) s->modified = 0;
+    if (s->untracked < 0) s->untracked = 0;
+    if (s->staged < 0) s->staged = 0;
+    if (s->deleted < 0) s->deleted = 0;
+}
+
+/* Apply (sign=+1) or remove (sign=-1) a two-char git status from a directory
+ * summary, using the same classification as git_get_dir_summary. */
+static void summary_apply_status(GitSummary *s, const char *status, int sign) {
+    if (!status[0] || strcmp(status, "!!") == 0) return;
+    if (strcmp(status, "??") == 0) { s->untracked += sign; return; }
+    if (status[0] != ' ' && status[0] != '?' && status[0] != '!') s->staged += sign;
+    if (status[1] == 'M') s->modified += sign;
+    else if (status[1] == 'D') s->deleted += sign;
+}
+
+/* Remove from a directory's view summary the git status absorbed by a child
+ * shown on its own row: the child's own status, plus (for a shown directory)
+ * its whole subtree, which that child's row already accounts for. */
+void view_summary_remove_shown_child(GitSummary *s, const TreeNode *child, GitCache *git) {
+    /* Look the child's own status up in the cache by absolute path — the same
+     * key git_get_dir_summary uses — rather than entry.git_status, which is set
+     * via the (possibly relative) display path and isn't always populated. */
+    const char *abs = child->entry.abs_path ? child->entry.abs_path
+                                            : child->entry.path;
+    const char *status = git_cache_get(git, abs);
+    if (status) summary_apply_status(s, status, -1);
+    if (node_is_directory(child)) {
+        GitSummary cs = git_get_dir_summary(git, abs);
+        s->modified -= cs.modified;
+        s->untracked -= cs.untracked;
+        s->staged -= cs.staged;
+        s->deleted -= cs.deleted;
+    }
+}
+
 static void columns_update_visible_recursive(Column *cols, const TreeNode *node,
                                              const Icons *icons, const Config *cfg) {
     if (node_is_visible(node, cfg)) {
@@ -584,9 +624,16 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
         EMIT(line, pos, ENTRY_BUF_SIZE, "%s%s%s ", CLR(ctx->cfg, COLOR_GREY), ctx->icons->readonly, RST(ctx->cfg));
     }
 
-    if (is_dir && !has_visible_children && !ctx->cfg->no_icons) {
-        /* Collapsed directory: show full recursive summary */
-        GitSummary gs = git_get_dir_summary(ctx->git, abs_path);
+    if (is_dir && !ctx->cfg->no_icons) {
+        /* Directory: show the git status of descendants that aren't shown on
+         * their own row. This is precomputed per view in view_git_summary (see
+         * compute_view_summaries / the picker's view prep); a collapsed dir
+         * carries its full recursive summary, an expanded one only the hidden
+         * and filtered-out children plus deleted files. Fall back to the full
+         * recursive summary if no view was prepared. */
+        GitSummary gs = fe->has_view_git_summary
+            ? fe->view_git_summary
+            : git_get_dir_summary(ctx->git, abs_path);
         if (gs.modified) {
             EMIT(line, pos, ENTRY_BUF_SIZE, "%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), gs.modified, ctx->icons->git_modified, RST(ctx->cfg));
         }
@@ -598,30 +645,6 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
         }
         if (gs.deleted) {
             EMIT(line, pos, ENTRY_BUF_SIZE, "%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), gs.deleted, ctx->icons->git_deleted, RST(ctx->cfg));
-        }
-    } else if (is_dir && has_visible_children && !ctx->cfg->no_icons) {
-        /* Expanded directory: show directly deleted files count */
-        int deleted_direct = git_count_deleted_direct(ctx->git, abs_path);
-        if (deleted_direct) {
-            EMIT(line, pos, ENTRY_BUF_SIZE, "%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), deleted_direct, ctx->icons->git_deleted, RST(ctx->cfg));
-        }
-        /* Also show hidden file status if hidden files aren't shown */
-        if (!ctx->cfg->show_hidden) {
-            GitSummary gs = git_get_hidden_dir_summary(ctx->git, abs_path);
-            if (gs.modified) {
-                EMIT(line, pos, ENTRY_BUF_SIZE, "%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), gs.modified, ctx->icons->git_modified, RST(ctx->cfg));
-            }
-            if (gs.untracked) {
-                EMIT(line, pos, ENTRY_BUF_SIZE, "%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), gs.untracked, ctx->icons->git_untracked, RST(ctx->cfg));
-            }
-            if (gs.staged) {
-                EMIT(line, pos, ENTRY_BUF_SIZE, "%s%d %s%s ", CLR(ctx->cfg, COLOR_YELLOW), gs.staged, ctx->icons->git_staged, RST(ctx->cfg));
-            }
-            /* Note: deleted already counted above in deleted_direct if visible,
-             * but hidden deleted files need separate handling */
-            if (gs.deleted && !deleted_direct) {
-                EMIT(line, pos, ENTRY_BUF_SIZE, "%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), gs.deleted, ctx->icons->git_deleted, RST(ctx->cfg));
-            }
         }
     } else {
         const char *git_ind = get_git_indicator(ctx->git, abs_path, ctx->icons, ctx->cfg);
@@ -727,6 +750,25 @@ static int has_shown_children(const TreeNode *node, const Config *cfg, int filte
         if (child_is_shown(&node->children[i], cfg, filtering)) return 1;
     }
     return 0;
+}
+
+/* Data pass (non-interactive): precompute each shown directory's view summary —
+ * the git status of descendants not shown on their own row — so the renderer
+ * only reads view_git_summary instead of scanning the git cache itself. */
+void compute_view_summaries(TreeNode *node, const Config *cfg, GitCache *git) {
+    if (!node_is_directory(node)) return;
+    int filtering = is_filtering_active(cfg);
+    const char *abs = node->entry.abs_path ? node->entry.abs_path : node->entry.path;
+    GitSummary s = git_get_dir_summary(git, abs);
+    for (size_t i = 0; i < node->child_count; i++) {
+        TreeNode *child = &node->children[i];
+        if (!child_is_shown(child, cfg, filtering)) continue;  /* non-shown stays in s */
+        view_summary_remove_shown_child(&s, child, git);
+        compute_view_summaries(child, cfg, git);  /* recurse into shown directories */
+    }
+    git_summary_clamp(&s);
+    node->entry.view_git_summary = s;
+    node->entry.has_view_git_summary = 1;
 }
 
 void print_tree_node(const TreeNode *node, int depth, PrintContext *ctx) {

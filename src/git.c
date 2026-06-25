@@ -247,10 +247,6 @@ static int git_walk_deleted(GitCache *cache, const char *dir_path,
     return result;
 }
 
-int git_count_deleted_direct(GitCache *cache, const char *dir_path) {
-    return git_walk_deleted(cache, dir_path, 1, 1);
-}
-
 int git_deleted_lines_direct(GitCache *cache, const char *dir_path) {
     return git_walk_deleted(cache, dir_path, 0, 1);
 }
@@ -284,38 +280,6 @@ int git_dir_has_hidden_status(GitCache *cache, const char *dir_path) {
         }
     }
     return 0;
-}
-
-GitSummary git_get_hidden_dir_summary(GitCache *cache, const char *dir_path) {
-    GitSummary summary = {0, 0, 0, 0};
-    if (!cache || !dir_path) return summary;
-
-    size_t dir_len = strlen(dir_path);
-
-    for (int i = 0; i < L_HASH_SIZE; i++) {
-        GitStatusNode *node = cache->buckets[i];
-        while (node) {
-            if (is_under_hidden_child(node->path, dir_path, dir_len)) {
-                const char *status = node->status;
-                if (strcmp(status, "!!") == 0) {
-                    /* Ignored - skip */
-                } else if (strcmp(status, "??") == 0) {
-                    summary.untracked++;
-                } else {
-                    if (status[0] != ' ' && status[0] != '?' && status[0] != '!') {
-                        summary.staged++;
-                    }
-                    if (status[1] == 'M') {
-                        summary.modified++;
-                    } else if (status[1] == 'D') {
-                        summary.deleted++;
-                    }
-                }
-            }
-            node = node->next;
-        }
-    }
-    return summary;
 }
 
 int git_path_in_ignored(GitCache *cache, const char *path, const char *git_root) {

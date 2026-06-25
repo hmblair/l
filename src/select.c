@@ -414,6 +414,42 @@ static void recalculate_widths(SelectState *state, const PrintContext *ctx) {
     }
 }
 
+/* Data pass: for each visible directory, precompute the git status of its
+ * descendants not shown on their own row. The flattened set IS the set of shown
+ * rows, so we mark those nodes and remove each shown child from its parent's
+ * full recursive summary. A collapsed dir has no shown children and keeps its
+ * full summary; an expanded one keeps only its hidden/filtered children and
+ * deleted files. Mirrors compute_view_summaries for the picker. */
+static void recompute_view_summaries(SelectState *state, const PrintContext *ctx) {
+    for (int i = 0; i < state->count; i++) {
+        state->items[i].node->in_view = 1;
+    }
+    for (int i = 0; i < state->count; i++) {
+        TreeNode *node = state->items[i].node;
+        if (!node_is_directory(node)) continue;
+        const char *abs = node->entry.abs_path ? node->entry.abs_path
+                                               : node->entry.path;
+        GitSummary s = git_get_dir_summary(ctx->git, abs);
+        for (size_t c = 0; c < node->child_count; c++) {
+            if (node->children[c].in_view) {
+                view_summary_remove_shown_child(&s, &node->children[c], ctx->git);
+            }
+        }
+        git_summary_clamp(&s);
+        node->entry.view_git_summary = s;
+        node->entry.has_view_git_summary = 1;
+    }
+    for (int i = 0; i < state->count; i++) {
+        state->items[i].node->in_view = 0;
+    }
+}
+
+/* Re-prepare everything the renderer reads after the visible set changes. */
+static void prepare_view(SelectState *state, const PrintContext *ctx) {
+    recalculate_widths(state, ctx);
+    recompute_view_summaries(state, ctx);
+}
+
 /* Recompute the interactive filter: refresh per-node match flags from the
  * current query (reusing the grep matcher), re-flatten the visible list, and
  * reset the cursor to the first match. A cleared query disables filtering. */
@@ -431,7 +467,7 @@ static void apply_filter(SelectState *state, TreeNode **trees, int tree_count,
         }
     }
     flatten_all(state, trees, tree_count, ctx->cfg, expanded);
-    recalculate_widths(state, ctx);
+    prepare_view(state, ctx);
     state->cursor = 0;
     state->scroll_offset = 0;
 }
@@ -522,7 +558,7 @@ static int check_and_rescan(SelectState *state, TreeNode **trees, int tree_count
             }
         }
         flatten_all(state, trees, tree_count, ctx->cfg, expanded);
-        recalculate_widths(state, ctx);
+        prepare_view(state, ctx);
 
         /* Remove stale paths (deleted directories) from expanded set */
         for (int i = expanded->count - 1; i >= 0; i--) {
@@ -829,7 +865,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
     render_ctx.term_width = get_terminal_width();
 
     /* Measure column and diff-column widths over the initial visible set. */
-    recalculate_widths(&state, &render_ctx);
+    prepare_view(&state, &render_ctx);
 
     /* Enter raw mode and render */
     term_enable_raw();
@@ -933,7 +969,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                     expanded_remove(&expanded, current->node->entry.path);
                     const char *cur_path = current->node->entry.path;
                     flatten_all(&state, trees, tree_count, ctx->cfg, &expanded);
-                    recalculate_widths(&state, ctx);
+                    prepare_view(&state, ctx);
                     state.cursor = 0;
                     for (int i = 0; i < state.count; i++) {
                         if (strcmp(state.items[i].node->entry.path, cur_path) == 0) {
@@ -957,7 +993,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                     expanded_add(&expanded, current->node->entry.path);
                     const char *cur_path = current->node->entry.path;
                     flatten_all(&state, trees, tree_count, ctx->cfg, &expanded);
-                    recalculate_widths(&state, ctx);
+                    prepare_view(&state, ctx);
                     state.cursor = 0;
                     for (int i = 0; i < state.count; i++) {
                         if (strcmp(state.items[i].node->entry.path, cur_path) == 0) {
@@ -1007,7 +1043,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                     }
                     const char *cur_path = current->node->entry.path;
                     flatten_all(&state, trees, tree_count, ctx->cfg, &expanded);
-                    recalculate_widths(&state, ctx);
+                    prepare_view(&state, ctx);
                     state.cursor = 0;
                     for (int i = 0; i < state.count; i++) {
                         if (strcmp(state.items[i].node->entry.path, cur_path) == 0) {

@@ -82,9 +82,6 @@ void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_
 /* Get aggregated git status for all files under a directory */
 GitSummary git_get_dir_summary(GitCache *cache, const char *dir_path);
 
-/* Count deleted files directly in a directory (not recursive) */
-int git_count_deleted_direct(GitCache *cache, const char *dir_path);
-
 /* Sum deleted lines directly in a directory (not recursive) */
 int git_deleted_lines_direct(GitCache *cache, const char *dir_path);
 
@@ -93,9 +90,6 @@ int git_deleted_lines_recursive(GitCache *cache, const char *dir_path);
 
 /* Check if a directory has hidden direct children with git status */
 int git_dir_has_hidden_status(GitCache *cache, const char *dir_path);
-
-/* Get git status summary for hidden direct children of a directory */
-GitSummary git_get_hidden_dir_summary(GitCache *cache, const char *dir_path);
 
 /* Check if a path is inside an ignored directory (walks up ancestors) */
 int git_path_in_ignored(GitCache *cache, const char *path, const char *git_root);
