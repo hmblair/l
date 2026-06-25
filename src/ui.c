@@ -265,6 +265,21 @@ int node_is_hidden(const TreeNode *node, const Config *cfg) {
     return !cfg->show_hidden && node->entry.name[0] == '.';
 }
 
+/* The single visibility decision shared by both the static renderer and the
+ * interactive picker: an entry is shown iff it isn't hidden (without -a), passes
+ * the active content filters (-f/--filter, git-only, ...) when those apply, and
+ * matches the interactive '/' query when one is active. The two flags capture
+ * the only policy difference between the modes — content filters are depth-gated
+ * in the picker, and the live query exists only there — so the actual rule lives
+ * in exactly one place. */
+int node_is_shown(const TreeNode *node, const Config *cfg,
+                  int apply_content_filters, int live_filter_active) {
+    if (node_is_hidden(node, cfg)) return 0;
+    if (apply_content_filters && !node_is_visible(node, cfg)) return 0;
+    if (live_filter_active && !node->matches_grep) return 0;
+    return 1;
+}
+
 /* Clamp a directory view summary to non-negative counts. Subtraction can
  * under-run when a directory is not itself in a git repo (its total is 0) but
  * contains shown sub-repository children whose own summaries are non-zero. */
@@ -737,12 +752,10 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
 
 static void print_tree_children(const TreeNode *parent, int depth, PrintContext *ctx);
 
-/* A child entry is shown if it isn't hidden (without -a) and, when content
- * filters are active, passes them. */
+/* A child entry is shown in the static listing: the shared visibility rule with
+ * no interactive '/' query. */
 static int child_is_shown(const TreeNode *child, const Config *cfg, int filtering) {
-    if (node_is_hidden(child, cfg)) return 0;
-    if (filtering && !node_is_visible(child, cfg)) return 0;
-    return 1;
+    return node_is_shown(child, cfg, filtering, 0);
 }
 
 static int has_shown_children(const TreeNode *node, const Config *cfg, int filtering) {

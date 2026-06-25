@@ -100,6 +100,8 @@ typedef struct {
 int is_filtering_active(const Config *cfg);
 int node_is_visible(const TreeNode *node, const Config *cfg);
 int node_is_hidden(const TreeNode *node, const Config *cfg);
+int node_is_shown(const TreeNode *node, const Config *cfg,
+                  int apply_content_filters, int live_filter_active);
 void view_summary_remove_shown_child(GitSummary *s, const TreeNode *child, GitCache *git);
 void git_summary_clamp(GitSummary *s);
 void compute_view_summaries(TreeNode *node, const Config *cfg, GitCache *git);

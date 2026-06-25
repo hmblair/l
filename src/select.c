@@ -307,11 +307,9 @@ static int count_visible_children(const SelectState *state, const TreeNode *node
     int filtering = (depth < filter_depth) && is_filtering_active(cfg);
     int count = 0;
     for (size_t i = 0; i < node->child_count; i++) {
-        const TreeNode *child = &node->children[i];
-        if (node_is_hidden(child, cfg)) continue;
-        if (filtering && !node_is_visible(child, cfg)) continue;
-        if (state->filter_active && !child->matches_grep) continue;
-        count++;
+        if (node_is_shown(&node->children[i], cfg, filtering, state->filter_active)) {
+            count++;
+        }
     }
     return count;
 }
@@ -358,11 +356,9 @@ static void flatten_children(SelectState *state, const TreeNode *parent,
     size_t visible_count = 0;
 
     for (size_t i = 0; i < parent->child_count; i++) {
-        TreeNode *child = &parent->children[i];
-        if (node_is_hidden(child, cfg)) continue;
-        if (filtering && !node_is_visible(child, cfg)) continue;
-        if (state->filter_active && !child->matches_grep) continue;
-        visible_indices[visible_count++] = i;
+        if (node_is_shown(&parent->children[i], cfg, filtering, state->filter_active)) {
+            visible_indices[visible_count++] = i;
+        }
     }
 
     /* Flatten each visible child */
