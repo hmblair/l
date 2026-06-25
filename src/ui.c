@@ -696,10 +696,12 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
     if (is_dir && fe->is_git_root) {
         GitBranchInfo gi;
         if (git_get_branch_info(fe->path, &gi)) {
+            EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s%s", CLR(ctx->cfg, COLOR_GREY), CLR(ctx->cfg, STYLE_ITALIC), gi.branch, RST(ctx->cfg));
+            if (gi.commit[0]) {
+                EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s%s", CLR(ctx->cfg, COLOR_GREY), CLR(ctx->cfg, STYLE_ITALIC), gi.commit, RST(ctx->cfg));
+            }
             if (fe->tag) {
-                EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s%s %s(%s)%s", CLR(ctx->cfg, COLOR_GREY), CLR(ctx->cfg, STYLE_ITALIC), gi.branch, RST(ctx->cfg), CLR(ctx->cfg, COLOR_GREY), fe->tag, RST(ctx->cfg));
-            } else {
-                EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s%s", CLR(ctx->cfg, COLOR_GREY), CLR(ctx->cfg, STYLE_ITALIC), gi.branch, RST(ctx->cfg));
+                EMIT(line, pos, ENTRY_BUF_SIZE, " %s(%s)%s", CLR(ctx->cfg, COLOR_GREY), fe->tag, RST(ctx->cfg));
             }
             if (gi.has_upstream) {
                 const char *cloud_color = gi.out_of_sync ? COLOR_RED : COLOR_GREY;

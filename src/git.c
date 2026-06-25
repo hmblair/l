@@ -412,6 +412,7 @@ char *git_get_branch(const char *repo_path) {
 
 int git_get_branch_info(const char *repo_path, GitBranchInfo *info) {
     info->branch = NULL;
+    info->commit[0] = '\0';
     info->has_upstream = 0;
     info->out_of_sync = 0;
     info->ahead = 0;
@@ -427,7 +428,9 @@ int git_get_branch_info(const char *repo_path, GitBranchInfo *info) {
     snprintf(local_ref, sizeof(local_ref), "refs/heads/%s", branch);
     snprintf(remote_ref, sizeof(remote_ref), "refs/remotes/origin/%s", branch);
 
-    git_read_ref(repo_path, local_ref, local_hash, sizeof(local_hash));
+    if (git_read_ref(repo_path, local_ref, local_hash, sizeof(local_hash))) {
+        snprintf(info->commit, sizeof(info->commit), "%.7s", local_hash);
+    }
     info->has_upstream = git_read_ref(repo_path, remote_ref, remote_hash, sizeof(remote_hash));
 
     if (info->has_upstream) {

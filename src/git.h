@@ -108,6 +108,7 @@ int git_read_ref(const char *repo_path, const char *ref_name, char *hash, size_t
 /* Branch info with upstream status */
 typedef struct {
     char *branch;      /* Branch name (caller must free), NULL if not on branch */
+    char commit[16];   /* Short hash of the branch tip, empty if unknown */
     int has_upstream;  /* 1 if origin/<branch> exists */
     int out_of_sync;   /* 1 if local and remote hashes differ */
     int ahead;         /* Commits ahead of upstream (local only) */
