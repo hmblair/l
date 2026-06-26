@@ -159,8 +159,8 @@ ifeq ($(HAVE_SQLITE),yes)
 else
 	@echo "Installed l and cl to $(DESTBINDIR) (without SQLite; l-cached not built)"
 endif
-	@if [ -f $(CONFIGDIR)/$(CONFIG_FILE) ]; then \
-		echo "Kept existing $(CONFIG_FILE) in $(CONFIGDIR) (not overwritten)"; \
+	@if [ -f $(CONFIGDIR)/$(CONFIG_FILE) ] && [ -z "$(OVERWRITE_CONFIG)" ]; then \
+		echo "Kept existing $(CONFIG_FILE) in $(CONFIGDIR) (not overwritten; use OVERWRITE_CONFIG=1 to replace)"; \
 	else \
 		install -m 644 $(CONFIG_FILE) $(CONFIGDIR)/$(CONFIG_FILE); \
 		echo "Installed $(CONFIG_FILE) to $(CONFIGDIR)"; \
