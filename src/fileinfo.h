@@ -26,7 +26,7 @@ typedef enum {
  * ============================================================================ */
 
 FileType detect_file_type(const char *path, struct stat *st, char **symlink_target);
-const char *get_file_color(FileType type, int is_cwd, int is_ignored, int is_tty, int color_all);
+const char *get_file_color(FileType type, int is_ignored, int is_tty, int color_all);
 
 /* ============================================================================
  * Line Counting and Media Parsing

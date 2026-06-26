@@ -91,7 +91,8 @@ typedef struct {
     X(count_pixels,     "count_pixels")     \
     X(count_duration,   "count_duration")   \
     X(count_pages,      "count_pages")      \
-    X(cursor,           "cursor")
+    X(cursor,           "cursor")           \
+    X(cwd_marker,       "cwd_marker")
 
 /* Icons configuration */
 typedef struct Icons {

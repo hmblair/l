@@ -90,10 +90,9 @@ FileType detect_file_type(const char *path, struct stat *st, char **symlink_targ
     }
 }
 
-const char *get_file_color(FileType type, int is_cwd, int is_ignored, int is_tty, int color_all) {
+const char *get_file_color(FileType type, int is_ignored, int is_tty, int color_all) {
     if (!is_tty) return "";
 
-    if (is_cwd) return COLOR_YELLOW;
     if (is_ignored && !color_all) return COLOR_GREY;
 
     switch (type) {

@@ -24,6 +24,7 @@ count_pages = ""
 count_pixels = "󰹑"
 count_duration = ""
 cursor = "❯"
+cwd_marker = ""
 
 [extensions]
 jpg,png,gif,webp,bmp,ico = ""
@@ -189,4 +190,3 @@ sed = "Sed script"
 tclsh,wish = "Tcl"
 expect = "Expect"
 osascript = "AppleScript"
-

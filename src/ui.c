@@ -668,7 +668,7 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
     }
 
     const char *color = (fe->type == FTYPE_DIR && fe->size < 0) ? CLR(ctx->cfg, COLOR_RED) :
-                        get_file_color(fe->type, is_cwd, fe->is_ignored, ctx->cfg->is_tty, ctx->cfg->color_all);
+                        get_file_color(fe->type, fe->is_ignored, ctx->cfg->is_tty, ctx->cfg->color_all);
     const char *style = is_hidden ? CLR(ctx->cfg, STYLE_ITALIC) : "";
 
     if (!ctx->cfg->no_icons) {
@@ -692,6 +692,11 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
         EMIT(line, pos, ENTRY_BUF_SIZE, "%s%s%s%s%s", color, bold, style, abbrev, RST(ctx->cfg));
     } else {
         EMIT(line, pos, ENTRY_BUF_SIZE, "%s%s%s%s%s", color, bold, style, fe->name, RST(ctx->cfg));
+    }
+
+    if (is_cwd) {
+        const char *cwd_dot = ctx->icons->cwd_marker[0] ? ctx->icons->cwd_marker : "●";
+        EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s", CLR(ctx->cfg, COLOR_YELLOW), cwd_dot, RST(ctx->cfg));
     }
 
     if (is_dir && fe->is_git_root) {
@@ -1082,8 +1087,13 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
     card_init(&card);
 
     /* Header line: icon + name */
-    const char *color = get_file_color(fe->type, is_cwd, fe->is_ignored, cfg->is_tty, cfg->color_all);
+    const char *color = get_file_color(fe->type, fe->is_ignored, cfg->is_tty, cfg->color_all);
     const char *style = is_hidden ? CLR(cfg, STYLE_ITALIC) : "";
+    char cwd_marker[64] = "";
+    if (is_cwd) {
+        const char *cwd_dot = ctx->icons->cwd_marker[0] ? ctx->icons->cwd_marker : "●";
+        snprintf(cwd_marker, sizeof(cwd_marker), " %s%s%s", CLR(cfg, COLOR_YELLOW), cwd_dot, RST(cfg));
+    }
     int is_binary = (fe->file_count < 0 && fe->line_count == -1);
     const char *icon = cfg->no_icons ? "" : get_icon(ctx->icons, fe->type, node->was_expanded, is_binary, fe->name);
     const char *icon_space = cfg->no_icons ? "" : " ";
@@ -1100,23 +1110,23 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
             char *web_url = git_remote_to_web_url(fe->remote);
             if (web_url && cfg->is_tty) {
                 card_add(&card, "%s%s%s%s%s%s%s %s%s%s%s %s\033]8;;%s\033\\%s\033]8;;\033\\%s%s",
-                         color, icon, icon_space, style, fe->name, RST(cfg), "",
+                         color, icon, icon_space, style, fe->name, RST(cfg), cwd_marker,
                          CLR(cfg, COLOR_GREY), CLR(cfg, STYLE_ITALIC), fe->branch, RST(cfg),
                          CLR(cfg, cloud_color), web_url, ctx->icons->git_upstream, RST(cfg), ahead_behind);
             } else {
                 card_add(&card, "%s%s%s%s%s%s%s %s%s%s%s %s%s%s%s",
-                         color, icon, icon_space, style, fe->name, RST(cfg), "",
+                         color, icon, icon_space, style, fe->name, RST(cfg), cwd_marker,
                          CLR(cfg, COLOR_GREY), CLR(cfg, STYLE_ITALIC), fe->branch, RST(cfg),
                          CLR(cfg, cloud_color), ctx->icons->git_upstream, RST(cfg), ahead_behind);
             }
             free(web_url);
         } else {
             card_add(&card, "%s%s%s%s%s%s%s %s%s%s%s",
-                     color, icon, icon_space, style, fe->name, RST(cfg), "",
+                     color, icon, icon_space, style, fe->name, RST(cfg), cwd_marker,
                      CLR(cfg, COLOR_GREY), CLR(cfg, STYLE_ITALIC), fe->branch, RST(cfg));
         }
     } else {
-        card_add(&card, "%s%s%s%s%s%s", color, icon, icon_space, style, fe->name, RST(cfg));
+        card_add(&card, "%s%s%s%s%s%s%s", color, icon, icon_space, style, fe->name, RST(cfg), cwd_marker);
     }
 
     card_add_empty(&card);
