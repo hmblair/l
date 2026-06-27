@@ -83,6 +83,10 @@ void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_
 /* Get aggregated git status for all files under a directory */
 GitSummary git_get_dir_summary(GitCache *cache, const char *dir_path);
 
+/* Apply a two-char git status to a directory summary (+1 to add, -1 to remove).
+ * Single source of truth for the status -> bucket classification. */
+void git_summary_apply_status(GitSummary *s, const char *status, int sign);
+
 /* Sum deleted lines directly in a directory (not recursive) */
 int git_deleted_lines_direct(GitCache *cache, const char *dir_path);
 

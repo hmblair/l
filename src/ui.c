@@ -291,17 +291,6 @@ void git_summary_clamp(GitSummary *s) {
     if (s->staged_deleted < 0) s->staged_deleted = 0;
 }
 
-/* Apply (sign=+1) or remove (sign=-1) a two-char git status from a directory
- * summary, using the same classification as git_get_dir_summary. */
-static void summary_apply_status(GitSummary *s, const char *status, int sign) {
-    if (!status[0] || strcmp(status, "!!") == 0) return;
-    if (strcmp(status, "??") == 0) { s->untracked += sign; return; }
-    if (status[0] == 'D') s->staged_deleted += sign;
-    else if (status[0] != ' ' && status[0] != '?' && status[0] != '!') s->staged += sign;
-    if (status[1] == 'M') s->modified += sign;
-    else if (status[1] == 'D') s->deleted += sign;
-}
-
 /* Remove from a directory's view summary the git status absorbed by a child
  * shown on its own row: the child's own status, plus (for a shown directory)
  * its whole subtree, which that child's row already accounts for. */
@@ -312,7 +301,7 @@ void view_summary_remove_shown_child(GitSummary *s, const TreeNode *child, GitCa
     const char *abs = child->entry.abs_path ? child->entry.abs_path
                                             : child->entry.path;
     const char *status = git_cache_get(git, abs);
-    if (status) summary_apply_status(s, status, -1);
+    if (status) git_summary_apply_status(s, status, -1);
     if (node_is_directory(child)) {
         GitSummary cs = git_get_dir_summary(git, abs);
         s->modified -= cs.modified;

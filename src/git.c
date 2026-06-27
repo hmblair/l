@@ -183,6 +183,19 @@ void git_cache_add_diff(GitCache *cache, const char *path, int added, int remove
 #endif
 }
 
+/* Classify a two-char git status into a directory summary, applying it with the
+ * given sign (+1 to add, -1 to remove). Single source of truth for the
+ * status -> bucket mapping: a staged deletion (index 'D', e.g. git rm) counts
+ * as a deletion rather than a generic staged change, matching get_git_indicator. */
+void git_summary_apply_status(GitSummary *s, const char *status, int sign) {
+    if (!status[0] || strcmp(status, "!!") == 0) return;
+    if (strcmp(status, "??") == 0) { s->untracked += sign; return; }
+    if (status[0] == 'D') s->staged_deleted += sign;
+    else if (status[0] != ' ' && status[0] != '?' && status[0] != '!') s->staged += sign;
+    if (status[1] == 'M') s->modified += sign;
+    else if (status[1] == 'D') s->deleted += sign;
+}
+
 GitSummary git_get_dir_summary(GitCache *cache, const char *dir_path) {
     GitSummary summary = {0};
 
@@ -199,26 +212,7 @@ GitSummary git_get_dir_summary(GitCache *cache, const char *dir_path) {
             /* Check if this path is under dir_path */
             if (strncmp(node->path, dir_path, dir_len) == 0 &&
                 node->path[dir_len] == '/') {
-                const char *status = node->status;
-                if (strcmp(status, "!!") == 0) {
-                    /* Ignored - skip */
-                } else if (strcmp(status, "??") == 0) {
-                    summary.untracked++;
-                } else {
-                    /* Check staged (index) and working tree separately. A
-                     * staged deletion (e.g. git rm) is a deletion, not a
-                     * generic staged change (mirrors get_git_indicator). */
-                    if (status[0] == 'D') {
-                        summary.staged_deleted++;
-                    } else if (status[0] != ' ' && status[0] != '?' && status[0] != '!') {
-                        summary.staged++;
-                    }
-                    if (status[1] == 'M') {
-                        summary.modified++;
-                    } else if (status[1] == 'D') {
-                        summary.deleted++;
-                    }
-                }
+                git_summary_apply_status(&summary, node->status, +1);
             }
             node = node->next;
         }
