@@ -593,7 +593,7 @@ static void render_line(SelectState *state, int index, int is_selected,
 
     /* Set up the line prefix (cursor indicator) */
     static char prefix_buf[64];
-    const char *cursor_icon = ctx->icons->cursor[0] ? ctx->icons->cursor : ">";
+    const char *cursor_icon = ctx->icons->cursor;
     if (is_selected) {
         snprintf(prefix_buf, sizeof(prefix_buf), "%s%s%s ", COLOR_CYAN, cursor_icon, COLOR_RESET);
     } else {

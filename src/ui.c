@@ -695,8 +695,7 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
     }
 
     if (is_cwd) {
-        const char *cwd_dot = ctx->icons->cwd_marker[0] ? ctx->icons->cwd_marker : "●";
-        EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s", CLR(ctx->cfg, COLOR_YELLOW), cwd_dot, RST(ctx->cfg));
+        EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s", CLR(ctx->cfg, COLOR_YELLOW), ctx->icons->cwd_marker, RST(ctx->cfg));
     }
 
     if (is_dir && fe->is_git_root) {
@@ -1090,10 +1089,8 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
     const char *color = get_file_color(fe->type, fe->is_ignored, cfg->is_tty, cfg->color_all);
     const char *style = is_hidden ? CLR(cfg, STYLE_ITALIC) : "";
     char cwd_marker[64] = "";
-    if (is_cwd) {
-        const char *cwd_dot = ctx->icons->cwd_marker[0] ? ctx->icons->cwd_marker : "●";
-        snprintf(cwd_marker, sizeof(cwd_marker), " %s%s%s", CLR(cfg, COLOR_YELLOW), cwd_dot, RST(cfg));
-    }
+    if (is_cwd)
+        snprintf(cwd_marker, sizeof(cwd_marker), " %s%s%s", CLR(cfg, COLOR_YELLOW), ctx->icons->cwd_marker, RST(cfg));
     int is_binary = (fe->file_count < 0 && fe->line_count == -1);
     const char *icon = cfg->no_icons ? "" : get_icon(ctx->icons, fe->type, node->was_expanded, is_binary, fe->name);
     const char *icon_space = cfg->no_icons ? "" : " ";
