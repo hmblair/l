@@ -39,7 +39,8 @@ typedef struct {
     int modified;
     int untracked;
     int staged;
-    int deleted;
+    int deleted;        /* Unstaged (working-tree) deletions */
+    int staged_deleted; /* Staged deletions (e.g. git rm) */
 } GitSummary;
 
 /* ============================================================================

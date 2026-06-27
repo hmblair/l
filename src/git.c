@@ -184,7 +184,7 @@ void git_cache_add_diff(GitCache *cache, const char *path, int added, int remove
 }
 
 GitSummary git_get_dir_summary(GitCache *cache, const char *dir_path) {
-    GitSummary summary = {0, 0, 0, 0};
+    GitSummary summary = {0};
 
     /* Only return git status for directories inside a known git repo */
     if (!git_cache_path_in_repo(cache, dir_path))
@@ -205,8 +205,12 @@ GitSummary git_get_dir_summary(GitCache *cache, const char *dir_path) {
                 } else if (strcmp(status, "??") == 0) {
                     summary.untracked++;
                 } else {
-                    /* Check staged (index) and working tree separately */
-                    if (status[0] != ' ' && status[0] != '?' && status[0] != '!') {
+                    /* Check staged (index) and working tree separately. A
+                     * staged deletion (e.g. git rm) is a deletion, not a
+                     * generic staged change (mirrors get_git_indicator). */
+                    if (status[0] == 'D') {
+                        summary.staged_deleted++;
+                    } else if (status[0] != ' ' && status[0] != '?' && status[0] != '!') {
                         summary.staged++;
                     }
                     if (status[1] == 'M') {

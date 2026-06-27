@@ -288,6 +288,7 @@ void git_summary_clamp(GitSummary *s) {
     if (s->untracked < 0) s->untracked = 0;
     if (s->staged < 0) s->staged = 0;
     if (s->deleted < 0) s->deleted = 0;
+    if (s->staged_deleted < 0) s->staged_deleted = 0;
 }
 
 /* Apply (sign=+1) or remove (sign=-1) a two-char git status from a directory
@@ -295,7 +296,8 @@ void git_summary_clamp(GitSummary *s) {
 static void summary_apply_status(GitSummary *s, const char *status, int sign) {
     if (!status[0] || strcmp(status, "!!") == 0) return;
     if (strcmp(status, "??") == 0) { s->untracked += sign; return; }
-    if (status[0] != ' ' && status[0] != '?' && status[0] != '!') s->staged += sign;
+    if (status[0] == 'D') s->staged_deleted += sign;
+    else if (status[0] != ' ' && status[0] != '?' && status[0] != '!') s->staged += sign;
     if (status[1] == 'M') s->modified += sign;
     else if (status[1] == 'D') s->deleted += sign;
 }
@@ -317,6 +319,7 @@ void view_summary_remove_shown_child(GitSummary *s, const TreeNode *child, GitCa
         s->untracked -= cs.untracked;
         s->staged -= cs.staged;
         s->deleted -= cs.deleted;
+        s->staged_deleted -= cs.staged_deleted;
     }
 }
 
@@ -658,6 +661,9 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
         }
         if (gs.staged) {
             EMIT(line, pos, ENTRY_BUF_SIZE, "%s%d %s%s ", CLR(ctx->cfg, COLOR_YELLOW), gs.staged, ctx->icons->git_staged, RST(ctx->cfg));
+        }
+        if (gs.staged_deleted) {
+            EMIT(line, pos, ENTRY_BUF_SIZE, "%s%d %s%s ", CLR(ctx->cfg, COLOR_YELLOW), gs.staged_deleted, ctx->icons->git_deleted, RST(ctx->cfg));
         }
         if (gs.deleted) {
             EMIT(line, pos, ENTRY_BUF_SIZE, "%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), gs.deleted, ctx->icons->git_deleted, RST(ctx->cfg));
@@ -1296,12 +1302,17 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
 
         /* Dirty status */
         GitSummary *summary = &fe->repo_status;
-        if (summary->modified || summary->untracked || summary->staged || summary->deleted) {
+        if (summary->modified || summary->untracked || summary->staged || summary->deleted || summary->staged_deleted) {
             char status_buf[128] = "";
             int pos = 0;
             if (summary->staged) {
                 pos += snprintf(status_buf + pos, sizeof(status_buf) - pos,
                                 "%s%d staged%s", CLR(cfg, COLOR_GREEN), summary->staged, RST(cfg));
+            }
+            if (summary->staged_deleted) {
+                pos += snprintf(status_buf + pos, sizeof(status_buf) - pos,
+                                "%s%s%d deleted (staged)%s", pos > 0 ? ", " : "",
+                                CLR(cfg, COLOR_GREEN), summary->staged_deleted, RST(cfg));
             }
             if (summary->modified) {
                 pos += snprintf(status_buf + pos, sizeof(status_buf) - pos,
@@ -1325,12 +1336,17 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
     /* Git status summary for directories inside a repo (but not repo root) */
     if (is_dir && fe->has_git_dir_status && !fe->has_git_repo_info) {
         GitSummary *gs = &fe->git_dir_status;
-        if (gs->modified || gs->untracked || gs->staged || gs->deleted) {
+        if (gs->modified || gs->untracked || gs->staged || gs->deleted || gs->staged_deleted) {
             char status_buf[128] = "";
             int pos = 0;
             if (gs->staged) {
                 pos += snprintf(status_buf + pos, sizeof(status_buf) - pos,
                                 "%s%d staged%s", CLR(cfg, COLOR_GREEN), gs->staged, RST(cfg));
+            }
+            if (gs->staged_deleted) {
+                pos += snprintf(status_buf + pos, sizeof(status_buf) - pos,
+                                "%s%s%d deleted (staged)%s", pos > 0 ? ", " : "",
+                                CLR(cfg, COLOR_GREEN), gs->staged_deleted, RST(cfg));
             }
             if (gs->modified) {
                 pos += snprintf(status_buf + pos, sizeof(status_buf) - pos,
