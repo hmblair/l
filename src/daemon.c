@@ -262,7 +262,7 @@ static int is_daemon_scanning(void) {
 
 static void get_config_path(char *buf, size_t len) {
     const char *home = getenv("HOME");
-    snprintf(buf, len, "%s/.cache/l/config", home ? home : "/tmp");
+    snprintf(buf, len, "%s/.config/l/daemon.conf", home ? home : "/tmp");
 }
 
 /* ============================================================================
@@ -272,6 +272,14 @@ static void get_config_path(char *buf, size_t len) {
 static void config_save(int interval, int threshold) {
     char path[PATH_MAX];
     get_config_path(path, sizeof(path));
+
+    /* Ensure ~/.config/l exists before writing */
+    const char *home = getenv("HOME");
+    if (home) {
+        char dir[PATH_MAX];
+        snprintf(dir, sizeof(dir), "%s/.config/l", home);
+        mkdir(dir, 0755);
+    }
 
     FILE *f = fopen(path, "w");
     if (!f) return;

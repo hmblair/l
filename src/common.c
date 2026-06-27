@@ -44,7 +44,7 @@ static void config_load(void) {
     if (!home) return;
 
     char path[PATH_MAX];
-    snprintf(path, sizeof(path), "%s/.cache/l/config", home);
+    snprintf(path, sizeof(path), "%s/.config/l/daemon.conf", home);
 
     FILE *f = fopen(path, "r");
     if (!f) return;

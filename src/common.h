@@ -93,7 +93,7 @@
 #define L_FILE_COUNT_THRESHOLD  1000    /* Cache directories with >= this many files */
 #define L_MAX_LOG_SIZE          (1024 * 1024)  /* 1MB max log size */
 
-/* Daemon configuration (reads from ~/.cache/l/config) */
+/* Daemon configuration (reads from ~/.config/l/daemon.conf) */
 int config_get_interval(void);   /* Scan interval in seconds */
 int config_get_threshold(void);  /* Min files to cache a directory */
 
