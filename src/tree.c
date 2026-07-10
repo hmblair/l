@@ -694,6 +694,7 @@ TreeNode *build_ancestry_tree(const char *path, const TreeBuildOpts *opts,
         current->children = xmalloc(sizeof(TreeNode));
         current->child_count = 1;
         current->children[0] = *child;
+        current->children[0].is_ancestor = 1;
         current->was_expanded = 1;
 
         free(child);

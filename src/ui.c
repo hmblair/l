@@ -262,6 +262,7 @@ int node_is_visible(const TreeNode *node, const Config *cfg) {
  * filters above only apply within the initial scan depth, whereas hidden entries
  * stay hidden at every depth. */
 int node_is_hidden(const TreeNode *node, const Config *cfg) {
+    if (node->is_ancestor) return 0;
     return !cfg->show_hidden && node->entry.name[0] == '.';
 }
 
