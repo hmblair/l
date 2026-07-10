@@ -117,7 +117,7 @@ static int apply_short_flag(char flag, Config *cfg, OptionSet *set) {
                   cfg->long_format = 1; cfg->long_format_explicit = 1; return 1;
         case 't': check_conflict(&set->depth, "-t", cfg);
                   cfg->max_depth = L_MAX_DEPTH; return 1;
-        case 'p': cfg->show_ancestry = 1; return 1;
+        case 'p': cfg->show_ancestry = 1; cfg->ancestry_explicit = 1; return 1;
         case 'e': cfg->expand_all = 1; return 1;
         case 'c': cfg->color_all = 1; return 1;
         case 'i': cfg->interactive = 1; return 1;
@@ -214,7 +214,7 @@ static void parse_args(int argc, char **argv, Config *cfg,
                                                  cfg->long_format = 1; cfg->long_format_explicit = 1; }
             else if (MATCH_LONG("tree"))       { check_conflict(&set.depth, "--tree", cfg);
                                                  cfg->max_depth = L_MAX_DEPTH; }
-            else if (MATCH_LONG("path"))       { cfg->show_ancestry = 1; }
+            else if (MATCH_LONG("path"))       { cfg->show_ancestry = 1; cfg->ancestry_explicit = 1; }
             else if (MATCH_LONG("expand-all")) { cfg->expand_all = 1; }
             else if (MATCH_LONG("list"))       { cfg->list_mode = 1; }
             else if (MATCH_LONG("summary"))    { cfg->summary_mode = 1;

@@ -25,6 +25,9 @@ typedef struct {
     int sort_reverse;
     int git_only;
     int show_ancestry;
+    int ancestry_explicit;   /* -p was given explicitly (vs. implied by -g),
+                              * so anchor the ancestry at ~ (or /), not the
+                              * enclosing repo root. */
     int color_all;
     int interactive;
     int dir_only;
