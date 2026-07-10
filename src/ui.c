@@ -275,6 +275,9 @@ int node_is_hidden(const TreeNode *node, const Config *cfg) {
  * in exactly one place. */
 int node_is_shown(const TreeNode *node, const Config *cfg,
                   int apply_content_filters, int live_filter_active) {
+    /* Ancestry-spine nodes (-p) are the path to the target and always render,
+     * bypassing both the hidden and content (git-only, grep, ...) filters. */
+    if (node->is_ancestor) return 1;
     if (node_is_hidden(node, cfg)) return 0;
     if (apply_content_filters && !node_is_visible(node, cfg)) return 0;
     if (live_filter_active && !node->matches_grep) return 0;
