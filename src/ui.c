@@ -318,7 +318,10 @@ void view_summary_remove_shown_child(GitSummary *s, const TreeNode *child, GitCa
 
 static void columns_update_visible_recursive(Column *cols, const TreeNode *node,
                                              const Icons *icons, const Config *cfg) {
-    if (node_is_visible(node, cfg)) {
+    /* Size the columns to every row that will actually render, which includes
+     * the -p ancestry spine — those bypass the content filters but still print,
+     * so node_is_visible alone would leave their (often wide) values unpadded. */
+    if (node_is_shown(node, cfg, 1, 0)) {
         columns_update_widths(cols, &node->entry, icons);
     }
     for (size_t i = 0; i < node->child_count; i++) {
