@@ -587,9 +587,9 @@ int main(int argc, char **argv) {
     for (int i = 0; i < dir_count; i++) {
         git_cache_init(&gits[i]);
         if (cfg.show_ancestry) {
-            trees[i] = build_ancestry_tree_from_config(dirs[i], cfg.long_format ? cols : NULL, &gits[i], &cfg, &icons);
+            trees[i] = build_ancestry_tree_from_config(dirs[i], &gits[i], &cfg, &icons);
         } else {
-            trees[i] = build_tree_from_config(dirs[i], cfg.long_format ? cols : NULL, &gits[i], &cfg, &icons);
+            trees[i] = build_tree_from_config(dirs[i], &gits[i], &cfg, &icons);
         }
     }
 
@@ -604,15 +604,13 @@ int main(int argc, char **argv) {
             compute_grep_flags(trees[i], cfg.grep_pattern);
         }
     }
-    /* Recalculate column widths for visible entries only */
-    if (is_filtering_active(&cfg) && cfg.long_format) {
-        columns_recalculate_visible(cols, trees, dir_count, &icons, &cfg);
-    }
-
-    /* Compute diff column widths (only in long format) */
+    /* Measure all column widths in one pass over the rows that will render.
+     * Must run after the git/grep flags above, which child visibility depends
+     * on. Interactive mode re-measures over its own visible set (select.c). */
     int diff_add_width = 0, diff_del_width = 0;
     if (cfg.long_format) {
-        compute_diff_widths(trees, dir_count, gits, &diff_add_width, &diff_del_width, &cfg);
+        measure_columns(trees, dir_count, gits, &icons, &cfg,
+                        cols, &diff_add_width, &diff_del_width);
     }
 
     /* Interactive selection mode */

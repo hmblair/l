@@ -983,7 +983,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                     !expanded_contains(&expanded, current->node->entry.path)) {
                     /* Load children if not yet loaded */
                     if (current->node->child_count == 0 && !current->node->was_expanded) {
-                        tree_expand_node_from_config(current->node, ctx->columns, ctx->git,
+                        tree_expand_node_from_config(current->node, ctx->git,
                                          ctx->cfg, ctx->icons);
                     }
                     expanded_add(&expanded, current->node->entry.path);
@@ -1032,7 +1032,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                     } else {
                         /* Load children if not yet loaded */
                         if (current->node->child_count == 0 && !current->node->was_expanded) {
-                            tree_expand_node_from_config(current->node, ctx->columns, ctx->git,
+                            tree_expand_node_from_config(current->node, ctx->git,
                                              ctx->cfg, ctx->icons);
                         }
                         expanded_add(&expanded, current->node->entry.path);

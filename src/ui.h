@@ -64,10 +64,11 @@ typedef struct {
 /* Column functions */
 void columns_init(Column *cols);
 void columns_update_widths(Column *cols, const FileEntry *fe, const Icons *icons);
-void columns_recalculate_visible(Column *cols, TreeNode **trees, int tree_count,
-                                 const Icons *icons, const Config *cfg);
-void compute_diff_widths(TreeNode **trees, int tree_count, GitCache *gits,
-                         int *add_width, int *del_width, const Config *cfg);
+/* Single width-measuring pass: sizes the info and diff columns from exactly the
+ * rows the renderer draws. Run after git/grep visibility flags are set. */
+void measure_columns(TreeNode **trees, int tree_count, GitCache *gits,
+                     const Icons *icons, const Config *cfg,
+                     Column *cols, int *diff_add_width, int *diff_del_width);
 void diff_widths_update(int *add_width, int *del_width, const FileEntry *fe,
                         GitCache *git);
 
@@ -143,15 +144,15 @@ void abbreviate_home(const char *path, char *buf, size_t len, const Config *cfg)
 TreeBuildOpts config_to_build_opts(const Config *cfg);
 
 /* Build tree using Config (wraps build_tree with TreeBuildOpts) */
-TreeNode *build_tree_from_config(const char *path, Column *cols, GitCache *git,
+TreeNode *build_tree_from_config(const char *path, GitCache *git,
                                   const Config *cfg, const Icons *icons);
 
 /* Build ancestry tree using Config */
-TreeNode *build_ancestry_tree_from_config(const char *path, Column *cols, GitCache *git,
+TreeNode *build_ancestry_tree_from_config(const char *path, GitCache *git,
                                            const Config *cfg, const Icons *icons);
 
 /* Expand node using Config */
-void tree_expand_node_from_config(TreeNode *node, Column *cols, GitCache *git,
+void tree_expand_node_from_config(TreeNode *node, GitCache *git,
                                    const Config *cfg, const Icons *icons);
 
 /* Helper macros */

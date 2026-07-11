@@ -316,28 +316,6 @@ void view_summary_remove_shown_child(GitSummary *s, const TreeNode *child, GitCa
     }
 }
 
-static void columns_update_visible_recursive(Column *cols, const TreeNode *node,
-                                             const Icons *icons, const Config *cfg) {
-    /* Size the columns to every row that will actually render, which includes
-     * the -p ancestry spine — those bypass the content filters but still print,
-     * so node_is_visible alone would leave their (often wide) values unpadded. */
-    if (node_is_shown(node, cfg, 1, 0)) {
-        columns_update_widths(cols, &node->entry, icons);
-    }
-    for (size_t i = 0; i < node->child_count; i++) {
-        if (node_is_hidden(&node->children[i], cfg)) continue;
-        columns_update_visible_recursive(cols, &node->children[i], icons, cfg);
-    }
-}
-
-void columns_recalculate_visible(Column *cols, TreeNode **trees, int tree_count,
-                                 const Icons *icons, const Config *cfg) {
-    columns_reset_widths(cols);
-    for (int i = 0; i < tree_count; i++) {
-        columns_update_visible_recursive(cols, trees[i], icons, cfg);
-    }
-}
-
 static int count_digits(int n) {
     if (n == 0) return 1;
     int count = 0;
@@ -367,27 +345,6 @@ void diff_widths_update(int *add_width, int *del_width, const FileEntry *fe,
     }
 }
 
-static void compute_diff_widths_recursive(const TreeNode *node, GitCache *git,
-                                          int *add_width, int *del_width,
-                                          const Config *cfg) {
-    if (node_is_visible(node, cfg)) {
-        diff_widths_update(add_width, del_width, &node->entry, git);
-    }
-    for (size_t i = 0; i < node->child_count; i++) {
-        if (node_is_hidden(&node->children[i], cfg)) continue;
-        compute_diff_widths_recursive(&node->children[i], git, add_width, del_width, cfg);
-    }
-}
-
-void compute_diff_widths(TreeNode **trees, int tree_count, GitCache *gits,
-                         int *add_width, int *del_width, const Config *cfg) {
-    *add_width = 0;
-    *del_width = 0;
-    for (int i = 0; i < tree_count; i++) {
-        compute_diff_widths_recursive(trees[i], &gits[i], add_width, del_width, cfg);
-    }
-}
-
 const char *get_count_icon(const FileEntry *fe, const Icons *icons) {
     if (fe->file_count >= 0) {
         return icons->count_files;
@@ -408,15 +365,6 @@ const char *get_count_icon(const FileEntry *fe, const Icons *icons) {
 /* ============================================================================
  * Config to TreeBuildOpts Conversion
  * ============================================================================ */
-
-static void columns_update_widths_recursive(Column *cols, const TreeNode *node,
-                                            const Icons *icons, const Config *cfg) {
-    columns_update_widths(cols, &node->entry, icons);
-    for (size_t i = 0; i < node->child_count; i++) {
-        if (node_is_hidden(&node->children[i], cfg)) continue;
-        columns_update_widths_recursive(cols, &node->children[i], icons, cfg);
-    }
-}
 
 static int skip_below_min_size(const FileEntry *entry, void *ctx) {
     off_t min_size = *(off_t *)ctx;
@@ -439,44 +387,25 @@ TreeBuildOpts config_to_build_opts(const Config *cfg) {
     return opts;
 }
 
-TreeNode *build_tree_from_config(const char *path, Column *cols, GitCache *git,
+/* Build functions no longer measure column widths: sizing is a single pass over
+ * the finished tree (measure_columns) that mirrors exactly what the renderer
+ * draws, so it can only run once the git/grep flags it depends on are set. */
+TreeNode *build_tree_from_config(const char *path, GitCache *git,
                                   const Config *cfg, const Icons *icons) {
     TreeBuildOpts opts = config_to_build_opts(cfg);
-    TreeNode *tree = build_tree(path, &opts, git, icons);
-
-    /* Update column widths if in long format */
-    if (cfg->long_format && cols && tree) {
-        columns_update_widths_recursive(cols, tree, icons, cfg);
-    }
-
-    return tree;
+    return build_tree(path, &opts, git, icons);
 }
 
-TreeNode *build_ancestry_tree_from_config(const char *path, Column *cols, GitCache *git,
+TreeNode *build_ancestry_tree_from_config(const char *path, GitCache *git,
                                            const Config *cfg, const Icons *icons) {
     TreeBuildOpts opts = config_to_build_opts(cfg);
-    TreeNode *tree = build_ancestry_tree(path, &opts, git, icons);
-
-    /* Update column widths if in long format */
-    if (cfg->long_format && cols && tree) {
-        columns_update_widths_recursive(cols, tree, icons, cfg);
-    }
-
-    return tree;
+    return build_ancestry_tree(path, &opts, git, icons);
 }
 
-void tree_expand_node_from_config(TreeNode *node, Column *cols, GitCache *git,
+void tree_expand_node_from_config(TreeNode *node, GitCache *git,
                                    const Config *cfg, const Icons *icons) {
     TreeBuildOpts opts = config_to_build_opts(cfg);
     tree_expand_node(node, &opts, git, icons);
-
-    /* Update column widths for newly expanded children */
-    if (cfg->long_format && cols) {
-        for (size_t i = 0; i < node->child_count; i++) {
-            if (node_is_hidden(&node->children[i], cfg)) continue;
-            columns_update_widths(cols, &node->children[i].entry, icons);
-        }
-    }
 }
 
 /* ============================================================================
@@ -772,6 +701,55 @@ static int has_shown_children(const TreeNode *node, const Config *cfg, int filte
         if (child_is_shown(&node->children[i], cfg, filtering)) return 1;
     }
     return 0;
+}
+
+/* Measure one already-rendered node and every descendant the renderer reaches
+ * through it (a descendant draws iff its parent drew and child_is_shown). This
+ * is the exact traversal print_tree_children performs, so the measured set is
+ * identically the drawn set. */
+static void measure_shown_subtree(const TreeNode *node, GitCache *git,
+                                  const Icons *icons, const Config *cfg, int filtering,
+                                  Column *cols, int *add_width, int *del_width) {
+    columns_update_widths(cols, &node->entry, icons);
+    diff_widths_update(add_width, del_width, &node->entry, git);
+    for (size_t i = 0; i < node->child_count; i++) {
+        const TreeNode *child = &node->children[i];
+        if (!child_is_shown(child, cfg, filtering)) continue;
+        measure_shown_subtree(child, git, icons, cfg, filtering, cols, add_width, del_width);
+    }
+}
+
+/* Size every column (the info columns and the git diff +/- columns) from the
+ * rows the renderer will actually draw, in a single pass. This is the only
+ * width-measuring path: it mirrors print_tree_node exactly — each tree's root
+ * always draws (unless list mode suppresses a directory root's own row), and
+ * descendants follow child_is_shown — so alignment can never drift from what is
+ * printed regardless of which flags or filters are active. Runs after the
+ * git/grep visibility flags are computed, since child_is_shown depends on them. */
+void measure_columns(TreeNode **trees, int tree_count, GitCache *gits,
+                     const Icons *icons, const Config *cfg,
+                     Column *cols, int *diff_add_width, int *diff_del_width) {
+    int filtering = is_filtering_active(cfg);
+    columns_reset_widths(cols);
+    *diff_add_width = 0;
+    *diff_del_width = 0;
+
+    for (int i = 0; i < tree_count; i++) {
+        TreeNode *root = trees[i];
+        /* List mode does not draw a directory root's own row, only its shown
+         * children (each with its subtree); every other case draws the root. */
+        if (cfg->list_mode && root->entry.type == FTYPE_DIR) {
+            for (size_t j = 0; j < root->child_count; j++) {
+                const TreeNode *child = &root->children[j];
+                if (!child_is_shown(child, cfg, filtering)) continue;
+                measure_shown_subtree(child, &gits[i], icons, cfg, filtering,
+                                      cols, diff_add_width, diff_del_width);
+            }
+        } else {
+            measure_shown_subtree(root, &gits[i], icons, cfg, filtering,
+                                  cols, diff_add_width, diff_del_width);
+        }
+    }
 }
 
 /* Data pass (non-interactive): precompute each shown directory's view summary —
