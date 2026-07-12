@@ -21,7 +21,7 @@ _l() {
     if [[ "$cur" == -* ]]; then
         opts="-a -l --long -s --short -t --tree -d --depth -p --path
               -e --expand-all --list --summary --no-icons -c --color-all -g
-              -f --filter --min-size -i --interactive -S -T -N -r
+              -f --filter --min-size --dir-only -i --interactive --tty -S -T -N -r
               -h --help --version --daemon"
         COMPREPLY=( $(compgen -W "$opts" -- "$cur") )
         return 0
