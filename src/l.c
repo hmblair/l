@@ -604,6 +604,16 @@ int main(int argc, char **argv) {
             compute_grep_flags(trees[i], cfg.grep_pattern);
         }
     }
+    /* Data pass: precompute each directory's view summary (git status and diff
+     * lines rolled up to the nearest visible ancestor). Must run before both the
+     * width measurement and printing, since both read view_git_summary. Depends
+     * on the git/grep visibility flags above. Interactive mode recomputes over
+     * its own live visible set (select.c). */
+    if (cfg.compute.git_status) {
+        for (int i = 0; i < dir_count; i++) {
+            compute_view_summaries(trees[i], &cfg, &gits[i]);
+        }
+    }
     /* Measure all column widths in one pass over the rows that will render.
      * Must run after the git/grep flags above, which child visibility depends
      * on. Interactive mode re-measures over its own visible set (select.c). */
@@ -678,11 +688,6 @@ int main(int argc, char **argv) {
                 .diff_del_width = diff_del_width,
                 .term_width = cfg.is_tty ? get_terminal_width() : 0
             };
-            /* Data pass: precompute directory git summaries for the current
-             * view so printing only reads them. */
-            if (cfg.compute.git_status) {
-                compute_view_summaries(trees[i], &cfg, &gits[i]);
-            }
             if (cfg.summary_mode) {
                 print_summary(trees[i], &ctx);
             } else {

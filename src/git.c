@@ -183,6 +183,31 @@ void git_cache_add_diff(GitCache *cache, const char *path, int added, int remove
 #endif
 }
 
+/* Zero the diff stats of every cached path under repo_path. A single populate
+ * accumulates the unstaged and staged numstat passes (git_cache_add_diff), so
+ * it must start from zero to stay idempotent: git_populate_repo is invoked more
+ * than once against the same repo (lazy expansion in interactive mode, and the
+ * periodic git refresh), and without this reset each re-populate would double
+ * the line counts. Status needs no such reset — git_cache_add overwrites it. */
+static void git_reset_diff_stats(GitCache *cache, const char *repo_path) {
+#ifdef _OPENMP
+    omp_set_lock(&cache->lock);
+#endif
+    size_t root_len = strlen(repo_path);
+    for (int i = 0; i < L_HASH_SIZE; i++) {
+        for (GitStatusNode *node = cache->buckets[i]; node; node = node->next) {
+            if (strncmp(node->path, repo_path, root_len) == 0 &&
+                (node->path[root_len] == '/' || node->path[root_len] == '\0')) {
+                node->lines_added = 0;
+                node->lines_removed = 0;
+            }
+        }
+    }
+#ifdef _OPENMP
+    omp_unset_lock(&cache->lock);
+#endif
+}
+
 /* Classify a two-char git status into a directory summary, applying it with the
  * given sign (+1 to add, -1 to remove). Single source of truth for the
  * status -> bucket mapping: a staged deletion (index 'D', e.g. git rm) counts
@@ -213,44 +238,13 @@ GitSummary git_get_dir_summary(GitCache *cache, const char *dir_path) {
             if (strncmp(node->path, dir_path, dir_len) == 0 &&
                 node->path[dir_len] == '/') {
                 git_summary_apply_status(&summary, node->status, +1);
+                summary.diff_added += node->lines_added;
+                summary.diff_removed += node->lines_removed;
             }
             node = node->next;
         }
     }
     return summary;
-}
-
-/* Internal: walk deleted entries under dir_path, accumulating count or lines */
-static int git_walk_deleted(GitCache *cache, const char *dir_path,
-                            int count_files, int direct_only) {
-    if (!cache) return 0;
-
-    int result = 0;
-    size_t dir_len = strlen(dir_path);
-
-    for (int i = 0; i < L_HASH_SIZE; i++) {
-        GitStatusNode *node = cache->buckets[i];
-        while (node) {
-            if (node->status[1] == 'D' &&
-                strncmp(node->path, dir_path, dir_len) == 0 &&
-                node->path[dir_len] == '/') {
-                /* If direct_only, skip nested paths */
-                if (!direct_only || strchr(node->path + dir_len + 1, '/') == NULL) {
-                    result += count_files ? 1 : node->lines_removed;
-                }
-            }
-            node = node->next;
-        }
-    }
-    return result;
-}
-
-int git_deleted_lines_direct(GitCache *cache, const char *dir_path) {
-    return git_walk_deleted(cache, dir_path, 0, 1);
-}
-
-int git_deleted_lines_recursive(GitCache *cache, const char *dir_path) {
-    return git_walk_deleted(cache, dir_path, 0, 0);
 }
 
 /* Check if a path under dir_path has a hidden first component.
@@ -643,6 +637,9 @@ int git_find_root(const char *path, char *root, size_t root_len) {
 static void git_populate_diff_stats_shell(GitCache *cache, const char *repo_path) {
     char cmd[L_SHELL_CMD_BUF_SIZE];
 
+    /* Start from zero so re-populating the same repo doesn't double the counts */
+    git_reset_diff_stats(cache, repo_path);
+
     /* Get both unstaged and staged diff stats */
     snprintf(cmd, sizeof(cmd),
              "git -C '%s' diff --numstat 2>/dev/null && "
@@ -851,8 +848,10 @@ void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_
         /* Parse status output until separator */
         git_parse_status_output(fp, cache, repo_path);
 
-        /* If we included diff stats, parse unstaged and staged numstat */
+        /* If we included diff stats, parse unstaged and staged numstat. Reset
+         * first so re-populating the same repo doesn't double the counts. */
         if (include_diff_stats) {
+            git_reset_diff_stats(cache, repo_path);
             git_parse_numstat(fp, cache, repo_path);
             git_parse_numstat(fp, cache, repo_path);
         }

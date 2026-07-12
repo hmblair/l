@@ -72,6 +72,11 @@ void measure_columns(TreeNode **trees, int tree_count, GitCache *gits,
 void diff_widths_update(int *add_width, int *del_width, const FileEntry *fe,
                         GitCache *git);
 
+/* Resolve the diff line counts a row draws: a file's own stats, or a
+ * directory's rolled-up view summary. Shared by the renderer and width pass. */
+void entry_diff_stats(const FileEntry *fe, GitCache *git,
+                      int *added, int *removed);
+
 /* Formatting helpers */
 void format_size(off_t bytes, char *buf, size_t len);
 void format_relative_time(time_t mtime, char *buf, size_t len);
@@ -116,7 +121,7 @@ void compute_view_summaries(TreeNode *node, const Config *cfg, GitCache *git);
 
 void print_tree_node(const TreeNode *node, int depth, PrintContext *ctx);
 void print_entry(const FileEntry *fe, int depth, int was_expanded,
-                 int has_visible_children, const PrintContext *ctx);
+                 const PrintContext *ctx);
 void print_summary(TreeNode *node, PrintContext *ctx);
 
 /* ============================================================================

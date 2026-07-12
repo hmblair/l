@@ -34,13 +34,18 @@ typedef struct {
 #endif
 } GitCache;
 
-/* Git status summary for directories */
+/* Aggregated git status for all changed files under a directory. Every field is
+ * a roll-up over the directory's descendants; the view-summary pipeline (see
+ * view_summary_remove_shown_child) subtracts descendants shown on their own row
+ * so a directory row reports only what its subtree hides. */
 typedef struct {
     int modified;
     int untracked;
     int staged;
     int deleted;        /* Unstaged (working-tree) deletions */
     int staged_deleted; /* Staged deletions (e.g. git rm) */
+    int diff_added;     /* Lines added across descendants */
+    int diff_removed;   /* Lines removed across descendants */
 } GitSummary;
 
 /* ============================================================================
@@ -86,12 +91,6 @@ GitSummary git_get_dir_summary(GitCache *cache, const char *dir_path);
 /* Apply a two-char git status to a directory summary (+1 to add, -1 to remove).
  * Single source of truth for the status -> bucket classification. */
 void git_summary_apply_status(GitSummary *s, const char *status, int sign);
-
-/* Sum deleted lines directly in a directory (not recursive) */
-int git_deleted_lines_direct(GitCache *cache, const char *dir_path);
-
-/* Sum deleted lines recursively in a directory */
-int git_deleted_lines_recursive(GitCache *cache, const char *dir_path);
 
 /* Check if a directory has hidden direct children with git status */
 int git_dir_has_hidden_status(GitCache *cache, const char *dir_path);

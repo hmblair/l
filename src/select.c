@@ -440,10 +440,11 @@ static void recompute_view_summaries(SelectState *state, const PrintContext *ctx
     }
 }
 
-/* Re-prepare everything the renderer reads after the visible set changes. */
+/* Re-prepare everything the renderer reads after the visible set changes. View
+ * summaries first: the width pass reads them to size the diff columns. */
 static void prepare_view(SelectState *state, const PrintContext *ctx) {
-    recalculate_widths(state, ctx);
     recompute_view_summaries(state, ctx);
+    recalculate_widths(state, ctx);
 }
 
 /* Recompute the interactive filter: refresh per-node match flags from the
@@ -606,7 +607,6 @@ static void render_line(SelectState *state, int index, int is_selected,
     memcpy(ctx->continuation, item->continuation, L_MAX_DEPTH * sizeof(int));
 
     /* Determine expansion state from the external set */
-    int has_visible = item->has_visible_children;
     int is_expanded = node_is_directory(item->node) &&
                       expanded_contains(expanded, item->node->entry.path);
 
@@ -621,7 +621,7 @@ static void render_line(SelectState *state, int index, int is_selected,
     line_ctx.diff_del_width = state->diff_del_width;
 
     /* Call the real print_entry */
-    print_entry(&item->node->entry, item->depth, is_expanded, has_visible, &line_ctx);
+    print_entry(&item->node->entry, item->depth, is_expanded, &line_ctx);
 }
 
 static void render_view(SelectState *state, PrintContext *ctx, ExpandedSet *expanded, int files_only) {

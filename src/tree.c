@@ -344,10 +344,6 @@ static void build_tree_children(TreeNode *parent, int depth,
             !(opts->skip_fn && opts->skip_fn(&child->entry, opts->skip_ctx))) {
             int child_in_git_repo = in_git_repo || is_git_repo_root[i];
             build_tree_children(child, depth + 1, opts, git, child_in_git_repo, child->entry.is_ignored);
-
-            if (opts->compute.git_diff) {
-                child->entry.diff_removed = git_deleted_lines_direct(git, child->entry.path);
-            }
         }
     }
 

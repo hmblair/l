@@ -293,6 +293,8 @@ void git_summary_clamp(GitSummary *s) {
     if (s->staged < 0) s->staged = 0;
     if (s->deleted < 0) s->deleted = 0;
     if (s->staged_deleted < 0) s->staged_deleted = 0;
+    if (s->diff_added < 0) s->diff_added = 0;
+    if (s->diff_removed < 0) s->diff_removed = 0;
 }
 
 /* Remove from a directory's view summary the git status absorbed by a child
@@ -306,6 +308,13 @@ void view_summary_remove_shown_child(GitSummary *s, const TreeNode *child, GitCa
                                             : child->entry.path;
     const char *status = git_cache_get(git, abs);
     if (status) git_summary_apply_status(s, status, -1);
+    /* The child's own line stats live on its cache node (files have them;
+     * directories usually don't). Subtree line stats are folded in below. */
+    GitStatusNode *node = git_cache_get_node(git, abs);
+    if (node) {
+        s->diff_added -= node->lines_added;
+        s->diff_removed -= node->lines_removed;
+    }
     if (node_is_directory(child)) {
         GitSummary cs = git_get_dir_summary(git, abs);
         s->modified -= cs.modified;
@@ -313,6 +322,8 @@ void view_summary_remove_shown_child(GitSummary *s, const TreeNode *child, GitCa
         s->staged -= cs.staged;
         s->deleted -= cs.deleted;
         s->staged_deleted -= cs.staged_deleted;
+        s->diff_added -= cs.diff_added;
+        s->diff_removed -= cs.diff_removed;
     }
 }
 
@@ -324,23 +335,39 @@ static int count_digits(int n) {
     return count;
 }
 
-/* Grow the diff-column widths to fit one entry. Directories use their
- * recursive deleted-line count (the maximum possible value), so the width
- * always fits whatever a row later draws. A resulting width of 0 means no
- * entry has changes and the column is omitted entirely (see print_entry). */
+/* Resolve the diff line counts a row draws. A file reports its own stats; a
+ * directory reports its view summary — the lines of descendants not shown on
+ * their own row, rolled up to this (the nearest visible) ancestor. Falls back
+ * to the full recursive summary if no view was prepared. Single source of truth
+ * for both the renderer (print_entry) and the width pass (diff_widths_update). */
+void entry_diff_stats(const FileEntry *fe, GitCache *git,
+                      int *added, int *removed) {
+    if (fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR) {
+        const char *abs = fe->abs_path ? fe->abs_path : fe->path;
+        GitSummary gs = fe->has_view_git_summary ? fe->view_git_summary
+                                                 : git_get_dir_summary(git, abs);
+        *added = gs.diff_added;
+        *removed = gs.diff_removed;
+    } else {
+        *added = fe->diff_added;
+        *removed = fe->diff_removed;
+    }
+}
+
+/* Grow the diff-column widths to fit one entry. Directories read the same
+ * rolled-up view summary the renderer draws (see entry_diff_stats), so the
+ * measured width matches the printed value exactly. A resulting width of 0
+ * means no entry has changes and the column is omitted (see print_entry). */
 void diff_widths_update(int *add_width, int *del_width, const FileEntry *fe,
                         GitCache *git) {
-    if (fe->diff_added > 0) {
-        int w = count_digits(fe->diff_added);
+    int added, removed;
+    entry_diff_stats(fe, git, &added, &removed);
+    if (added > 0) {
+        int w = count_digits(added);
         if (w > *add_width) *add_width = w;
     }
-    int diff_removed = fe->diff_removed;
-    if (fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR) {
-        int recursive = git_deleted_lines_recursive(git, fe->path);
-        if (recursive > diff_removed) diff_removed = recursive;
-    }
-    if (diff_removed > 0) {
-        int w = count_digits(diff_removed);
+    if (removed > 0) {
+        int w = count_digits(removed);
         if (w > *del_width) *del_width = w;
     }
 }
@@ -488,7 +515,7 @@ static void emit_prefix(char *buf, int *pos, int size, int depth, int *continuat
     EMIT(buf, *pos, size, "%s", COLOR_RESET);
 }
 
-void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visible_children, const PrintContext *ctx) {
+void print_entry(const FileEntry *fe, int depth, int was_expanded, const PrintContext *ctx) {
     /* Use the canonical path precomputed at build time; fall back to realpath()
      * only when it wasn't precomputed (e.g. ancestry mode). */
     char abs_path_buf[PATH_MAX];
@@ -524,27 +551,21 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, int has_visib
             }
             EMIT(line, pos, ENTRY_BUF_SIZE, "  ");
         }
-        /* Diff columns (only shown when there are diffs) */
+        /* Diff columns (only shown when there are diffs). A directory's counts
+         * are its rolled-up view summary — the lines hidden inside descendants
+         * not shown on their own row. */
+        int diff_added, diff_removed;
+        entry_diff_stats(fe, ctx->git, &diff_added, &diff_removed);
         if (ctx->diff_add_width > 0) {
-            if (fe->diff_added > 0) {
+            if (diff_added > 0) {
                 EMIT(line, pos, ENTRY_BUF_SIZE, "%s%*d%s ", CLR(ctx->cfg, COLOR_GREEN),
-                       ctx->diff_add_width, fe->diff_added, RST(ctx->cfg));
+                       ctx->diff_add_width, diff_added, RST(ctx->cfg));
             } else {
                 EMIT(line, pos, ENTRY_BUF_SIZE, "%s%*s%s ", CLR(ctx->cfg, COLOR_GREY),
                        ctx->diff_add_width, "-", RST(ctx->cfg));
             }
         }
         if (ctx->diff_del_width > 0) {
-            /* For directories, compute deleted lines based on collapsed/expanded state */
-            int diff_removed = fe->diff_removed;
-            if (fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR) {
-                if (has_visible_children) {
-                    diff_removed = git_deleted_lines_direct(ctx->git, abs_path);
-                } else {
-                    diff_removed = git_deleted_lines_recursive(ctx->git, abs_path);
-                }
-            }
-
             if (diff_removed > 0) {
                 EMIT(line, pos, ENTRY_BUF_SIZE, "%s%-*d%s ", CLR(ctx->cfg, COLOR_RED),
                        ctx->diff_del_width, diff_removed, RST(ctx->cfg));
@@ -696,13 +717,6 @@ static int child_is_shown(const TreeNode *child, const Config *cfg, int filterin
     return node_is_shown(child, cfg, filtering, 0);
 }
 
-static int has_shown_children(const TreeNode *node, const Config *cfg, int filtering) {
-    for (size_t i = 0; i < node->child_count; i++) {
-        if (child_is_shown(&node->children[i], cfg, filtering)) return 1;
-    }
-    return 0;
-}
-
 /* Measure one already-rendered node and every descendant the renderer reaches
  * through it (a descendant draws iff its parent drew and child_is_shown). This
  * is the exact traversal print_tree_children performs, so the measured set is
@@ -790,9 +804,7 @@ void print_tree_node(const TreeNode *node, int depth, PrintContext *ctx) {
             int is_last = (vi == visible_count - 1);
             if (depth > 0) ctx->continuation[depth - 1] = !is_last;
 
-            int has_visible_children = has_shown_children(child, ctx->cfg, filtering);
-
-            print_entry(&child->entry, depth, child->was_expanded, has_visible_children, ctx);
+            print_entry(&child->entry, depth, child->was_expanded, ctx);
 
             if (child->child_count > 0) {
                 print_tree_children(child, depth, ctx);
@@ -802,9 +814,7 @@ void print_tree_node(const TreeNode *node, int depth, PrintContext *ctx) {
         return;
     }
 
-    int has_visible_children = has_shown_children(node, ctx->cfg, filtering);
-
-    print_entry(&node->entry, depth, node->was_expanded, has_visible_children, ctx);
+    print_entry(&node->entry, depth, node->was_expanded, ctx);
 
     if (node->child_count > 0) {
         print_tree_children(node, depth, ctx);
@@ -829,9 +839,7 @@ static void print_tree_children(const TreeNode *parent, int depth, PrintContext 
 
         ctx->continuation[depth] = !is_last;
 
-        int has_visible_children = has_shown_children(child, ctx->cfg, filtering);
-
-        print_entry(&child->entry, depth + 1, child->was_expanded, has_visible_children, ctx);
+        print_entry(&child->entry, depth + 1, child->was_expanded, ctx);
 
         if (child->child_count > 0) {
             print_tree_children(child, depth + 1, ctx);
