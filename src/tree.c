@@ -262,34 +262,38 @@ static char **find_git_repo_roots(FileList *list, int in_git_repo,
     return git_repos;
 }
 
-static void build_tree_children(TreeNode *parent, int depth,
-                                 const TreeBuildOpts *opts, GitCache *git,
-                                 int in_git_repo, int parent_is_ignored) {
-    if (depth >= opts->max_depth) return;
-    if (access(parent->entry.path, R_OK) != 0) return;
-
+/* Materialize parent's immediate children from the filesystem: read the
+ * directory, populate any nested git repos it directly contains, and create and
+ * git-annotate each child node. One level only — build_tree_children drives the
+ * recursive descent and tree_expand_node stops here. Both the initial build and
+ * interactive lazy expansion go through this, so they can't drift.
+ *
+ * Sets parent->was_expanded once the directory is readable. Returns a
+ * caller-owned array (length parent->child_count) of per-child git-repo-root
+ * flags, so a recursive caller can thread in_git_repo downward; returns NULL
+ * (leaving parent with no children) when the directory is unreadable or empty. */
+static int *materialize_children(TreeNode *parent, const TreeBuildOpts *opts,
+                                 GitCache *git, int in_git_repo,
+                                 int parent_is_ignored) {
+    if (access(parent->entry.path, R_OK) != 0) return NULL;
     parent->was_expanded = 1;
 
     FileList list;
     file_list_init(&list);
-    if (read_directory(parent->entry.path, &list, opts) != 0) {
+    if (read_directory(parent->entry.path, &list, opts) != 0 || list.count == 0) {
         file_list_free(&list);
-        return;
-    }
-    if (list.count == 0) {
-        file_list_free(&list);
-        return;
+        return NULL;
     }
 
-    /* Find git repo roots */
-    int *is_git_repo_root = xmalloc(list.count * sizeof(int));
-    int *is_submodule = xmalloc(list.count * sizeof(int));
+    /* Discover and populate any git repos rooted directly at a child. Zero-init
+     * the flags so the git-status-off path (find_git_repo_roots skipped) still
+     * threads a defined in_git_repo downward. */
+    int *is_git_repo_root = xcalloc(list.count, sizeof(int));
+    int *is_submodule = xcalloc(list.count, sizeof(int));
     size_t git_repo_count = 0;
     char **git_repos = opts->compute.git_status
         ? find_git_repo_roots(&list, in_git_repo, is_git_repo_root, is_submodule, &git_repo_count)
         : NULL;
-
-    /* Populate git repos */
     if (git_repos) {
         #pragma omp parallel for schedule(dynamic)
         for (size_t i = 0; i < git_repo_count; i++) {
@@ -298,7 +302,6 @@ static void build_tree_children(TreeNode *parent, int depth,
         free(git_repos);
     }
 
-    /* Allocate children */
     parent->children = xmalloc(list.count * sizeof(TreeNode));
     parent->child_count = list.count;
 
@@ -314,11 +317,6 @@ static void build_tree_children(TreeNode *parent, int depth,
             child->entry.abs_path = xmalloc(n);
             snprintf(child->entry.abs_path, n, "%s/%s", parent->entry.abs_path, child->entry.name);
         }
-    }
-
-    /* Set git status and recurse */
-    for (size_t i = 0; i < list.count; i++) {
-        TreeNode *child = &parent->children[i];
 
         if (opts->compute.git_status) {
             apply_git_status(&child->entry, git, opts->compute.git_diff);
@@ -335,6 +333,34 @@ static void build_tree_children(TreeNode *parent, int depth,
             child->entry.is_ignored = has_ignore_all_gitignore(child->entry.path);
         }
 
+        /* Record git-status presence so git-only filtering works during
+         * interactive expansion, where the post-build compute_git_status_flags
+         * pass doesn't re-run. The static path recomputes this authoritatively,
+         * so setting it here is harmless there. Don't bubble across repo
+         * boundaries — only propagate when the parent is itself inside a repo. */
+        if (git_status && strcmp(git_status, "!!") != 0) {
+            child->has_git_status = 1;
+            if (in_git_repo) parent->has_git_status = 1;
+        }
+    }
+
+    free(is_submodule);
+    free(list.entries);
+    return is_git_repo_root;
+}
+
+static void build_tree_children(TreeNode *parent, int depth,
+                                 const TreeBuildOpts *opts, GitCache *git,
+                                 int in_git_repo, int parent_is_ignored) {
+    if (depth >= opts->max_depth) return;
+
+    int *is_git_repo_root = materialize_children(parent, opts, git, in_git_repo,
+                                                 parent_is_ignored);
+    if (!is_git_repo_root) return;  /* unreadable or empty: nothing to recurse */
+
+    for (size_t i = 0; i < parent->child_count; i++) {
+        TreeNode *child = &parent->children[i];
+
         /* Don't descend into hidden directories unless -a: their entries are
          * kept in the tree, but scanning their contents (e.g. .git, .cache) is
          * wasteful and their git status is read from the cache by path. */
@@ -348,8 +374,6 @@ static void build_tree_children(TreeNode *parent, int depth,
     }
 
     free(is_git_repo_root);
-    free(is_submodule);
-    free(list.entries);
 }
 
 TreeNode *build_tree(const char *path, const TreeBuildOpts *opts,
@@ -444,74 +468,18 @@ void tree_expand_node(TreeNode *node, const TreeBuildOpts *opts,
 
     if (node->child_count > 0) return;
     if (!node_is_directory(node)) return;
-    if (access(node->entry.path, R_OK) != 0) return;
 
-    FileList list;
-    file_list_init(&list);
-    if (read_directory(node->entry.path, &list, opts) != 0) {
-        file_list_free(&list);
-        return;
-    }
-    if (list.count == 0) {
-        file_list_free(&list);
-        node->was_expanded = 1;  /* Mark as expanded even if empty */
-        return;
-    }
-
+    /* The enclosing repo was already populated when this node was created (in
+     * build_tree, or by a parent's materialize_children), so we don't re-scan
+     * it here; find_git_repo_roots inside materialize_children still discovers
+     * and populates any nested repo first seen at this level. */
     char git_root[PATH_MAX];
-    int in_git_repo = git_find_root(node->entry.path, git_root, sizeof(git_root));
-    if (in_git_repo && opts->compute.git_status) {
-        git_populate_repo(git, git_root, opts->compute.git_diff);
-    }
+    int in_git_repo = opts->compute.git_status &&
+                      git_find_root(node->entry.path, git_root, sizeof(git_root));
 
-    int *is_git_repo_root = xmalloc(list.count * sizeof(int));
-    int *is_submodule = xmalloc(list.count * sizeof(int));
-    size_t git_repo_count = 0;
-    char **git_repos = opts->compute.git_status
-        ? find_git_repo_roots(&list, in_git_repo, is_git_repo_root, is_submodule, &git_repo_count)
-        : NULL;
-
-    /* Populate git repos (no parallelism for single-node expansion) */
-    if (git_repos) {
-        for (size_t i = 0; i < git_repo_count; i++) {
-            git_populate_repo(git, git_repos[i], opts->compute.git_diff);
-        }
-        free(git_repos);
-    }
-
-    node->children = xmalloc(list.count * sizeof(TreeNode));
-    node->child_count = list.count;
-
-    for (size_t i = 0; i < list.count; i++) {
-        TreeNode *child = &node->children[i];
-        memset(child, 0, sizeof(TreeNode));
-        child->entry = list.entries[i];
-        /* Mark mount boundaries (different filesystem than parent) */
-        child->entry.is_mount_point = (child->entry.dev != node->entry.dev);
-
-        if (opts->compute.git_status) {
-            apply_git_status(&child->entry, git, opts->compute.git_diff);
-        }
-
-        const char *git_status = child->entry.git_status[0] ? child->entry.git_status : NULL;
-        child->entry.is_ignored = node->entry.is_ignored ||
-                                   (git_status && strcmp(git_status, "!!") == 0) ||
-                                   strcmp(child->entry.name, ".git") == 0 ||
-                                   is_submodule[i];
-
-        if (git_status && git_status[0] != '\0' && strcmp(git_status, "!!") != 0) {
-            child->has_git_status = 1;
-            /* Only propagate to parent if parent is inside a git repo;
-             * don't bubble git status across repo boundaries */
-            if (in_git_repo)
-                node->has_git_status = 1;
-        }
-    }
-
+    int *is_git_repo_root = materialize_children(node, opts, git, in_git_repo,
+                                                 node->entry.is_ignored);
     free(is_git_repo_root);
-    free(is_submodule);
-    free(list.entries);
-    node->was_expanded = 1;
 }
 
 void tree_rescan_node(TreeNode *node, const TreeBuildOpts *opts,

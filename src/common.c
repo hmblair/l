@@ -99,6 +99,12 @@ void *xrealloc(void *ptr, size_t size) {
     return p;
 }
 
+void *xcalloc(size_t count, size_t size) {
+    void *p = calloc(count, size);
+    if (!p) die("Out of memory");
+    return p;
+}
+
 char *xstrdup(const char *s) {
     char *dup = strdup(s);
     if (!dup) die("Out of memory");
