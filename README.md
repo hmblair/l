@@ -79,10 +79,12 @@ l [OPTIONS] [FILE ...]
 | `-g` | Git-changed files, rooted at the repo (errors outside a repo; shows just the repo root when clean) |
 | `-f, --filter PATTERN` | Filter files matching pattern (implies `-at`) |
 | `--min-size SIZE` | Show only entries >= SIZE (e.g., `100M`, `1G`) |
+| `--dir-only` | Show only directories |
 | `-c, --color-all` | Don't gray out gitignored files |
 | `--list` | Flat list output (no tree structure) |
 | `--summary` | Show detailed summary for file/directory (auto-enabled for single file arguments) |
 | `--no-icons` | Hide icons |
+| `--tty` | Force TTY mode (colors, icons) even when piped |
 | `--daemon [SUBCMD]` | Manage size caching daemon (must be first argument) |
 | `--version` | Show version (must be first argument) |
 | `-h, --help` | Show help |
@@ -180,7 +182,7 @@ Features:
 - Skips network filesystems automatically
 - Live cache entry count display during scanning
 - Shows last scan duration in status display
-- Configurable via `~/.cache/l/config`
+- Configurable via `~/.config/l/daemon.conf`
 
 The daemon is managed via launchd on macOS and systemd on Linux, storing its cache in `~/.cache/l/sizes-v2.db`.
 
