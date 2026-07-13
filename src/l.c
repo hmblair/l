@@ -380,16 +380,27 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "Error: --version takes no other arguments\n");
                 return 1;
             }
-            printf("l %s\n", VERSION);
+            int tty = isatty(STDOUT_FILENO);
+            const char *bold = tty ? STYLE_BOLD : "";
+            const char *cyan = tty ? COLOR_CYAN : "";
+            const char *grey = tty ? COLOR_GREY : "";
+            const char *rst  = tty ? COLOR_RESET : "";
+
+            char libgit2_ver[32];
 #ifdef HAVE_LIBGIT2
-            {
-                int major = 0, minor = 0, rev = 0;
-                git_libgit2_version(&major, &minor, &rev);
-                printf("libgit2: %d.%d.%d\n", major, minor, rev);
-            }
+            int major = 0, minor = 0, rev = 0;
+            git_libgit2_version(&major, &minor, &rev);
+            snprintf(libgit2_ver, sizeof(libgit2_ver), "%d.%d.%d", major, minor, rev);
 #else
-            printf("libgit2: disabled\n");
+            snprintf(libgit2_ver, sizeof(libgit2_ver), "disabled");
 #endif
+
+            printf("%sl%s %s%s%s\n", bold, rst, cyan, VERSION, rst);
+            printf("Enhanced directory listing with tree view, icons, and git integration.\n\n");
+            printf("  %sAuthor  %s Hamish M. Blair <hmblair@stanford.edu>\n", grey, rst);
+            printf("  %sHomepage%s https://github.com/hmblair/l\n", grey, rst);
+            printf("  %slibgit2 %s %s\n", grey, rst, libgit2_ver);
+            printf("  %sLicense %s MIT\n", grey, rst);
             return 0;
         }
         if (strcmp(argv[1], "--daemon") == 0) {
