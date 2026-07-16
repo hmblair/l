@@ -88,7 +88,11 @@ void icons_load(Icons *icons, const char *script_dir) {
         const char *p = line;
         while (*p && isspace(*p)) p++;
         if (*p == '[') {
-            in_icons = (strncmp(p, "[icons]", 7) == 0);
+            /* UI icons (git status, counts, cursor, ...) live under [display]
+             * alongside the file-type icons under [icons]; both feed icons_set,
+             * and non-icon [display] keys simply find no match. */
+            in_icons = (strncmp(p, "[icons]", 7) == 0) ||
+                       (strncmp(p, "[display]", 9) == 0);
             in_extensions = (strncmp(p, "[extensions]", 12) == 0);
             continue;
         }
@@ -321,4 +325,40 @@ const char *shebangs_lookup(const Shebangs *sb, const char *interp) {
         }
     }
     return NULL;
+}
+
+/* ============================================================================
+ * Display Settings
+ * ============================================================================ */
+
+void settings_load(const char *script_dir, char *sep, size_t sep_len) {
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/%s", script_dir, L_CONFIG_FILE);
+
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+
+    char line[L_TOML_LINE_MAX];
+    char key[64], value[L_TOML_LINE_MAX];
+    int in_display = 0;
+
+    while (fgets(line, sizeof(line), f)) {
+        const char *p = line;
+        while (*p && isspace(*p)) p++;
+        if (*p == '[') {
+            in_display = (strncmp(p, "[display]", 9) == 0);
+            continue;
+        }
+
+        if (!in_display) continue;
+        if (!parse_toml_line(line, key, sizeof(key), value, sizeof(value)))
+            continue;
+
+        if (strcmp(key, "column_separator") == 0) {
+            strncpy(sep, value, sep_len - 1);
+            sep[sep_len - 1] = '\0';
+        }
+    }
+
+    fclose(f);
 }

@@ -197,7 +197,8 @@ The daemon is managed via launchd on macOS and systemd on Linux, storing its cac
 
 | Section | Description |
 |---------|-------------|
-| `[icons]` | Nerd Font icons for file types and UI elements |
+| `[display]` | Rendering options: `column_separator` (glyph between long-mode columns; blank for a plain two-space gap) and UI icons (git status, counts, cursor, cwd marker, symlink arrow, readonly) |
+| `[icons]` | Nerd Font icons for file types (directories, executables, devices, ...) |
 | `[extensions]` | Icons for specific file extensions |
 | `[filetypes]` | File type names for `--summary` output |
 | `[shebangs]` | Map shebang interpreters to file types (for files without extensions) |

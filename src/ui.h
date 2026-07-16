@@ -36,6 +36,7 @@ typedef struct {
     char cwd[PATH_MAX];
     char home[PATH_MAX];
     char script_dir[PATH_MAX];
+    char column_separator[L_MAX_SEPARATOR_LEN];  /* glyph drawn between long-mode columns; blank = plain spaces */
     const char *grep_pattern;
     off_t min_size;              /* Minimum size filter (0 = disabled) */
     ComputeOpts compute;        /* What metadata to compute */

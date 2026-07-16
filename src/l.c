@@ -448,6 +448,7 @@ int main(int argc, char **argv) {
         .cwd = "",
         .home = "",
         .script_dir = "",
+        .column_separator = "·",
         .grep_pattern = NULL,
         .min_size = 0,
         .compute = COMPUTE_NONE
@@ -529,6 +530,9 @@ int main(int argc, char **argv) {
     /* Enable sizes if needed for sorting/filtering in short mode */
     if (cfg.sort_by == SORT_SIZE) cfg.compute.sizes = 1;
     if (cfg.min_size > 0) cfg.compute.sizes = 1;
+
+    /* Load display settings (overrides the built-in separator default) */
+    settings_load(cfg.script_dir, cfg.column_separator, sizeof(cfg.column_separator));
 
     /* Load icons */
     Icons icons;

@@ -127,4 +127,8 @@ void shebangs_init(Shebangs *sb);
 void shebangs_load(Shebangs *sb, const char *script_dir);
 const char *shebangs_lookup(const Shebangs *sb, const char *interp);
 
+/* [display] settings. Reads the column separator glyph into sep (unchanged if
+ * the key is absent, so callers can seed sep with a default beforehand). */
+void settings_load(const char *script_dir, char *sep, size_t sep_len);
+
 #endif /* L_ICONS_H */

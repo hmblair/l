@@ -67,6 +67,7 @@
 #define L_MAX_ICON_LEN          16
 #define L_MAX_EXT_LEN           16
 #define L_MAX_EXT_ICONS         256
+#define L_MAX_SEPARATOR_LEN     16
 #define L_INITIAL_FILE_CAPACITY 64
 
 /* Line counting */

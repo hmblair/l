@@ -549,7 +549,18 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, const PrintCo
                     EMIT(line, pos, ENTRY_BUF_SIZE, "  ");
                 }
             }
-            EMIT(line, pos, ENTRY_BUF_SIZE, "  ");
+            if (i == NUM_COLUMNS - 1) {
+                /* Trailing gap before the diff/tree columns. */
+                EMIT(line, pos, ENTRY_BUF_SIZE, "  ");
+            } else {
+                const char *sep = ctx->cfg->column_separator;
+                if (sep[0]) {
+                    EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s ", CLR(ctx->cfg, COLOR_GREY), sep, RST(ctx->cfg));
+                } else {
+                    /* Blank separator: fall back to the original two-space gap. */
+                    EMIT(line, pos, ENTRY_BUF_SIZE, "  ");
+                }
+            }
         }
         /* Diff columns (only shown when there are diffs). A directory's counts
          * are its rolled-up view summary — the lines hidden inside descendants
