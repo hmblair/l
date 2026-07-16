@@ -84,6 +84,9 @@ typedef struct {
     X(git_staged,       "git_staged")       \
     X(git_deleted,      "git_deleted")      \
     X(git_upstream,     "git_upstream")     \
+    X(git_branch,       "git_branch")       \
+    X(git_commit,       "git_commit")       \
+    X(git_tag,          "git_tag")          \
     X(readonly,         "readonly")         \
     X(mount_point,      "mount_point")      \
     X(count_files,      "count_files")      \
