@@ -525,7 +525,11 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, const PrintCo
         abs_path = abs_path_buf;
     }
 
-    int is_cwd = (strcmp(abs_path, ctx->cfg->cwd) == 0);
+    /* Match on the logical path (symlinks preserved), not abs_path (realpath-
+     * resolved), so the marker follows the folder the user actually navigated
+     * through and lands on exactly one row even when a symlink and its target
+     * both appear in the tree. */
+    int is_cwd = (strcmp(fe->path, ctx->cfg->cwd) == 0);
     int is_hidden = (fe->name[0] == '.');
 
     char line[ENTRY_BUF_SIZE];
