@@ -763,7 +763,7 @@ static void measure_shown_subtree(const TreeNode *node, GitCache *git,
  * descendants follow child_is_shown — so alignment can never drift from what is
  * printed regardless of which flags or filters are active. Runs after the
  * git/grep visibility flags are computed, since child_is_shown depends on them. */
-void measure_columns(TreeNode **trees, int tree_count, GitCache *gits,
+void measure_columns(TreeNode **trees, int tree_count, GitCache *git,
                      const Icons *icons, const Config *cfg,
                      Column *cols, int *diff_add_width, int *diff_del_width) {
     int filtering = is_filtering_active(cfg);
@@ -779,11 +779,11 @@ void measure_columns(TreeNode **trees, int tree_count, GitCache *gits,
             for (size_t j = 0; j < root->child_count; j++) {
                 const TreeNode *child = &root->children[j];
                 if (!child_is_shown(child, cfg, filtering)) continue;
-                measure_shown_subtree(child, &gits[i], icons, cfg, filtering,
+                measure_shown_subtree(child, git, icons, cfg, filtering,
                                       cols, diff_add_width, diff_del_width);
             }
         } else {
-            measure_shown_subtree(root, &gits[i], icons, cfg, filtering,
+            measure_shown_subtree(root, git, icons, cfg, filtering,
                                   cols, diff_add_width, diff_del_width);
         }
     }

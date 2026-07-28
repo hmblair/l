@@ -595,23 +595,30 @@ int main(int argc, char **argv) {
     Column cols[NUM_COLUMNS];
     columns_init(cols);
 
-    /* Build all trees first (computes column widths across all arguments) */
+    /* Build all trees first (computes column widths across all arguments).
+     * The git cache is scoped to the whole invocation, not to a single argument:
+     * it is keyed by absolute path and already holds many repo roots at once, so
+     * every argument's tree is built into one shared cache. This keeps the data
+     * layer input-count-agnostic — the tree, flat-list, and interactive renderers
+     * all query the same cache by path (the picker flattens all trees into one
+     * list, so a per-argument cache would leave non-first inputs without git
+     * data). */
     TreeNode **trees = xmalloc(dir_count * sizeof(TreeNode *));
-    GitCache *gits = xmalloc(dir_count * sizeof(GitCache));
+    GitCache git;
+    git_cache_init(&git);
 
     for (int i = 0; i < dir_count; i++) {
-        git_cache_init(&gits[i]);
         if (cfg.show_ancestry) {
-            trees[i] = build_ancestry_tree_from_config(dirs[i], &gits[i], &cfg, &icons);
+            trees[i] = build_ancestry_tree_from_config(dirs[i], &git, &cfg, &icons);
         } else {
-            trees[i] = build_tree_from_config(dirs[i], &gits[i], &cfg, &icons);
+            trees[i] = build_tree_from_config(dirs[i], &git, &cfg, &icons);
         }
     }
 
     /* Pre-compute visibility flags for filtering */
     if (cfg.git_only) {
         for (int i = 0; i < dir_count; i++) {
-            compute_git_status_flags(trees[i], &gits[i], cfg.show_hidden);
+            compute_git_status_flags(trees[i], &git, cfg.show_hidden);
         }
     }
     if (cfg.grep_pattern) {
@@ -626,7 +633,7 @@ int main(int argc, char **argv) {
      * its own live visible set (select.c). */
     if (cfg.compute.git_status) {
         for (int i = 0; i < dir_count; i++) {
-            compute_view_summaries(trees[i], &cfg, &gits[i]);
+            compute_view_summaries(trees[i], &cfg, &git);
         }
     }
     /* Measure all column widths in one pass over the rows that will render.
@@ -634,14 +641,14 @@ int main(int argc, char **argv) {
      * on. Interactive mode re-measures over its own visible set (select.c). */
     int diff_add_width = 0, diff_del_width = 0;
     if (cfg.long_format) {
-        measure_columns(trees, dir_count, gits, &icons, &cfg,
+        measure_columns(trees, dir_count, &git, &icons, &cfg,
                         cols, &diff_add_width, &diff_del_width);
     }
 
     /* Interactive selection mode */
     if (cfg.interactive) {
         PrintContext ctx = {
-            .git = &gits[0],
+            .git = &git,
             .icons = &icons,
             .filetypes = &filetypes,
             .shebangs = &shebangs,
@@ -664,10 +671,9 @@ int main(int argc, char **argv) {
         for (int i = 0; i < dir_count; i++) {
             tree_node_free(trees[i]);
             free(trees[i]);
-            git_cache_free(&gits[i]);
         }
         free(trees);
-        free(gits);
+        git_cache_free(&git);
         cache_unload();
         return exit_code;
     }
@@ -692,7 +698,7 @@ int main(int argc, char **argv) {
                 }
             }
             PrintContext ctx = {
-                .git = &gits[i],
+                .git = &git,
                 .icons = &icons,
                 .filetypes = &filetypes,
                 .shebangs = &shebangs,
@@ -715,10 +721,9 @@ int main(int argc, char **argv) {
     for (int i = 0; i < dir_count; i++) {
         tree_node_free(trees[i]);
         free(trees[i]);
-        git_cache_free(&gits[i]);
     }
     free(trees);
-    free(gits);
+    git_cache_free(&git);
 
     cache_unload();
     return 0;

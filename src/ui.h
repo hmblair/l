@@ -67,7 +67,7 @@ void columns_init(Column *cols);
 void columns_update_widths(Column *cols, const FileEntry *fe, const Icons *icons);
 /* Single width-measuring pass: sizes the info and diff columns from exactly the
  * rows the renderer draws. Run after git/grep visibility flags are set. */
-void measure_columns(TreeNode **trees, int tree_count, GitCache *gits,
+void measure_columns(TreeNode **trees, int tree_count, GitCache *git,
                      const Icons *icons, const Config *cfg,
                      Column *cols, int *diff_add_width, int *diff_del_width);
 void diff_widths_update(int *add_width, int *del_width, const FileEntry *fe,
