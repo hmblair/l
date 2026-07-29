@@ -554,8 +554,16 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, const PrintCo
                 }
             }
             if (i == NUM_COLUMNS - 1) {
-                /* Trailing gap before the diff/tree columns. */
-                EMIT(line, pos, ENTRY_BUF_SIZE, "  ");
+                /* Trailing gap before the diff/tree columns. When diff columns
+                 * are present, mirror the inter-column separator so the dot
+                 * carries through; otherwise use the plain two-space gap. */
+                const char *sep = ctx->cfg->column_separator;
+                int has_diff = (ctx->diff_add_width > 0 || ctx->diff_del_width > 0);
+                if (has_diff && sep[0]) {
+                    EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s ", CLR(ctx->cfg, COLOR_GREY), sep, RST(ctx->cfg));
+                } else {
+                    EMIT(line, pos, ENTRY_BUF_SIZE, "  ");
+                }
             } else {
                 const char *sep = ctx->cfg->column_separator;
                 if (sep[0]) {
