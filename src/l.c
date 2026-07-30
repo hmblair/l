@@ -651,7 +651,7 @@ int main(int argc, char **argv) {
 
     int exit_code = 0;
     if (cfg.req.interactive) {
-        char *selected = select_run(trees, dir_count, &ctx);
+        char *selected = select_run(&trees, dir_count, dirs, &ctx);
         if (selected) {
             printf("%s\n", selected);
             free(selected);

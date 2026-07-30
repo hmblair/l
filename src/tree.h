@@ -198,10 +198,6 @@ TreeNode *build_ancestry_tree(const char *path, const TreeBuildOpts *opts,
 void tree_expand_node(TreeNode *node, const TreeBuildOpts *opts,
                       GitCache *git, const Icons *icons);
 
-/* Re-scan an already-expanded directory node (frees children and re-expands) */
-void tree_rescan_node(TreeNode *node, const TreeBuildOpts *opts,
-                      GitCache *git, const Icons *icons);
-
 /* ============================================================================
  * Tree Traversal Helpers
  * ============================================================================ */

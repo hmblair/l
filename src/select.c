@@ -1,5 +1,13 @@
 /*
  * select.c - Interactive file selection mode
+ *
+ * A cursor over the same View the static listing draws. The tree is a
+ * snapshot taken when the picker opens: opening a directory extends the tree
+ * from that point (lazy materialization), closing one just collapses the
+ * view, and 'r' rebuilds everything from scratch — exactly as if the picker
+ * had been closed and reopened, with the cursor put back by path. There is
+ * no automatic refresh: the input poll blocks, so an idle picker does no
+ * work at all.
  */
 
 #include "select.h"
@@ -10,7 +18,6 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <poll.h>
-#include <time.h>
 
 /* ============================================================================
  * Terminal Handling
@@ -19,13 +26,12 @@
 static struct termios orig_termios;
 static int raw_mode_enabled = 0;
 static int saved_stdout_fd = -1;  /* Original stdout, saved before tty redirect */
-static int sigint_visible_lines = 0;  /* Lines on screen, for cleanup in signal handler */
 
 static void term_disable_raw(void) {
     if (raw_mode_enabled) {
         tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
         printf("\033[?7h");   /* Re-enable line wrap */
-    printf("\033[?25h");  /* Show cursor */
+        printf("\033[?25h");  /* Show cursor */
         fflush(stdout);
         raw_mode_enabled = 0;
     }
@@ -72,6 +78,7 @@ typedef enum {
     KEY_QUIT,
     KEY_OPEN,
     KEY_YANK,
+    KEY_RELOAD,       /* 'r' — rebuild the whole tree from scratch */
     KEY_FILTER_FILES,
     KEY_FILTER,       /* '/' — enter interactive filter mode */
     KEY_CHAR,         /* a printable character typed in filter mode */
@@ -79,11 +86,11 @@ typedef enum {
     KEY_ESC           /* leave filter mode / clear query */
 } KeyPress;
 
-/* Wait for stdin to become readable within timeout_ms.
- * Returns 1 if readable, 0 on timeout, -1 on error. */
-static int poll_stdin(int timeout_ms) {
+/* Wait for stdin to become readable; blocks indefinitely (there is no
+ * background work to wake up for). Returns 1 if readable, -1 on error. */
+static int poll_stdin(void) {
     struct pollfd pfd = { .fd = STDIN_FILENO, .events = POLLIN };
-    return poll(&pfd, 1, timeout_ms);
+    return poll(&pfd, 1, -1);
 }
 
 /* Read one escape sequence after ESC. Returns the mapped arrow KeyPress, or
@@ -114,10 +121,12 @@ static KeyPress read_escape_sequence(void) {
 /* Read a key. In filter mode, printable characters are returned as KEY_CHAR
  * (with the byte stored in *out_char) so the caller can build a query, and
  * bare ESC leaves filter mode; in normal mode the vim-style navigation keys
- * apply and ESC quits. */
+ * apply and ESC quits. EOF on stdin quits (nothing further can ever arrive). */
 static KeyPress term_read_key(int filter_mode, char *out_char) {
     char c;
-    if (read(STDIN_FILENO, &c, 1) != 1) return KEY_NONE;
+    ssize_t n = read(STDIN_FILENO, &c, 1);
+    if (n == 0) return KEY_QUIT;   /* EOF */
+    if (n != 1) return KEY_NONE;
 
     if (c == 3) return KEY_QUIT;              /* Ctrl+C */
     if (c == '\n' || c == '\r') return KEY_ENTER;
@@ -143,6 +152,7 @@ static KeyPress term_read_key(int filter_mode, char *out_char) {
     if (c == 'l' || c == 'L') return KEY_RIGHT;
     if (c == 'o' || c == 'O') return KEY_OPEN;
     if (c == 'y' || c == 'Y') return KEY_YANK;
+    if (c == 'r' || c == 'R') return KEY_RELOAD;
     if (c == 'f' || c == 'F') return KEY_FILTER_FILES;
     if (c == '/') return KEY_FILTER;
 
@@ -155,406 +165,136 @@ static KeyPress term_read_key(int filter_mode, char *out_char) {
 }
 
 /* ============================================================================
- * Expanded Directory Set - external UI state tracking which dirs are open
- * ============================================================================ */
-
-#define MAX_EXPANDED 1024
-
-typedef struct {
-    char *paths[MAX_EXPANDED];
-    int count;
-} ExpandedSet;
-
-static void expanded_init(ExpandedSet *set) {
-    set->count = 0;
-}
-
-static void expanded_free(ExpandedSet *set) {
-    for (int i = 0; i < set->count; i++) {
-        free(set->paths[i]);
-    }
-    set->count = 0;
-}
-
-static int expanded_contains(ExpandedSet *set, const char *path) {
-    for (int i = 0; i < set->count; i++) {
-        if (strcmp(set->paths[i], path) == 0) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-static void expanded_add(ExpandedSet *set, const char *path) {
-    if (expanded_contains(set, path)) return;
-    if (set->count < MAX_EXPANDED) {
-        char *dup = strdup(path);
-        if (dup) set->paths[set->count++] = dup;
-    }
-}
-
-static void expanded_remove(ExpandedSet *set, const char *path) {
-    for (int i = 0; i < set->count; i++) {
-        if (strcmp(set->paths[i], path) == 0) {
-            free(set->paths[i]);
-            if (i < set->count - 1) {
-                set->paths[i] = set->paths[set->count - 1];
-            }
-            set->count--;
-            return;
-        }
-    }
-}
-
-/* Seed the expanded set from the initially-built tree (dirs that were expanded
- * by the initial depth-limited scan). */
-static void expanded_seed_from_tree(ExpandedSet *set, TreeNode *node) {
-    if (node_is_directory(node) && node->was_expanded) {
-        expanded_add(set, node->entry.path);
-    }
-    for (size_t i = 0; i < node->child_count; i++) {
-        expanded_seed_from_tree(set, &node->children[i]);
-    }
-}
-
-/* ============================================================================
  * Selection State
  * ============================================================================ */
 
-/* Info stored for each flattened node */
 typedef struct {
-    TreeNode *node;
-    int depth;
-    int has_visible_children;
-    int continuation[L_MAX_DEPTH];  /* Copy of continuation state at this node */
-} FlatNode;
-
-typedef struct {
-    FlatNode *items;
-    int count;
-    int capacity;
-    int cursor;            /* Current cursor position */
+    View *view;            /* The rows on display (view.c owns the policy) */
+    int cursor;            /* Current cursor position (index into view->rows) */
     int scroll_offset;     /* First visible line */
     int term_rows;         /* Terminal height */
     int visible_lines;     /* Lines currently displayed */
     int first_render;      /* Is this the first render? */
     int filter_mode;       /* Currently typing an interactive filter */
-    int filter_active;     /* A non-empty filter query is applied */
     int filter_len;        /* Length of the filter query */
     char filter[256];      /* Interactive substring/glob filter query */
-    int diff_add_width;    /* Live diff +column width over visible rows (0=hide) */
-    int diff_del_width;    /* Live diff -column width over visible rows (0=hide) */
 } SelectState;
 
-static void state_init(SelectState *state) {
-    state->items = NULL;
-    state->count = 0;
-    state->capacity = 0;
-    state->cursor = 0;
-    state->scroll_offset = 0;
-    state->term_rows = 24;
-    state->visible_lines = 0;
-    state->first_render = 1;
-    state->filter_mode = 0;
-    state->filter_active = 0;
-    state->filter_len = 0;
-    state->filter[0] = '\0';
-    state->diff_add_width = 0;
-    state->diff_del_width = 0;
+static int row_count(const SelectState *state) {
+    return (int)state->view->count;
 }
 
-static void state_clear(SelectState *state) {
-    state->count = 0;
-    /* Keep capacity and allocated memory for reuse */
+static TreeNode *row_node(const SelectState *state, int index) {
+    return state->view->rows[index].node;
 }
 
-static void state_add(SelectState *state, TreeNode *node, int depth,
-                      int has_visible_children, int *continuation) {
-    if (state->count >= state->capacity) {
-        int new_cap = state->capacity ? state->capacity * 2 : 256;
-        FlatNode *new_items = realloc(state->items, new_cap * sizeof(FlatNode));
-        if (!new_items) return;  /* Out of memory - skip this node */
-        state->items = new_items;
-        state->capacity = new_cap;
-    }
-    FlatNode *item = &state->items[state->count];
-    item->node = node;
-    item->depth = depth;
-    item->has_visible_children = has_visible_children;
-    memcpy(item->continuation, continuation, L_MAX_DEPTH * sizeof(int));
-    state->count++;
-}
-
-static void state_free(SelectState *state) {
-    free(state->items);
-    state->items = NULL;
-    state->count = 0;
-    state->capacity = 0;
-}
-
-/* ============================================================================
- * Tree Flattening
- * ============================================================================ */
-
-/* Count visible children for a node (only if expanded).
- * Filtering only applies within the initial tree depth; nodes expanded
- * interactively beyond that depth are always visible. */
-static int count_visible_children(const SelectState *state, const TreeNode *node,
-                                   const Config *cfg, ExpandedSet *expanded,
-                                   int depth, int filter_depth) {
-    if (!node_is_directory(node)) return 0;
-    if (!expanded_contains(expanded, node->entry.path)) return 0;
-    int filtering = (depth < filter_depth) && is_filtering_active(cfg);
-    int count = 0;
-    for (size_t i = 0; i < node->child_count; i++) {
-        if (node_is_shown(&node->children[i], cfg, filtering, state->filter_active)) {
-            count++;
-        }
-    }
-    return count;
-}
-
-static void flatten_children(SelectState *state, const TreeNode *parent,
-                             int depth, int *continuation, const Config *cfg,
-                             ExpandedSet *expanded, int filter_depth);
-
-static void flatten_node(SelectState *state, TreeNode *node, int depth,
-                         int *continuation, const Config *cfg,
-                         ExpandedSet *expanded, int filter_depth) {
-    /* When an interactive filter is active, hide non-matching nodes at every
-     * depth — including top-level roots, which flatten_children's pre-filter
-     * never sees. matches_grep is recomputed from the live query in
-     * apply_filter(); a directory still shows if any descendant matches. */
-    if (state->filter_active && !node->matches_grep) return;
-
-    int has_visible_children = count_visible_children(state, node, cfg, expanded,
-                                                      depth, filter_depth) > 0;
-
-    /* Add this node */
-    state_add(state, node, depth, has_visible_children, continuation);
-
-    /* Recurse into children only if this dir is in the expanded set */
-    int is_expanded = expanded_contains(expanded, node->entry.path);
-    if (node->child_count > 0 && is_expanded) {
-        flatten_children(state, node, depth, continuation, cfg, expanded,
-                         filter_depth);
-    }
-}
-
-static void flatten_children(SelectState *state, const TreeNode *parent,
-                             int depth, int *continuation, const Config *cfg,
-                             ExpandedSet *expanded, int filter_depth) {
-    if (parent->child_count == 0) return;
-
-    /* Filter only within the original tree depth; interactively expanded
-     * nodes beyond that are always visible. */
-    int filtering = (depth < filter_depth) && is_filtering_active(cfg);
-
-    /* Build list of visible children indices */
-    size_t *visible_indices = malloc(parent->child_count * sizeof(size_t));
-    if (!visible_indices) return;  /* Out of memory */
-    size_t visible_count = 0;
-
-    for (size_t i = 0; i < parent->child_count; i++) {
-        if (node_is_shown(&parent->children[i], cfg, filtering, state->filter_active)) {
-            visible_indices[visible_count++] = i;
-        }
-    }
-
-    /* Flatten each visible child */
-    for (size_t vi = 0; vi < visible_count; vi++) {
-        size_t i = visible_indices[vi];
-        TreeNode *child = &parent->children[i];
-        int is_last = (vi == visible_count - 1);
-
-        /* Set continuation for this depth */
-        continuation[depth] = !is_last;
-
-        flatten_node(state, child, depth + 1, continuation, cfg, expanded,
-                     filter_depth);
-    }
-
-    free(visible_indices);
-}
-
-static void flatten_all(SelectState *state, TreeNode **trees, int tree_count,
-                        const Config *cfg, ExpandedSet *expanded) {
-    int continuation[L_MAX_DEPTH] = {0};
-    state_clear(state);
-    for (int i = 0; i < tree_count; i++) {
-        memset(continuation, 0, sizeof(continuation));
-        flatten_node(state, trees[i], 0, continuation, cfg, expanded,
-                     cfg->req.max_depth);
-    }
-}
-
-/* Recalculate column widths based on visible (flattened) items only */
-/* Re-measure the display widths over the currently visible rows. Interactive
- * mode owns which entries are visible; the per-entry measurement (column widths
- * and whether the diff columns appear at all) is the renderer's, so this just
- * iterates the visible set and defers to ui.c's column/diff measurers. Must run
- * whenever the visible set changes (filter, expand/collapse, rescan). */
-static void recalculate_widths(SelectState *state, const PrintContext *ctx) {
-    state->diff_add_width = 0;
-    state->diff_del_width = 0;
-    if (!ctx->columns) return;  /* short format: no columns, no diff columns */
-
-    for (int i = 0; i < NUM_COLUMNS; i++) {
-        ctx->columns[i].width = 1;
-    }
-    for (int i = 0; i < state->count; i++) {
-        const FileEntry *fe = &state->items[i].node->entry;
-        columns_update_widths(ctx->columns, fe, ctx->icons);
-        diff_widths_update(&state->diff_add_width, &state->diff_del_width,
-                           fe, ctx->git);
-    }
-}
-
-/* Data pass: for each visible directory, precompute the git status of its
- * descendants not shown on their own row. The flattened items ARE the shown
- * rows, so hand them to the shared bottom-up attribution (view.c) — the same
- * engine the static view uses. */
-static void recompute_view_summaries(SelectState *state, const PrintContext *ctx) {
-    if (state->count == 0) return;
-    TreeNode **visible = malloc(state->count * sizeof(TreeNode *));
-    if (!visible) return;
-    for (int i = 0; i < state->count; i++) {
-        visible[i] = state->items[i].node;
-    }
-    git_attribute_to_view(ctx->git, visible, (size_t)state->count);
-    free(visible);
-}
-
-/* Re-prepare everything the renderer reads after the visible set changes. View
- * summaries first: the width pass reads them to size the diff columns. */
-static void prepare_view(SelectState *state, const PrintContext *ctx) {
-    recompute_view_summaries(state, ctx);
-    recalculate_widths(state, ctx);
-}
-
-/* Recompute the interactive filter: refresh per-node match flags from the
- * current query (reusing the grep matcher), re-flatten the visible list, and
- * reset the cursor to the first match. A cleared query disables filtering. */
-static void apply_filter(SelectState *state, TreeNode **trees, int tree_count,
-                         PrintContext *ctx, ExpandedSet *expanded) {
-    state->filter_active = state->filter_len > 0;
-    /* Recompute match flags from the live query while filtering; when the query
-     * is cleared, restore any CLI filter pattern (-f/--filter) so its flags
-     * aren't left holding our query's results. */
-    const char *pattern = state->filter_active ? state->filter
-                                               : ctx->cfg->req.grep_pattern;
+/* Rebuild the View after anything changes what should be shown (expansion,
+ * filter, reload): refresh match flags for the active query (or restore the
+ * CLI -f pattern's so its flags aren't left holding our query's results),
+ * build the rows through the shared engine, and repoint the render context
+ * at the new columns and diff widths. */
+static void picker_rebuild(SelectState *state, TreeNode **trees, int tree_count,
+                           PrintContext *ctx) {
+    int live_filter = state->filter_len > 0;
+    const char *pattern = live_filter ? state->filter
+                                      : ctx->cfg->req.grep_pattern;
     if (pattern) {
         for (int i = 0; i < tree_count; i++) {
             compute_grep_flags(trees[i], pattern);
         }
     }
-    flatten_all(state, trees, tree_count, ctx->cfg, expanded);
-    prepare_view(state, ctx);
-    state->cursor = 0;
-    state->scroll_offset = 0;
+
+    view_free(state->view);
+    ViewOptions vo = {
+        .interactive = 1,
+        .live_filter = live_filter,
+        .filter_depth = ctx->cfg->req.max_depth,
+    };
+    state->view = view_build_opts(trees, tree_count, ctx->cfg, ctx->git,
+                                  ctx->icons, &vo);
+
+    ctx->columns = ctx->cfg->disp.long_format ? state->view->cols : NULL;
+    ctx->diff_add_width = state->view->diff_add_width;
+    ctx->diff_del_width = state->view->diff_del_width;
 }
 
 /* ============================================================================
- * Live Refresh
+ * Cursor Placement
  * ============================================================================ */
 
-#define REFRESH_INTERVAL_MS  100
-#define GIT_REFRESH_INTERVAL_MS  5000
-
-static struct timespec timespec_now(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ts;
-}
-
-static long timespec_diff_ms(struct timespec a, struct timespec b) {
-    return (a.tv_sec - b.tv_sec) * 1000 + (a.tv_nsec - b.tv_nsec) / 1000000;
-}
-
-/* Recursively expand all dirs in the expanded set under a given node */
-static void expand_from_set(TreeNode *node, ExpandedSet *expanded,
-                            const TreeBuildOpts *opts, GitCache *git,
-                            const Icons *icons) {
-    for (size_t i = 0; i < node->child_count; i++) {
-        TreeNode *child = &node->children[i];
-        if (node_is_directory(child) && expanded_contains(expanded, child->entry.path)) {
-            tree_expand_node(child, opts, git, icons);
-            expand_from_set(child, expanded, opts, git, icons);
+/* Put the cursor on a specific node (pointer identity; nodes are stable
+ * across everything except a reload). Keeps the old position if absent. */
+static void cursor_to_node(SelectState *state, const TreeNode *node) {
+    for (int i = 0; i < row_count(state); i++) {
+        if (row_node(state, i) == node) {
+            state->cursor = i;
+            return;
         }
     }
 }
 
-/* Recursively check and rescan a node and its expanded children (top-down).
- * Walks the live tree, not the flattened state, so rescan is safe. */
-static int rescan_recursive(TreeNode *node, ExpandedSet *expanded,
-                            const TreeBuildOpts *opts, GitCache *git,
-                            const Icons *icons) {
-    if (!node_is_directory(node)) return 0;
-    if (!expanded_contains(expanded, node->entry.path)) return 0;
-
-    struct stat st;
-    if (stat(node->entry.path, &st) != 0) return 0;
-
-    time_t new_mtime = GET_MTIME(st);
-    if (new_mtime != node->entry.mtime) {
-        /* This node changed — rescan it, which rebuilds all children.
-         * expand_from_set re-expands any children in the expanded set,
-         * recursively, so we don't need to recurse further here. */
-        node->entry.mtime = new_mtime;
-        tree_rescan_node(node, opts, git, icons);
-        expand_from_set(node, expanded, opts, git, icons);
-        return 1;
+/* Put the cursor on a path after a reload: exact match, else the deepest
+ * visible ancestor, else clamp the current index. */
+static void cursor_to_path(SelectState *state, const char *path) {
+    if (!path) return;
+    int best = -1;
+    size_t best_len = 0;
+    for (int i = 0; i < row_count(state); i++) {
+        const char *row_path = row_node(state, i)->entry.path;
+        size_t len = strlen(row_path);
+        if (strcmp(row_path, path) == 0) {
+            state->cursor = i;
+            return;
+        }
+        if (len > best_len && strncmp(path, row_path, len) == 0 &&
+            path[len] == '/') {
+            best = i;
+            best_len = len;
+        }
     }
-
-    /* No change at this level — check children */
-    int changed = 0;
-    for (size_t i = 0; i < node->child_count; i++) {
-        changed |= rescan_recursive(&node->children[i], expanded, opts, git, icons);
-    }
-    return changed;
+    if (best >= 0) state->cursor = best;
 }
 
-/* Check expanded directories for mtime changes. Rescan any that changed.
- * When refresh_git is set, force rescan of all expanded dirs with git status.
- * Returns 1 if anything was rescanned. */
-static int check_and_rescan(SelectState *state, TreeNode **trees, int tree_count,
-                            PrintContext *ctx, ExpandedSet *expanded,
-                            int refresh_git) {
-    TreeBuildOpts opts = config_to_build_opts(ctx->cfg);
-    if (!refresh_git) {
-        opts.compute.git_status = 0;
-        opts.compute.git_diff = 0;
-    }
+/* Find next file index (skipping directories), returns -1 if none found */
+static int find_next_file(SelectState *state, int from, int direction) {
+    int count = row_count(state);
+    if (count == 0) return -1;
 
-    int changed = 0;
-    for (int i = 0; i < tree_count; i++) {
-        changed |= rescan_recursive(trees[i], expanded, &opts, ctx->git, ctx->icons);
-    }
-
-    if (changed) {
-        /* A rescan rebuilds child nodes, dropping their match flags; recompute
-         * them so an active interactive filter keeps applying after refresh. */
-        if (state->filter_active) {
-            for (int i = 0; i < tree_count; i++) {
-                compute_grep_flags(trees[i], state->filter);
-            }
-        }
-        flatten_all(state, trees, tree_count, ctx->cfg, expanded);
-        prepare_view(state, ctx);
-
-        /* Remove stale paths (deleted directories) from expanded set */
-        for (int i = expanded->count - 1; i >= 0; i--) {
-            struct stat st;
-            if (stat(expanded->paths[i], &st) != 0) {
-                free(expanded->paths[i]);
-                if (i < expanded->count - 1)
-                    expanded->paths[i] = expanded->paths[expanded->count - 1];
-                expanded->count--;
-            }
+    for (int i = 1; i < count; i++) {
+        int idx = (from + i * direction + count) % count;
+        if (!node_is_directory(row_node(state, idx))) {
+            return idx;
         }
     }
+    return -1;  /* No files found */
+}
 
-    return changed;
+/* Snap cursor to nearest valid position. In files_only mode, finds the
+ * closest file entry; otherwise just clamps to bounds. */
+static void snap_cursor(SelectState *state, int files_only) {
+    int count = row_count(state);
+    if (count == 0) { state->cursor = 0; return; }
+    if (state->cursor >= count)
+        state->cursor = count - 1;
+
+    if (!files_only || !node_is_directory(row_node(state, state->cursor)))
+        return;
+
+    /* Search forward and backward for the nearest file */
+    int fwd = -1, bwd = -1;
+    for (int i = state->cursor + 1; i < count; i++) {
+        if (!node_is_directory(row_node(state, i))) { fwd = i; break; }
+    }
+    for (int i = state->cursor - 1; i >= 0; i--) {
+        if (!node_is_directory(row_node(state, i))) { bwd = i; break; }
+    }
+    if (fwd >= 0 && bwd >= 0)
+        state->cursor = (fwd - state->cursor <= state->cursor - bwd) ? fwd : bwd;
+    else if (fwd >= 0)
+        state->cursor = fwd;
+    else if (bwd >= 0)
+        state->cursor = bwd;
+    /* else: no files at all, stay put */
 }
 
 /* ============================================================================
@@ -571,8 +311,8 @@ static void get_terminal_size(int *rows) {
 }
 
 static void render_line(SelectState *state, int index, int is_selected,
-                        PrintContext *ctx, ExpandedSet *expanded) {
-    FlatNode *item = &state->items[index];
+                        PrintContext *ctx) {
+    const ViewRow *row = &state->view->rows[index];
 
     /* Clear line */
     printf("\r\033[K");
@@ -586,33 +326,24 @@ static void render_line(SelectState *state, int index, int is_selected,
         /* Pad with spaces to match cursor icon width (assume single-width for now) */
         snprintf(prefix_buf, sizeof(prefix_buf), "  ");
     }
-    const char *prefix = prefix_buf;
 
-    /* Copy continuation state into context */
-    memcpy(ctx->continuation, item->continuation, L_MAX_DEPTH * sizeof(int));
+    /* Decode the row's continuation mask into the context's array */
+    for (int d = 0; d < row->depth && d < L_MAX_DEPTH; d++) {
+        ctx->continuation[d] = (row->cont_mask >> d) & 1;
+    }
 
-    /* Determine expansion state from the external set */
-    int is_expanded = node_is_directory(item->node) &&
-                      expanded_contains(expanded, item->node->entry.path);
-
-    /* Create a modified context with the line prefix. The diff-column widths
-     * are taken from the live measurement over the visible rows (0 hides the
-     * column) rather than the stale startup widths in ctx. */
     PrintContext line_ctx = *ctx;
-    line_ctx.line_prefix = prefix;
-    line_ctx.continuation = ctx->continuation;
+    line_ctx.line_prefix = prefix_buf;
     line_ctx.selected = is_selected;
-    line_ctx.diff_add_width = state->diff_add_width;
-    line_ctx.diff_del_width = state->diff_del_width;
 
-    /* Call the real print_entry */
-    print_entry(&item->node->entry, item->depth, is_expanded, &line_ctx);
+    print_entry(&row->node->entry, row->depth, row->expanded, &line_ctx);
 }
 
-static void render_picker(SelectState *state, PrintContext *ctx, ExpandedSet *expanded, int files_only) {
+static void render_picker(SelectState *state, PrintContext *ctx, int files_only) {
+    int count = row_count(state);
     int max_visible = state->term_rows - 2;  /* Leave room for status line */
     if (max_visible < 1) max_visible = 1;
-    if (max_visible > state->count) max_visible = state->count;
+    if (max_visible > count) max_visible = count;
 
     /* Adjust scroll to keep cursor visible */
     if (state->cursor < state->scroll_offset) {
@@ -630,24 +361,24 @@ static void render_picker(SelectState *state, PrintContext *ctx, ExpandedSet *ex
 
     /* Render visible lines */
     int end = state->scroll_offset + max_visible;
-    if (end > state->count) end = state->count;
+    if (end > count) end = count;
     int new_visible = (end - state->scroll_offset) + 1;  /* +1 for status */
 
     for (int i = state->scroll_offset; i < end; i++) {
-        render_line(state, i, i == state->cursor, ctx, expanded);
+        render_line(state, i, i == state->cursor, ctx);
     }
 
     /* Status line */
     if (state->filter_mode) {
         printf("\r\033[K%s/%s%s   %s%d match%s   [Enter] select  [Esc] cancel%s",
                COLOR_CYAN, COLOR_RESET, state->filter,
-               COLOR_GREY, state->count, state->count == 1 ? "" : "es",
+               COLOR_GREY, count, count == 1 ? "" : "es",
                COLOR_RESET);
     } else if (files_only) {
-        printf("\r\033[K%s[j/k] files  [f] all  [/] filter  [h/l] fold  [o] open  [y] yank  [Enter] select  [q] quit%s",
+        printf("\r\033[K%s[j/k] files  [f] all  [/] filter  [h/l] fold  [o] open  [y] yank  [r] reload  [Enter] select  [q] quit%s",
                COLOR_GREY, COLOR_RESET);
     } else {
-        printf("\r\033[K%s[j/k] move  [f] files  [/] filter  [h/l] fold  [o] open  [y] yank  [Enter] select  [q] quit%s",
+        printf("\r\033[K%s[j/k] move  [f] files  [/] filter  [h/l] fold  [o] open  [y] yank  [r] reload  [Enter] select  [q] quit%s",
                COLOR_GREY, COLOR_RESET);
     }
 
@@ -664,56 +395,10 @@ static void render_picker(SelectState *state, PrintContext *ctx, ExpandedSet *ex
 
     /* Track how many lines we printed */
     state->visible_lines = new_visible;
-    sigint_visible_lines = new_visible;
 }
 
 /* ============================================================================
- * Navigation Helpers
- * ============================================================================ */
-
-/* Find next file index (skipping directories), returns -1 if none found */
-static int find_next_file(SelectState *state, int from, int direction) {
-    int count = state->count;
-    if (count == 0) return -1;
-
-    for (int i = 1; i < count; i++) {
-        int idx = (from + i * direction + count) % count;
-        if (!node_is_directory(state->items[idx].node)) {
-            return idx;
-        }
-    }
-    return -1;  /* No files found */
-}
-
-/* Snap cursor to nearest valid position. In files_only mode, finds the
- * closest file entry; otherwise just clamps to bounds. */
-static void snap_cursor(SelectState *state, int files_only) {
-    if (state->count == 0) { state->cursor = 0; return; }
-    if (state->cursor >= state->count)
-        state->cursor = state->count - 1;
-
-    if (!files_only || !node_is_directory(state->items[state->cursor].node))
-        return;
-
-    /* Search forward and backward for the nearest file */
-    int fwd = -1, bwd = -1;
-    for (int i = state->cursor + 1; i < state->count; i++) {
-        if (!node_is_directory(state->items[i].node)) { fwd = i; break; }
-    }
-    for (int i = state->cursor - 1; i >= 0; i--) {
-        if (!node_is_directory(state->items[i].node)) { bwd = i; break; }
-    }
-    if (fwd >= 0 && bwd >= 0)
-        state->cursor = (fwd - state->cursor <= state->cursor - bwd) ? fwd : bwd;
-    else if (fwd >= 0)
-        state->cursor = fwd;
-    else if (bwd >= 0)
-        state->cursor = bwd;
-    /* else: no files at all, stay put */
-}
-
-/* ============================================================================
- * Clipboard
+ * Opening Files
  * ============================================================================ */
 
 /* Check if file should be opened with system handler vs EDITOR */
@@ -793,17 +478,14 @@ static void copy_to_clipboard(const char *text) {
  * Main Selection Loop
  * ============================================================================ */
 
-char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
+char *select_run(TreeNode ***trees_ref, int tree_count, char *const *dirs,
+                 PrintContext *ctx) {
+    TreeNode **trees = *trees_ref;
+
     SelectState state;
-    state_init(&state);
-
-    ExpandedSet expanded;
-    expanded_init(&expanded);
-
-    /* Seed expanded set from the initially-built tree */
-    for (int i = 0; i < tree_count; i++) {
-        expanded_seed_from_tree(&expanded, trees[i]);
-    }
+    memset(&state, 0, sizeof(state));
+    state.term_rows = 24;
+    state.first_render = 1;
 
     /* Filter mode: 0 = all, 1 = files only */
     int files_only = 0;
@@ -811,12 +493,16 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
     /* We need a continuation array for rendering */
     int continuation[L_MAX_DEPTH] = {0};
 
-    /* Flatten all trees into visible node list (with filter applied) */
-    flatten_all(&state, trees, tree_count, ctx->cfg, &expanded);
+    /* Set up our own render context (the caller's stays untouched) */
+    PrintContext render_ctx = *ctx;
+    render_ctx.continuation = continuation;
+    render_ctx.line_prefix = NULL;
 
-    if (state.count == 0) {
-        state_free(&state);
-        expanded_free(&expanded);
+    /* Build the initial view */
+    picker_rebuild(&state, trees, tree_count, &render_ctx);
+
+    if (row_count(&state) == 0) {
+        view_free(state.view);
         return NULL;
     }
 
@@ -836,203 +522,147 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
         close(tty_fd);
     }
 
-    /* Get terminal size */
     get_terminal_size(&state.term_rows);
-
-    /* Set up context with our continuation array */
-    PrintContext render_ctx = *ctx;
-    render_ctx.continuation = continuation;
-    render_ctx.line_prefix = NULL;
     render_ctx.term_width = get_terminal_width();
-
-    /* Measure column and diff-column widths over the initial visible set. */
-    prepare_view(&state, &render_ctx);
 
     /* Enter raw mode and render */
     term_enable_raw();
-    render_picker(&state, &render_ctx, &expanded, files_only);
+    render_picker(&state, &render_ctx, files_only);
 
     char *result = NULL;
 
-    /* Live refresh timers */
-    struct timespec last_git_refresh = timespec_now();
-
     while (1) {
-        /* Safety check - exit if tree becomes empty. Stay while filtering so a
-         * query that currently matches nothing can still be edited/cleared. */
-        if (state.count == 0 && !state.filter_mode) break;
+        /* Exit if the view is empty. Stay while filtering so a query that
+         * currently matches nothing can still be edited/cleared. */
+        if (row_count(&state) == 0 && !state.filter_mode) break;
 
-        /* Check for Ctrl+C */
         if (sigint_received) goto cleanup;
-
-        /* Poll stdin with timeout for live refresh */
-        int ready = poll_stdin(REFRESH_INTERVAL_MS);
+        int ready = poll_stdin();
         if (sigint_received) goto cleanup;
-        if (ready == 0) {
-            /* Check if root directories still exist */
-            int any_alive = 0;
-            for (int i = 0; i < tree_count; i++) {
-                struct stat st;
-                if (stat(trees[i]->entry.path, &st) == 0) {
-                    any_alive = 1;
-                    break;
-                }
-            }
-            if (!any_alive) break;
-
-            /* Timeout — check for filesystem changes */
-            struct timespec now = timespec_now();
-            int do_git = timespec_diff_ms(now, last_git_refresh) >= GIT_REFRESH_INTERVAL_MS;
-            int old_cursor = state.cursor;
-            char *cur_path = state.count > 0
-                ? strdup(state.items[state.cursor].node->entry.path) : NULL;
-
-            if (check_and_rescan(&state, trees, tree_count, ctx, &expanded, do_git)) {
-                if (do_git) last_git_refresh = now;
-
-                /* Restore cursor: try same path, fall back to same position */
-                int found = 0;
-                if (cur_path) {
-                    for (int i = 0; i < state.count; i++) {
-                        if (strcmp(state.items[i].node->entry.path, cur_path) == 0) {
-                            state.cursor = i;
-                            found = 1;
-                            break;
-                        }
-                    }
-                }
-                if (!found) {
-                    state.cursor = old_cursor;
-                }
-                snap_cursor(&state, files_only);
-
-                get_terminal_size(&state.term_rows);
-                render_picker(&state, &render_ctx, &expanded, files_only);
-            } else if (do_git) {
-                last_git_refresh = now;
-            }
-            free(cur_path);
-            continue;
-        }
-        if (ready < 0) continue;  /* Signal interrupted poll */
+        if (ready <= 0) continue;  /* signal interrupted poll */
 
         char typed = 0;
         KeyPress key = term_read_key(state.filter_mode, &typed);
-        FlatNode *current = state.count > 0 ? &state.items[state.cursor] : NULL;
+        TreeNode *current = row_count(&state) > 0
+            ? row_node(&state, state.cursor) : NULL;
 
         switch (key) {
             case KEY_UP:
-                if (state.count == 0) break;
+                if (row_count(&state) == 0) break;
                 if (files_only) {
                     int next = find_next_file(&state, state.cursor, -1);
                     if (next >= 0) state.cursor = next;
                 } else {
-                    state.cursor = (state.cursor - 1 + state.count) % state.count;
+                    state.cursor = (state.cursor - 1 + row_count(&state)) % row_count(&state);
                 }
-                render_picker(&state, &render_ctx, &expanded, files_only);
+                render_picker(&state, &render_ctx, files_only);
                 break;
 
             case KEY_DOWN:
-                if (state.count == 0) break;
+                if (row_count(&state) == 0) break;
                 if (files_only) {
                     int next = find_next_file(&state, state.cursor, 1);
                     if (next >= 0) state.cursor = next;
                 } else {
-                    state.cursor = (state.cursor + 1) % state.count;
+                    state.cursor = (state.cursor + 1) % row_count(&state);
                 }
-                render_picker(&state, &render_ctx, &expanded, files_only);
+                render_picker(&state, &render_ctx, files_only);
                 break;
 
             case KEY_LEFT:
-                /* Collapse current directory if it's expanded */
-                if (current && node_is_directory(current->node) &&
-                    expanded_contains(&expanded, current->node->entry.path)) {
-                    expanded_remove(&expanded, current->node->entry.path);
-                    const char *cur_path = current->node->entry.path;
-                    flatten_all(&state, trees, tree_count, ctx->cfg, &expanded);
-                    prepare_view(&state, ctx);
-                    state.cursor = 0;
-                    for (int i = 0; i < state.count; i++) {
-                        if (strcmp(state.items[i].node->entry.path, cur_path) == 0) {
-                            state.cursor = i;
-                            break;
-                        }
-                    }
-                    render_picker(&state, &render_ctx, &expanded, files_only);
+                /* Collapse current directory */
+                if (current && node_is_directory(current) && current->ui_expanded) {
+                    current->ui_expanded = 0;
+                    picker_rebuild(&state, trees, tree_count, &render_ctx);
+                    cursor_to_node(&state, current);
+                    snap_cursor(&state, files_only);
+                    render_picker(&state, &render_ctx, files_only);
                 }
                 break;
 
             case KEY_RIGHT:
-                /* Expand current directory */
-                if (current && node_is_directory(current->node) &&
-                    !expanded_contains(&expanded, current->node->entry.path)) {
-                    /* Load children if not yet loaded */
-                    if (current->node->child_count == 0 && !current->node->was_expanded) {
-                        tree_expand_node_from_config(current->node, ctx->git,
-                                         ctx->cfg, ctx->icons);
+                /* Expand current directory (materialize children on first open) */
+                if (current && node_is_directory(current) && !current->ui_expanded) {
+                    if (current->child_count == 0 && !current->was_expanded) {
+                        tree_expand_node_from_config(current, render_ctx.git,
+                                                     render_ctx.cfg, render_ctx.icons);
                     }
-                    expanded_add(&expanded, current->node->entry.path);
-                    const char *cur_path = current->node->entry.path;
-                    flatten_all(&state, trees, tree_count, ctx->cfg, &expanded);
-                    prepare_view(&state, ctx);
-                    state.cursor = 0;
-                    for (int i = 0; i < state.count; i++) {
-                        if (strcmp(state.items[i].node->entry.path, cur_path) == 0) {
-                            state.cursor = i;
-                            break;
-                        }
-                    }
-                    render_picker(&state, &render_ctx, &expanded, files_only);
+                    current->ui_expanded = 1;
+                    picker_rebuild(&state, trees, tree_count, &render_ctx);
+                    cursor_to_node(&state, current);
+                    snap_cursor(&state, files_only);
+                    render_picker(&state, &render_ctx, files_only);
                 }
                 break;
+
+            case KEY_RELOAD: {
+                /* Rebuild everything from scratch — identical to quitting and
+                 * re-running l -i, with the cursor put back by path. Clears
+                 * any live query (a fresh run has none). */
+                char *saved = current ? xstrdup(current->entry.path) : NULL;
+                state.filter_mode = 0;
+                state.filter_len = 0;
+                state.filter[0] = '\0';
+
+                view_free(state.view);
+                state.view = NULL;
+                forest_free(trees, tree_count);
+                git_cache_free(render_ctx.git);
+                git_cache_init(render_ctx.git);
+                trees = forest_build(dirs, tree_count, render_ctx.cfg,
+                                     render_ctx.git, render_ctx.icons);
+                *trees_ref = trees;
+
+                picker_rebuild(&state, trees, tree_count, &render_ctx);
+                state.cursor = 0;
+                state.scroll_offset = 0;
+                cursor_to_path(&state, saved);
+                free(saved);
+                snap_cursor(&state, files_only);
+                get_terminal_size(&state.term_rows);
+                render_picker(&state, &render_ctx, files_only);
+                break;
+            }
 
             case KEY_FILTER_FILES:
                 if (!current) break;
                 if (!files_only) {
                     /* Check if there are any files before enabling */
                     int has_files = find_next_file(&state, state.cursor, 1) >= 0 ||
-                                    !node_is_directory(current->node);
+                                    !node_is_directory(current);
                     if (!has_files) {
                         /* No files - ignore */
                         break;
                     }
                     files_only = 1;
                     /* Move to next file if on a directory */
-                    if (node_is_directory(current->node)) {
+                    if (node_is_directory(current)) {
                         int next = find_next_file(&state, state.cursor, 1);
                         if (next >= 0) state.cursor = next;
                     }
                 } else {
                     files_only = 0;
                 }
-                render_picker(&state, &render_ctx, &expanded, files_only);
+                render_picker(&state, &render_ctx, files_only);
                 break;
 
             case KEY_OPEN:
                 if (!current) break;
-                if (node_is_directory(current->node)) {
+                if (node_is_directory(current)) {
                     /* Toggle expand/collapse */
-                    if (expanded_contains(&expanded, current->node->entry.path)) {
-                        expanded_remove(&expanded, current->node->entry.path);
+                    if (current->ui_expanded) {
+                        current->ui_expanded = 0;
                     } else {
-                        /* Load children if not yet loaded */
-                        if (current->node->child_count == 0 && !current->node->was_expanded) {
-                            tree_expand_node_from_config(current->node, ctx->git,
-                                             ctx->cfg, ctx->icons);
+                        if (current->child_count == 0 && !current->was_expanded) {
+                            tree_expand_node_from_config(current, render_ctx.git,
+                                                         render_ctx.cfg, render_ctx.icons);
                         }
-                        expanded_add(&expanded, current->node->entry.path);
+                        current->ui_expanded = 1;
                     }
-                    const char *cur_path = current->node->entry.path;
-                    flatten_all(&state, trees, tree_count, ctx->cfg, &expanded);
-                    prepare_view(&state, ctx);
-                    state.cursor = 0;
-                    for (int i = 0; i < state.count; i++) {
-                        if (strcmp(state.items[i].node->entry.path, cur_path) == 0) {
-                            state.cursor = i;
-                            break;
-                        }
-                    }
-                    render_picker(&state, &render_ctx, &expanded, files_only);
+                    picker_rebuild(&state, trees, tree_count, &render_ctx);
+                    cursor_to_node(&state, current);
+                    snap_cursor(&state, files_only);
+                    render_picker(&state, &render_ctx, files_only);
                 } else {
                     /* Open file: use system handler for binary, EDITOR for text */
                     char cmd[PATH_MAX + 64];
@@ -1040,19 +670,19 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                     printf("\r\033[K\n");
                     term_disable_raw();
 
-                    if (should_open_externally(current->node->entry.path)) {
+                    if (should_open_externally(current->entry.path)) {
 #ifdef PLATFORM_MACOS
                         snprintf(cmd, sizeof(cmd), "open \"%s\"",
-                                 current->node->entry.path);
+                                 current->entry.path);
 #else
                         snprintf(cmd, sizeof(cmd), "xdg-open \"%s\" 2>/dev/null",
-                                 current->node->entry.path);
+                                 current->entry.path);
 #endif
                     } else {
                         const char *editor = getenv("EDITOR");
                         if (!editor) editor = "vim";
                         snprintf(cmd, sizeof(cmd), "%s \"%s\"", editor,
-                                 current->node->entry.path);
+                                 current->entry.path);
                     }
                     if (system(cmd)) { /* ignore */ }
 
@@ -1064,22 +694,21 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                         saved_stdout_fd = -1;
                     }
 
-                    state_free(&state);
-                    expanded_free(&expanded);
+                    view_free(state.view);
                     return NULL;
                 }
                 break;
 
             case KEY_ENTER:
                 if (!current) break;  /* filtering with no matches: do nothing */
-                result = strdup(current->node->entry.path);
+                result = xstrdup(current->entry.path);
                 goto cleanup;
 
             case KEY_YANK: {
                 if (!current) break;
-                copy_to_clipboard(current->node->entry.path);
+                copy_to_clipboard(current->entry.path);
                 printf("\r\033[K%sYanked: %s%s\n", COLOR_GREEN,
-                       current->node->entry.path, COLOR_RESET);
+                       current->entry.path, COLOR_RESET);
                 fflush(stdout);
                 goto cleanup;
             }
@@ -1088,23 +717,27 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                 /* '/' opens the interactive filter; an existing query is kept
                  * so it can be edited rather than retyped. */
                 state.filter_mode = 1;
-                render_picker(&state, &render_ctx, &expanded, files_only);
+                render_picker(&state, &render_ctx, files_only);
                 break;
 
             case KEY_CHAR:
                 if (state.filter_len < (int)sizeof(state.filter) - 1) {
                     state.filter[state.filter_len++] = typed;
                     state.filter[state.filter_len] = '\0';
-                    apply_filter(&state, trees, tree_count, ctx, &expanded);
-                    render_picker(&state, &render_ctx, &expanded, files_only);
+                    picker_rebuild(&state, trees, tree_count, &render_ctx);
+                    state.cursor = 0;
+                    state.scroll_offset = 0;
+                    render_picker(&state, &render_ctx, files_only);
                 }
                 break;
 
             case KEY_BACKSPACE:
                 if (state.filter_len > 0) {
                     state.filter[--state.filter_len] = '\0';
-                    apply_filter(&state, trees, tree_count, ctx, &expanded);
-                    render_picker(&state, &render_ctx, &expanded, files_only);
+                    picker_rebuild(&state, trees, tree_count, &render_ctx);
+                    state.cursor = 0;
+                    state.scroll_offset = 0;
+                    render_picker(&state, &render_ctx, files_only);
                 }
                 break;
 
@@ -1114,9 +747,11 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                 if (state.filter_len > 0) {
                     state.filter_len = 0;
                     state.filter[0] = '\0';
-                    apply_filter(&state, trees, tree_count, ctx, &expanded);
+                    picker_rebuild(&state, trees, tree_count, &render_ctx);
+                    state.cursor = 0;
+                    state.scroll_offset = 0;
                 }
-                render_picker(&state, &render_ctx, &expanded, files_only);
+                render_picker(&state, &render_ctx, files_only);
                 break;
 
             case KEY_QUIT:
@@ -1149,7 +784,6 @@ cleanup:
         saved_stdout_fd = -1;
     }
 
-    state_free(&state);
-    expanded_free(&expanded);
+    view_free(state.view);
     return result;
 }
