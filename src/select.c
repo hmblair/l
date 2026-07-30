@@ -384,7 +384,7 @@ static void flatten_all(SelectState *state, TreeNode **trees, int tree_count,
     for (int i = 0; i < tree_count; i++) {
         memset(continuation, 0, sizeof(continuation));
         flatten_node(state, trees[i], 0, continuation, cfg, expanded,
-                     cfg->max_depth);
+                     cfg->req.max_depth);
     }
 }
 
@@ -457,7 +457,7 @@ static void apply_filter(SelectState *state, TreeNode **trees, int tree_count,
      * is cleared, restore any CLI filter pattern (-f/--filter) so its flags
      * aren't left holding our query's results. */
     const char *pattern = state->filter_active ? state->filter
-                                               : ctx->cfg->grep_pattern;
+                                               : ctx->cfg->req.grep_pattern;
     if (pattern) {
         for (int i = 0; i < tree_count; i++) {
             compute_grep_flags(trees[i], pattern);

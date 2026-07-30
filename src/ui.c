@@ -18,15 +18,15 @@
  * ============================================================================ */
 
 void get_realpath(const char *path, char *resolved, const Config *cfg) {
-    path_get_realpath(path, resolved, cfg->cwd);
+    path_get_realpath(path, resolved, cfg->env.cwd);
 }
 
 void get_abspath(const char *path, char *resolved, const Config *cfg) {
-    path_get_abspath(path, resolved, cfg->cwd);
+    path_get_abspath(path, resolved, cfg->env.cwd);
 }
 
 void abbreviate_home(const char *path, char *buf, size_t len, const Config *cfg) {
-    path_abbreviate_home(path, buf, len, cfg->home);
+    path_abbreviate_home(path, buf, len, cfg->env.home);
 }
 
 /* ============================================================================
@@ -82,16 +82,16 @@ static void columns_reset_widths(Column *cols) {
 }
 
 int is_filtering_active(const Config *cfg) {
-    return cfg->git_only || cfg->hide_gitignored || cfg->grep_pattern ||
-           cfg->min_size > 0 || cfg->dir_only;
+    return cfg->req.git_only || cfg->req.hide_gitignored || cfg->req.grep_pattern ||
+           cfg->req.min_size > 0 || cfg->req.dir_only;
 }
 
 int node_is_visible(const TreeNode *node, const Config *cfg) {
-    if (cfg->git_only && !node->has_git_status) return 0;
-    if (cfg->hide_gitignored && node->entry.is_ignored) return 0;
-    if (cfg->grep_pattern && !node->matches_grep) return 0;
-    if (cfg->min_size > 0 && (node->entry.size < 0 || node->entry.size < cfg->min_size)) return 0;
-    if (cfg->dir_only && !node_is_directory(node)) return 0;
+    if (cfg->req.git_only && !node->has_git_status) return 0;
+    if (cfg->req.hide_gitignored && node->entry.is_ignored) return 0;
+    if (cfg->req.grep_pattern && !node->matches_grep) return 0;
+    if (cfg->req.min_size > 0 && (node->entry.size < 0 || node->entry.size < cfg->req.min_size)) return 0;
+    if (cfg->req.dir_only && !node_is_directory(node)) return 0;
     return 1;
 }
 
@@ -101,7 +101,7 @@ int node_is_visible(const TreeNode *node, const Config *cfg) {
  * stay hidden at every depth. */
 int node_is_hidden(const TreeNode *node, const Config *cfg) {
     if (node->is_ancestor) return 0;
-    return !cfg->show_hidden && node->entry.name[0] == '.';
+    return !cfg->req.show_hidden && node->entry.name[0] == '.';
 }
 
 /* The single visibility decision shared by both the static renderer and the
@@ -220,16 +220,16 @@ static int skip_below_min_size(const FileEntry *entry, void *ctx) {
 
 TreeBuildOpts config_to_build_opts(const Config *cfg) {
     TreeBuildOpts opts = {
-        .max_depth = cfg->max_depth,
-        .show_hidden = cfg->show_hidden,
-        .skip_gitignored = !cfg->expand_all,
-        .sort_by = cfg->sort_by,
-        .sort_reverse = cfg->sort_reverse,
-        .cwd = cfg->cwd,
+        .max_depth = cfg->req.max_depth,
+        .show_hidden = cfg->req.show_hidden,
+        .skip_gitignored = !cfg->req.expand_all,
+        .sort_by = cfg->req.sort_by,
+        .sort_reverse = cfg->req.sort_reverse,
+        .cwd = cfg->env.cwd,
         .compute = cfg->compute,
-        .skip_fn = cfg->min_size > 0 ? skip_below_min_size : NULL,
-        .skip_ctx = (void *)&cfg->min_size,
-        .ancestry_to_repo = cfg->git_only && !cfg->ancestry_explicit
+        .skip_fn = cfg->req.min_size > 0 ? skip_below_min_size : NULL,
+        .skip_ctx = (void *)&cfg->req.min_size,
+        .ancestry_to_repo = cfg->req.git_only && !cfg->req.ancestry_explicit
     };
     return opts;
 }
@@ -271,7 +271,7 @@ const char *git_indicator_from_flags(unsigned flags, const Icons *icons,
     static __thread char indicator[L_GIT_INDICATOR_SIZE];
     indicator[0] = '\0';
 
-    if (cfg->no_icons) return indicator;
+    if (cfg->disp.no_icons) return indicator;
     if (!flags || (flags & GITF_IGNORED)) return indicator;
 
     char *p = indicator;
@@ -315,9 +315,9 @@ static char *truncate_visible(const char *s, int max_visible_len);
 } while (0)
 
 static void emit_prefix(char *buf, int *pos, int size, int depth, int *continuation, const Config *cfg) {
-    if (cfg->list_mode) return;
+    if (cfg->req.list_mode) return;
 
-    if (!cfg->is_tty) {
+    if (!cfg->disp.is_tty) {
         for (int i = 0; i < depth; i++) {
             EMIT(buf, *pos, size, "  ");
         }
@@ -348,7 +348,7 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, const PrintCo
      * resolved), so the marker follows the folder the user actually navigated
      * through and lands on exactly one row even when a symlink and its target
      * both appear in the tree. */
-    int is_cwd = (strcmp(fe->path, ctx->cfg->cwd) == 0);
+    int is_cwd = (strcmp(fe->path, ctx->cfg->env.cwd) == 0);
     int is_hidden = (fe->name[0] == '.');
 
     char line[ENTRY_BUF_SIZE];
@@ -359,7 +359,7 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, const PrintCo
         EMIT(line, pos, ENTRY_BUF_SIZE, "%s", ctx->line_prefix);
     }
 
-    if (ctx->cfg->long_format && ctx->columns) {
+    if (ctx->cfg->disp.long_format && ctx->columns) {
         char col_buf[32];
         for (int i = 0; i < NUM_COLUMNS; i++) {
             ctx->columns[i].format(fe, ctx->icons, col_buf, sizeof(col_buf));
@@ -376,7 +376,7 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, const PrintCo
                 /* Trailing gap before the diff/tree columns. When diff columns
                  * are present, mirror the inter-column separator so the dot
                  * carries through; otherwise use the plain two-space gap. */
-                const char *sep = ctx->cfg->column_separator;
+                const char *sep = ctx->cfg->disp.column_separator;
                 int has_diff = (ctx->diff_add_width > 0 || ctx->diff_del_width > 0);
                 if (has_diff && sep[0]) {
                     EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s ", CLR(ctx->cfg, COLOR_GREY), sep, RST(ctx->cfg));
@@ -384,7 +384,7 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, const PrintCo
                     EMIT(line, pos, ENTRY_BUF_SIZE, "  ");
                 }
             } else {
-                const char *sep = ctx->cfg->column_separator;
+                const char *sep = ctx->cfg->disp.column_separator;
                 if (sep[0]) {
                     EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s ", CLR(ctx->cfg, COLOR_GREY), sep, RST(ctx->cfg));
                 } else {
@@ -426,11 +426,11 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, const PrintCo
     int is_dir = (fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR);
     /* Grey lock before any entry you can't write to (read-only or no access).
      * A writable-but-unreadable dir (drop-box) stays unlocked but renders red. */
-    if (!ctx->cfg->no_icons && fe->is_readonly) {
+    if (!ctx->cfg->disp.no_icons && fe->is_readonly) {
         EMIT(line, pos, ENTRY_BUF_SIZE, "%s%s%s ", CLR(ctx->cfg, COLOR_GREY), ctx->icons->readonly, RST(ctx->cfg));
     }
 
-    if (is_dir && !ctx->cfg->no_icons) {
+    if (is_dir && !ctx->cfg->disp.no_icons) {
         /* Directory: show the git status of descendants that aren't shown on
          * their own row. This is precomputed per view in view_git_summary (see
          * compute_view_summaries / the picker's view prep); a collapsed dir
@@ -461,10 +461,10 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, const PrintCo
     }
 
     const char *color = (fe->type == FTYPE_DIR && fe->size < 0) ? CLR(ctx->cfg, COLOR_RED) :
-                        get_file_color(fe->type, fe->is_ignored, ctx->cfg->is_tty, ctx->cfg->color_all);
+                        get_file_color(fe->type, fe->is_ignored, ctx->cfg->disp.is_tty, ctx->cfg->disp.color_all);
     const char *style = is_hidden ? CLR(ctx->cfg, STYLE_ITALIC) : "";
 
-    if (!ctx->cfg->no_icons) {
+    if (!ctx->cfg->disp.no_icons) {
         int is_binary = (fe->file_count < 0 && fe->line_count == -1);
         int is_dir = (fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR);
         int is_expanded = is_dir ? was_expanded : 0;
@@ -479,7 +479,7 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, const PrintCo
     }
 
     const char *bold = ctx->selected ? CLR(ctx->cfg, STYLE_BOLD) : "";
-    if (ctx->cfg->list_mode) {
+    if (ctx->cfg->req.list_mode) {
         char abbrev[PATH_MAX];
         abbreviate_home(abs_path, abbrev, sizeof(abbrev), ctx->cfg);
         EMIT(line, pos, ENTRY_BUF_SIZE, "%s%s%s%s%s", color, bold, style, abbrev, RST(ctx->cfg));
@@ -504,7 +504,7 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, const PrintCo
         if (fe->has_upstream) {
             const char *cloud_color = fe->out_of_sync ? COLOR_RED : COLOR_GREY;
             char *web_url = git_remote_to_web_url(fe->remote);
-            if (web_url && ctx->cfg->is_tty) {
+            if (web_url && ctx->cfg->disp.is_tty) {
                 EMIT(line, pos, ENTRY_BUF_SIZE, " %s\033]8;;%s\033\\%s\033]8;;\033\\%s", CLR(ctx->cfg, cloud_color), web_url, ctx->icons->git_upstream, RST(ctx->cfg));
             } else {
                 EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s", CLR(ctx->cfg, cloud_color), ctx->icons->git_upstream, RST(ctx->cfg));
@@ -591,7 +591,7 @@ void measure_columns(TreeNode **trees, int tree_count, GitCache *git,
         TreeNode *root = trees[i];
         /* List mode does not draw a directory root's own row, only its shown
          * children (each with its subtree); every other case draws the root. */
-        if (cfg->list_mode && root->entry.type == FTYPE_DIR) {
+        if (cfg->req.list_mode && root->entry.type == FTYPE_DIR) {
             for (size_t j = 0; j < root->child_count; j++) {
                 const TreeNode *child = &root->children[j];
                 if (!child_is_shown(child, cfg, filtering)) continue;
@@ -627,7 +627,7 @@ void compute_view_summaries(TreeNode *node, const Config *cfg, GitCache *git) {
 void print_tree_node(const TreeNode *node, int depth, PrintContext *ctx) {
     int filtering = is_filtering_active(ctx->cfg);
 
-    if (ctx->cfg->list_mode && node->entry.type == FTYPE_DIR) {
+    if (ctx->cfg->req.list_mode && node->entry.type == FTYPE_DIR) {
         size_t *visible_indices = node->child_count
             ? xmalloc(node->child_count * sizeof(size_t)) : NULL;
         size_t visible_count = 0;
@@ -834,7 +834,7 @@ static void card_add_empty(Card *card) {
 }
 
 static void card_print(const Card *card, const Config *cfg) {
-    int term_width = cfg->is_tty ? get_terminal_width() : 0;
+    int term_width = cfg->disp.is_tty ? get_terminal_width() : 0;
     int max_content_width = term_width > 0 ? term_width - 4 : 0;  /* 2 border + 2 padding */
 
     /* Limit card width to terminal if applicable */
@@ -887,7 +887,7 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
     FileEntry *fe = &node->entry;
     const Config *cfg = ctx->cfg;
     int is_dir = (fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR);
-    int is_cwd = (strcmp(fe->path, cfg->cwd) == 0);
+    int is_cwd = (strcmp(fe->path, cfg->env.cwd) == 0);
     int is_hidden = (fe->name[0] == '.');
 
     /* Compute extended data if not already done.
@@ -913,14 +913,14 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
     card_init(&card);
 
     /* Header line: icon + name */
-    const char *color = get_file_color(fe->type, fe->is_ignored, cfg->is_tty, cfg->color_all);
+    const char *color = get_file_color(fe->type, fe->is_ignored, cfg->disp.is_tty, cfg->disp.color_all);
     const char *style = is_hidden ? CLR(cfg, STYLE_ITALIC) : "";
     char cwd_marker[64] = "";
     if (is_cwd)
         snprintf(cwd_marker, sizeof(cwd_marker), " %s%s%s", CLR(cfg, COLOR_YELLOW), ctx->icons->cwd_marker, RST(cfg));
     int is_binary = (fe->file_count < 0 && fe->line_count == -1);
-    const char *icon = cfg->no_icons ? "" : get_icon(ctx->icons, fe->type, node->was_expanded, is_binary, fe->name);
-    const char *icon_space = cfg->no_icons ? "" : " ";
+    const char *icon = cfg->disp.no_icons ? "" : get_icon(ctx->icons, fe->type, node->was_expanded, is_binary, fe->name);
+    const char *icon_space = cfg->disp.no_icons ? "" : " ";
 
     if (fe->has_git_repo_info && fe->branch) {
         if (fe->has_upstream) {
@@ -932,7 +932,7 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
             if (fe->behind > 0)
                 ab_pos += snprintf(ahead_behind + ab_pos, sizeof(ahead_behind) - ab_pos, " %s-%d%s", CLR(cfg, COLOR_RED), fe->behind, RST(cfg));
             char *web_url = git_remote_to_web_url(fe->remote);
-            if (web_url && cfg->is_tty) {
+            if (web_url && cfg->disp.is_tty) {
                 card_add(&card, "%s%s%s%s%s%s%s %s%s%s%s %s\033]8;;%s\033\\%s\033]8;;\033\\%s%s",
                          color, icon, icon_space, style, fe->name, RST(cfg), cwd_marker,
                          CLR(cfg, COLOR_GREY), CLR(cfg, STYLE_ITALIC), fe->branch, RST(cfg),

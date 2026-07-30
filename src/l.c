@@ -136,30 +136,30 @@ static void check_conflict(const char **slot, const char *opt, const Config *cfg
 #define OPT_HANDLER(name) \
     static void name(Config *cfg, const char *val, const char *label)
 
-OPT_HANDLER(opt_hidden)      { (void)val; (void)label; cfg->show_hidden = 1; }
-OPT_HANDLER(opt_short_fmt)   { (void)val; (void)label; cfg->long_format = 0; cfg->long_format_explicit = 1; }
-OPT_HANDLER(opt_long_fmt)    { (void)val; (void)label; cfg->long_format = 1; cfg->long_format_explicit = 1; }
-OPT_HANDLER(opt_tree)        { (void)val; (void)label; cfg->max_depth = L_MAX_DEPTH; }
-OPT_HANDLER(opt_depth)       { (void)cfg; cfg->max_depth = parse_depth(val, label); }
-OPT_HANDLER(opt_path)        { (void)val; (void)label; cfg->show_ancestry = 1; cfg->ancestry_explicit = 1; }
-OPT_HANDLER(opt_expand)      { (void)val; (void)label; cfg->expand_all = 1; }
-OPT_HANDLER(opt_color_all)   { (void)val; (void)label; cfg->color_all = 1; }
-OPT_HANDLER(opt_interactive) { (void)val; (void)label; cfg->interactive = 1; }
-OPT_HANDLER(opt_git_only)    { (void)val; (void)label; cfg->git_only = 1; cfg->show_hidden = 1; }
-OPT_HANDLER(opt_hide_ignored){ (void)val; (void)label; cfg->hide_gitignored = 1; }
-OPT_HANDLER(opt_sort_size)   { (void)val; (void)label; cfg->sort_by = SORT_SIZE; }
-OPT_HANDLER(opt_sort_time)   { (void)val; (void)label; cfg->sort_by = SORT_TIME; }
-OPT_HANDLER(opt_sort_name)   { (void)val; (void)label; cfg->sort_by = SORT_NAME; }
-OPT_HANDLER(opt_reverse)     { (void)val; (void)label; cfg->sort_reverse = 1; }
+OPT_HANDLER(opt_hidden)      { (void)val; (void)label; cfg->req.show_hidden = 1; }
+OPT_HANDLER(opt_short_fmt)   { (void)val; (void)label; cfg->disp.long_format = 0; cfg->disp.long_format_explicit = 1; }
+OPT_HANDLER(opt_long_fmt)    { (void)val; (void)label; cfg->disp.long_format = 1; cfg->disp.long_format_explicit = 1; }
+OPT_HANDLER(opt_tree)        { (void)val; (void)label; cfg->req.max_depth = L_MAX_DEPTH; }
+OPT_HANDLER(opt_depth)       { (void)cfg; cfg->req.max_depth = parse_depth(val, label); }
+OPT_HANDLER(opt_path)        { (void)val; (void)label; cfg->req.show_ancestry = 1; cfg->req.ancestry_explicit = 1; }
+OPT_HANDLER(opt_expand)      { (void)val; (void)label; cfg->req.expand_all = 1; }
+OPT_HANDLER(opt_color_all)   { (void)val; (void)label; cfg->disp.color_all = 1; }
+OPT_HANDLER(opt_interactive) { (void)val; (void)label; cfg->req.interactive = 1; }
+OPT_HANDLER(opt_git_only)    { (void)val; (void)label; cfg->req.git_only = 1; cfg->req.show_hidden = 1; }
+OPT_HANDLER(opt_hide_ignored){ (void)val; (void)label; cfg->req.hide_gitignored = 1; }
+OPT_HANDLER(opt_sort_size)   { (void)val; (void)label; cfg->req.sort_by = SORT_SIZE; }
+OPT_HANDLER(opt_sort_time)   { (void)val; (void)label; cfg->req.sort_by = SORT_TIME; }
+OPT_HANDLER(opt_sort_name)   { (void)val; (void)label; cfg->req.sort_by = SORT_NAME; }
+OPT_HANDLER(opt_reverse)     { (void)val; (void)label; cfg->req.sort_reverse = 1; }
 OPT_HANDLER(opt_help)        { (void)cfg; (void)val; (void)label; print_usage(); exit(0); }
-OPT_HANDLER(opt_filter)      { (void)label; cfg->grep_pattern = val; }
-OPT_HANDLER(opt_list)        { (void)val; (void)label; cfg->list_mode = 1; }
-OPT_HANDLER(opt_summary)     { (void)val; (void)label; cfg->summary_mode = 1;
-                               cfg->max_depth = L_MAX_DEPTH; cfg->long_format = 1; }
-OPT_HANDLER(opt_no_icons)    { (void)val; (void)label; cfg->no_icons = 1; }
-OPT_HANDLER(opt_tty)         { (void)val; (void)label; cfg->is_tty = 1; }
-OPT_HANDLER(opt_dir_only)    { (void)val; (void)label; cfg->dir_only = 1; }
-OPT_HANDLER(opt_min_size)    { (void)label; cfg->min_size = parse_size(val); }
+OPT_HANDLER(opt_filter)      { (void)label; cfg->req.grep_pattern = val; }
+OPT_HANDLER(opt_list)        { (void)val; (void)label; cfg->req.list_mode = 1; }
+OPT_HANDLER(opt_summary)     { (void)val; (void)label; cfg->req.summary_mode = 1;
+                               cfg->req.max_depth = L_MAX_DEPTH; cfg->disp.long_format = 1; }
+OPT_HANDLER(opt_no_icons)    { (void)val; (void)label; cfg->disp.no_icons = 1; }
+OPT_HANDLER(opt_tty)         { (void)val; (void)label; cfg->disp.is_tty = 1; }
+OPT_HANDLER(opt_dir_only)    { (void)val; (void)label; cfg->req.dir_only = 1; }
+OPT_HANDLER(opt_min_size)    { (void)label; cfg->req.min_size = parse_size(val); }
 
 #undef OPT_HANDLER
 
@@ -467,30 +467,21 @@ int main(int argc, char **argv) {
 
     /* Initialize config with defaults */
     Config cfg = {
-        .max_depth = 1,
-        .show_hidden = 0,
-        .long_format = 1,
-        .long_format_explicit = 0,
-        .expand_all = 0,
-        .list_mode = 0,
-        .summary_mode = 0,
-        .no_icons = 0,
-        .sort_reverse = 0,
-        .git_only = 0,
-        .hide_gitignored = 0,
-        .show_ancestry = 0,
-        .color_all = 0,
-        .interactive = 0,
-        .dir_only = 0,
-        .is_tty = isatty(STDOUT_FILENO),
-        .sort_by = SORT_NONE,
-        .cwd = "",
-        .home = "",
-        .script_dir = "",
-        .column_separator = "·",
-        .grep_pattern = NULL,
-        .min_size = 0,
-        .compute = COMPUTE_NONE
+        .req = {
+            .max_depth = 1,
+            .sort_by = SORT_NONE,
+        },
+        .disp = {
+            .long_format = 1,
+            .is_tty = isatty(STDOUT_FILENO),
+            .column_separator = "·",
+        },
+        .compute = COMPUTE_NONE,
+        .env = {
+            .cwd = "",
+            .home = "",
+            .config_dir = "",
+        },
     };
 
     /* Initialize environment paths - prefer $PWD to preserve symlink paths */
@@ -502,24 +493,24 @@ int main(int argc, char **argv) {
     if (pwd && pwd[0] == '/') {
         char pwd_resolved[PATH_MAX];
         if (realpath(pwd, pwd_resolved) && strcmp(pwd_resolved, cwd_physical) == 0) {
-            strncpy(cfg.cwd, pwd, sizeof(cfg.cwd) - 1);
-            cfg.cwd[sizeof(cfg.cwd) - 1] = '\0';
+            strncpy(cfg.env.cwd, pwd, sizeof(cfg.env.cwd) - 1);
+            cfg.env.cwd[sizeof(cfg.env.cwd) - 1] = '\0';
         } else {
-            strncpy(cfg.cwd, cwd_physical, sizeof(cfg.cwd) - 1);
-            cfg.cwd[sizeof(cfg.cwd) - 1] = '\0';
+            strncpy(cfg.env.cwd, cwd_physical, sizeof(cfg.env.cwd) - 1);
+            cfg.env.cwd[sizeof(cfg.env.cwd) - 1] = '\0';
         }
     } else {
-        strncpy(cfg.cwd, cwd_physical, sizeof(cfg.cwd) - 1);
-        cfg.cwd[sizeof(cfg.cwd) - 1] = '\0';
+        strncpy(cfg.env.cwd, cwd_physical, sizeof(cfg.env.cwd) - 1);
+        cfg.env.cwd[sizeof(cfg.env.cwd) - 1] = '\0';
     }
 
     const char *home = getenv("HOME");
     if (home) {
-        strncpy(cfg.home, home, sizeof(cfg.home) - 1);
-        cfg.home[sizeof(cfg.home) - 1] = '\0';
+        strncpy(cfg.env.home, home, sizeof(cfg.env.home) - 1);
+        cfg.env.home[sizeof(cfg.env.home) - 1] = '\0';
     }
 
-    resolve_source_dir(argv[0], cfg.script_dir, sizeof(cfg.script_dir));
+    resolve_source_dir(argv[0], cfg.env.config_dir, sizeof(cfg.env.config_dir));
 
     /* Check if current directory exists */
     char *cwd_check = getcwd(NULL, 0);
@@ -538,7 +529,7 @@ int main(int argc, char **argv) {
     /* -m requires a git repo: fail outside one, otherwise show the ancestry up
      * to the repo root (git_only filtering then collapses it to just the repo
      * root when there are no changes). */
-    if (cfg.git_only) {
+    if (cfg.req.git_only) {
         char repo_root[PATH_MAX];
         const char *target = dir_count > 0 ? dirs[0] : ".";
         if (!git_find_root(target, repo_root, sizeof(repo_root))) {
@@ -546,32 +537,32 @@ int main(int argc, char **argv) {
                     CLR(&cfg, COLOR_RED), RST(&cfg));
             return 1;
         }
-        cfg.show_ancestry = 1;
+        cfg.req.show_ancestry = 1;
     }
 
     /* Auto-disable long format on network filesystems */
-    if (cfg.long_format && !cfg.long_format_explicit) {
-        const char *check_path = (dir_count > 0) ? dirs[0] : cfg.cwd;
+    if (cfg.disp.long_format && !cfg.disp.long_format_explicit) {
+        const char *check_path = (dir_count > 0) ? dirs[0] : cfg.env.cwd;
         if (path_is_network_fs(check_path)) {
-            cfg.long_format = 0;
+            cfg.disp.long_format = 0;
         }
     }
 
     /* Set compute options based on mode */
-    if (cfg.summary_mode) {
+    if (cfg.req.summary_mode) {
         cfg.compute = COMPUTE_SUMMARY;
-    } else if (cfg.long_format) {
+    } else if (cfg.disp.long_format) {
         cfg.compute = COMPUTE_LONG;
     } else {
         cfg.compute = COMPUTE_BASIC;
     }
 
     /* Enable sizes if needed for sorting/filtering in short mode */
-    if (cfg.sort_by == SORT_SIZE) cfg.compute.sizes = 1;
-    if (cfg.min_size > 0) cfg.compute.sizes = 1;
+    if (cfg.req.sort_by == SORT_SIZE) cfg.compute.sizes = 1;
+    if (cfg.req.min_size > 0) cfg.compute.sizes = 1;
 
     /* Load the opaque-directory list (dirs shown but never descended into) */
-    opaque_dirs_load(cfg.script_dir);
+    opaque_dirs_load(cfg.env.config_dir);
 
     /* Load icons, file types, shebangs, and display settings in one pass over
      * config.toml (the separator keeps its built-in default if absent). */
@@ -581,8 +572,8 @@ int main(int argc, char **argv) {
     icons_init_defaults(&icons);
     filetypes_init(&filetypes);
     shebangs_init(&shebangs);
-    config_load_all(cfg.script_dir, &icons, &filetypes, &shebangs,
-                    cfg.column_separator, sizeof(cfg.column_separator));
+    config_load_all(cfg.env.config_dir, &icons, &filetypes, &shebangs,
+                    cfg.disp.column_separator, sizeof(cfg.disp.column_separator));
 
     /* Load size cache (only needed when computing sizes or file counts) */
     if (cfg.compute.sizes || cfg.compute.file_counts) {
@@ -619,7 +610,7 @@ int main(int argc, char **argv) {
     if (dir_count == 1) {
         struct stat st;
         if (stat(dirs[0], &st) == 0 && S_ISREG(st.st_mode)) {
-            cfg.summary_mode = 1;
+            cfg.req.summary_mode = 1;
         }
     }
 
@@ -643,7 +634,7 @@ int main(int argc, char **argv) {
     git_cache_init(&git);
 
     for (int i = 0; i < dir_count; i++) {
-        if (cfg.show_ancestry) {
+        if (cfg.req.show_ancestry) {
             trees[i] = build_ancestry_tree_from_config(dirs[i], &git, &cfg, &icons);
         } else {
             trees[i] = build_tree_from_config(dirs[i], &git, &cfg, &icons);
@@ -651,14 +642,14 @@ int main(int argc, char **argv) {
     }
 
     /* Pre-compute visibility flags for filtering */
-    if (cfg.git_only) {
+    if (cfg.req.git_only) {
         for (int i = 0; i < dir_count; i++) {
             compute_git_status_flags(trees[i], &git);
         }
     }
-    if (cfg.grep_pattern) {
+    if (cfg.req.grep_pattern) {
         for (int i = 0; i < dir_count; i++) {
-            compute_grep_flags(trees[i], cfg.grep_pattern);
+            compute_grep_flags(trees[i], cfg.req.grep_pattern);
         }
     }
     /* Data pass: precompute each directory's view summary (git status and diff
@@ -675,24 +666,24 @@ int main(int argc, char **argv) {
      * Must run after the git/grep flags above, which child visibility depends
      * on. Interactive mode re-measures over its own visible set (select.c). */
     int diff_add_width = 0, diff_del_width = 0;
-    if (cfg.long_format) {
+    if (cfg.disp.long_format) {
         measure_columns(trees, dir_count, &git, &icons, &cfg,
                         cols, &diff_add_width, &diff_del_width);
     }
 
     /* Interactive selection mode */
-    if (cfg.interactive) {
+    if (cfg.req.interactive) {
         PrintContext ctx = {
             .git = &git,
             .icons = &icons,
             .filetypes = &filetypes,
             .shebangs = &shebangs,
             .cfg = &cfg,
-            .columns = cfg.long_format ? cols : NULL,
+            .columns = cfg.disp.long_format ? cols : NULL,
             .continuation = continuation,
             .diff_add_width = diff_add_width,
             .diff_del_width = diff_del_width,
-            .term_width = cfg.is_tty ? get_terminal_width() : 0
+            .term_width = cfg.disp.is_tty ? get_terminal_width() : 0
         };
         char *selected = select_run(trees, dir_count, &ctx);
         int exit_code = 0;
@@ -717,7 +708,7 @@ int main(int argc, char **argv) {
         for (int i = 0; i < dir_count; i++) {
             /* Check if filtering produced no visible children. For -g we still
              * show the repo root even with no changes, so skip this. */
-            if (is_filtering_active(&cfg) && !cfg.git_only) {
+            if (is_filtering_active(&cfg) && !cfg.req.git_only) {
                 int has_visible = 0;
                 for (size_t j = 0; j < trees[i]->child_count; j++) {
                     if (node_is_hidden(&trees[i]->children[j], &cfg)) continue;
@@ -738,13 +729,13 @@ int main(int argc, char **argv) {
                 .filetypes = &filetypes,
                 .shebangs = &shebangs,
                 .cfg = &cfg,
-                .columns = cfg.long_format ? cols : NULL,
+                .columns = cfg.disp.long_format ? cols : NULL,
                 .continuation = continuation,
                 .diff_add_width = diff_add_width,
                 .diff_del_width = diff_del_width,
-                .term_width = cfg.is_tty ? get_terminal_width() : 0
+                .term_width = cfg.disp.is_tty ? get_terminal_width() : 0
             };
-            if (cfg.summary_mode) {
+            if (cfg.req.summary_mode) {
                 print_summary(trees[i], &ctx);
             } else {
                 print_tree_node(trees[i], 0, &ctx);

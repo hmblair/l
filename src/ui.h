@@ -9,40 +9,7 @@
 #include "icons.h"
 #include "tree.h"
 #include "format.h"
-
-/* ============================================================================
- * Display Configuration
- * ============================================================================ */
-
-typedef struct {
-    int max_depth;
-    int show_hidden;
-    int long_format;
-    int long_format_explicit;
-    int expand_all;
-    int list_mode;
-    int summary_mode;
-    int no_icons;
-    int sort_reverse;
-    int git_only;            /* -m: show only git-changed entries, rooted at repo */
-    int hide_gitignored;     /* -g: hide entries that are gitignored */
-    int show_ancestry;
-    int ancestry_explicit;   /* -p was given explicitly (vs. implied by -m),
-                              * so anchor the ancestry at ~ (or /), not the
-                              * enclosing repo root. */
-    int color_all;
-    int interactive;
-    int dir_only;
-    int is_tty;
-    SortMode sort_by;
-    char cwd[PATH_MAX];
-    char home[PATH_MAX];
-    char script_dir[PATH_MAX];
-    char column_separator[L_MAX_SEPARATOR_LEN];  /* glyph drawn between long-mode columns; blank = plain spaces */
-    const char *grep_pattern;
-    off_t min_size;              /* Minimum size filter (0 = disabled) */
-    ComputeOpts compute;        /* What metadata to compute */
-} Config;
+#include "config.h"
 
 /* ============================================================================
  * Column Definitions
@@ -157,7 +124,7 @@ void tree_expand_node_from_config(TreeNode *node, GitCache *git,
                                    const Config *cfg, const Icons *icons);
 
 /* Helper macros */
-#define CLR(cfg, c) ((cfg)->is_tty ? (c) : "")
-#define RST(cfg)    ((cfg)->is_tty ? COLOR_RESET : "")
+#define CLR(cfg, c) ((cfg)->disp.is_tty ? (c) : "")
+#define RST(cfg)    ((cfg)->disp.is_tty ? COLOR_RESET : "")
 
 #endif /* L_UI_H */
