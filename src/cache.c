@@ -116,7 +116,7 @@ int cache_lookup_wrapper(const char *path, off_t *size, long *count) {
     return 0;
 }
 
-DirStats get_dir_stats_cached(const char *path) {
+static DirStats get_dir_stats_cached_impl(const char *path, int in_parallel) {
     /* Skip virtual filesystems (proc, sysfs, etc.) - they report fake sizes */
     if (path_is_virtual_fs(path)) {
         return (DirStats){-1, -1};
@@ -136,5 +136,18 @@ DirStats get_dir_stats_cached(const char *path) {
         return (DirStats){size, count};
     }
     /* Use resolved path so subdirectory cache lookups match stored paths */
+    if (in_parallel) {
+        ScanResult r = scan_directory_tasks(lookup_path, NULL,
+                                            cache_lookup_wrapper, NULL, 0);
+        return (DirStats){r.size, r.file_count};
+    }
     return dir_stats_get(lookup_path, cache_lookup_wrapper);
+}
+
+DirStats get_dir_stats_cached(const char *path) {
+    return get_dir_stats_cached_impl(path, 0);
+}
+
+DirStats get_dir_stats_cached_tasks(const char *path) {
+    return get_dir_stats_cached_impl(path, 1);
 }

@@ -33,4 +33,14 @@ ScanResult scan_directory(const char *path,
                           volatile int *shutdown,
                           long threshold);
 
+/* Same scan, but assumes the caller is already inside an OMP parallel region
+ * (it spawns tasks directly instead of opening a nested region, which the
+ * OMP runtime would serialize). Also correct outside any region: tasks then
+ * execute immediately. */
+ScanResult scan_directory_tasks(const char *path,
+                                scan_store_fn store_fn,
+                                scan_cache_fn cache_fn,
+                                volatile int *shutdown,
+                                long threshold);
+
 #endif /* SCAN_H */

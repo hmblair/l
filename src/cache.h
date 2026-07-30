@@ -73,6 +73,10 @@ int cache_lookup_wrapper(const char *path, off_t *size, long *count);
 /* Get directory stats with cache lookup */
 DirStats get_dir_stats_cached(const char *path);
 
+/* Same, for callers already inside an OMP parallel region (uses the
+ * task-based scanner core instead of opening a nested region) */
+DirStats get_dir_stats_cached_tasks(const char *path);
+
 /* ============================================================================
  * Daemon API (for ld.c) - read-write operations
  *

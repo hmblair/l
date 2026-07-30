@@ -193,7 +193,8 @@ unsigned git_cache_get_flags(GitCache *cache, const char *path) {
     return result;
 }
 
-GitStatusNode *git_cache_get_node(GitCache *cache, const char *path) {
+/* Unlocked lookup; caller holds the lock (or knows no writer can run) */
+static GitStatusNode *git_cache_get_node_locked(GitCache *cache, const char *path) {
     unsigned int h = hash_string(path);
     GitStatusNode *node = cache->buckets[h];
     while (node) {
@@ -205,12 +206,25 @@ GitStatusNode *git_cache_get_node(GitCache *cache, const char *path) {
     return NULL;
 }
 
+GitStatusNode *git_cache_get_node(GitCache *cache, const char *path) {
+#ifdef _OPENMP
+    omp_set_lock(&cache->lock);
+#endif
+    GitStatusNode *node = git_cache_get_node_locked(cache, path);
+#ifdef _OPENMP
+    omp_unset_lock(&cache->lock);
+#endif
+    /* Node fields are stable once inserted (only diff stats mutate, under the
+     * lock, before the populate that triggered them returns). */
+    return node;
+}
+
 void git_cache_set_diff(GitCache *cache, const char *path, int added, int removed) {
 #ifdef _OPENMP
     omp_set_lock(&cache->lock);
 #endif
 
-    GitStatusNode *node = git_cache_get_node(cache, path);
+    GitStatusNode *node = git_cache_get_node_locked(cache, path);
     if (node) {
         node->lines_added = added;
         node->lines_removed = removed;
@@ -226,7 +240,7 @@ void git_cache_add_diff(GitCache *cache, const char *path, int added, int remove
     omp_set_lock(&cache->lock);
 #endif
 
-    GitStatusNode *node = git_cache_get_node(cache, path);
+    GitStatusNode *node = git_cache_get_node_locked(cache, path);
     if (node) {
         node->lines_added += added;
         node->lines_removed += removed;

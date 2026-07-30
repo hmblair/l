@@ -46,7 +46,7 @@ void file_entry_init(FileEntry *fe, const char *path, int is_virtual_fs) {
 
     struct stat st;
     memset(&st, 0, sizeof(st));
-    fe->type = detect_file_type(fe->path, &st, &fe->symlink_target);
+    fe->type = detect_file_type(fe->path, &st, &fe->symlink_target, &fe->alloc_size);
     fe->mode = st.st_mode;
     fe->dev = st.st_dev;
     fe->mtime = GET_MTIME(st);
@@ -89,54 +89,58 @@ static int entry_cmp_name(const void *a, const void *b) {
     return strcasecmp(ea->name, eb->name);
 }
 
-static int entry_cmp_size(const void *a, const void *b) {
-    const FileEntry *ea = a, *eb = b;
-    if (eb->size > ea->size) return 1;
-    if (eb->size < ea->size) return -1;
+static int node_cmp_size(const void *a, const void *b) {
+    const TreeNode *na = a, *nb = b;
+    if (nb->entry.size > na->entry.size) return 1;
+    if (nb->entry.size < na->entry.size) return -1;
     return 0;
 }
 
-static int entry_cmp_time(const void *a, const void *b) {
-    const FileEntry *ea = a, *eb = b;
-    if (eb->mtime > ea->mtime) return 1;
-    if (eb->mtime < ea->mtime) return -1;
+static int node_cmp_time(const void *a, const void *b) {
+    const TreeNode *na = a, *nb = b;
+    if (nb->entry.mtime > na->entry.mtime) return 1;
+    if (nb->entry.mtime < na->entry.mtime) return -1;
     return 0;
 }
 
-static void reverse_file_list(FileList *list) {
-    for (size_t i = 0; i < list->count / 2; i++) {
-        FileEntry tmp = list->entries[i];
-        list->entries[i] = list->entries[list->count - 1 - i];
-        list->entries[list->count - 1 - i] = tmp;
+static void reverse_nodes(TreeNode *nodes, size_t count) {
+    for (size_t i = 0; i < count / 2; i++) {
+        TreeNode tmp = nodes[i];
+        nodes[i] = nodes[count - 1 - i];
+        nodes[count - 1 - i] = tmp;
     }
 }
 
-static void sort_file_list(FileList *list, SortMode mode, int reverse) {
-    if (list->count == 0) return;
+/* Order a parent's children for display. Entries arrive name-sorted from
+ * read_directory; size/time ordering runs here — after metadata is final,
+ * since -S sorts on computed directory totals. */
+static void order_children(TreeNode *parent, const TreeBuildOpts *opts) {
+    if (parent->child_count == 0) return;
 
-    int (*cmp)(const void *, const void *) = NULL;
-    switch (mode) {
-        case SORT_NAME: cmp = entry_cmp_name; break;
-        case SORT_SIZE: cmp = entry_cmp_size; break;
-        case SORT_TIME: cmp = entry_cmp_time; break;
-        default: return;
+    if (opts->sort_by == SORT_SIZE || opts->sort_by == SORT_TIME) {
+        qsort(parent->children, parent->child_count, sizeof(TreeNode),
+              opts->sort_by == SORT_SIZE ? node_cmp_size : node_cmp_time);
+        if (opts->sort_reverse) reverse_nodes(parent->children, parent->child_count);
+    } else if (opts->sort_reverse) {
+        reverse_nodes(parent->children, parent->child_count);
     }
-
-    qsort(list->entries, list->count, sizeof(FileEntry), cmp);
-    if (reverse) reverse_file_list(list);
 }
 
 /* ============================================================================
  * Directory Reading
  * ============================================================================ */
 
+/* Read a directory's entries, name-sorted. Metadata (dir stats, file
+ * content) and -S/-T/-r ordering are the caller's concern: sizes are summed
+ * bottom-up after recursion, so both must wait until subtrees are final
+ * (build_tree_children / tree_expand_node + order_children). */
 int read_directory(const char *dir_path, FileList *list,
                    const TreeBuildOpts *opts) {
+    (void)opts;
     DIR *dir = opendir(dir_path);
     if (!dir) return -1;
 
     int is_virtual_fs = path_is_virtual_fs(dir_path);
-    const ComputeOpts *c = &opts->compute;
 
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
@@ -154,24 +158,7 @@ int read_directory(const char *dir_path, FileList *list,
     }
     closedir(dir);
 
-    /* Compute metadata in parallel if requested */
-    int need_parallel = !is_virtual_fs &&
-        (c->sizes || c->file_counts || c->line_counts || c->media_info);
-    if (list->count > 0 && need_parallel) {
-        #pragma omp parallel for schedule(dynamic)
-        for (size_t i = 0; i < list->count; i++) {
-            file_entry_compute(&list->entries[i], c, is_virtual_fs);
-        }
-    }
-
-    /* Sort */
     qsort(list->entries, list->count, sizeof(FileEntry), entry_cmp_name);
-    if (opts->sort_by != SORT_NONE && opts->sort_by != SORT_NAME) {
-        sort_file_list(list, opts->sort_by, opts->sort_reverse);
-    } else if (opts->sort_reverse) {
-        reverse_file_list(list);
-    }
-
     return 0;
 }
 
@@ -340,10 +327,15 @@ static int *materialize_children(TreeNode *parent, const TreeBuildOpts *opts,
         ? find_git_repo_roots(&list, in_git_repo, is_git_repo_root, is_submodule, &git_repo_count)
         : NULL;
     if (git_repos) {
-        #pragma omp parallel for schedule(dynamic)
+        /* Tasks, not a nested parallel region: the tree build runs inside one
+         * region already (immediate execution when called outside one, e.g.
+         * interactive expansion). */
         for (size_t i = 0; i < git_repo_count; i++) {
-            git_populate_repo(git, git_repos[i], opts->compute.git_diff);
+            const char *repo = git_repos[i];
+            #pragma omp task firstprivate(repo)
+            git_populate_repo(git, repo, opts->compute.git_diff);
         }
+        #pragma omp taskwait
         free(git_repos);
     }
 
@@ -387,6 +379,69 @@ static int *materialize_children(TreeNode *parent, const TreeBuildOpts *opts,
     return is_git_repo_root;
 }
 
+/* Frontier directory: one that will not be materialized (depth limit,
+ * hidden without -a, opaque, gitignore-skipped, --min-size pruned, or
+ * unreadable). Its stats come from the scanner — the only place the tree
+ * build still walks anything twice-removed. Uses the task-based scanner
+ * core since we are inside the build's parallel region. */
+static void compute_dir_stats_frontier(FileEntry *fe, const ComputeOpts *c) {
+    DirStats stats = get_dir_stats_cached_tasks(fe->path);
+    if (c->sizes) fe->size = stats.size;
+    if (c->file_counts) fe->file_count = stats.file_count;
+}
+
+/* Sum a materialized directory's stats from its (final) children, mirroring
+ * the scanner's accounting exactly: allocated blocks, symlinks count as
+ * files (macOS also adds the link's own blocks; Linux does not — matching
+ * scan_impl's platform split), opaque children contribute size but excluded
+ * counts (-1), and devices/sockets/fifos are not counted. */
+static void dir_stats_from_children(TreeNode *dir, const ComputeOpts *c) {
+    off_t size = dir->entry.alloc_size;
+    long count = 0;
+
+    for (size_t i = 0; i < dir->child_count; i++) {
+        const FileEntry *fe = &dir->children[i].entry;
+        switch (fe->type) {
+            case FTYPE_SYMLINK:
+            case FTYPE_SYMLINK_DIR:
+            case FTYPE_SYMLINK_EXEC:
+            case FTYPE_SYMLINK_DEVICE:
+            case FTYPE_SYMLINK_SOCKET:
+            case FTYPE_SYMLINK_FIFO:
+            case FTYPE_SYMLINK_BROKEN:
+#ifdef __APPLE__
+                size += fe->alloc_size;
+#endif
+                count++;
+                break;
+            case FTYPE_DIR:
+                if (fe->size >= 0) size += fe->size;
+                if (fe->file_count >= 0) count += fe->file_count;
+                break;
+            case FTYPE_FILE:
+            case FTYPE_EXEC:
+                size += fe->alloc_size;
+                count++;
+                break;
+            default:
+                break;  /* devices, sockets, fifos: not counted by the scanner */
+        }
+    }
+
+    if (c->sizes) dir->entry.size = size;
+    if (c->file_counts) dir->entry.file_count = count;
+}
+
+/* A recursed directory's stats once its subtree is complete: bottom-up sum
+ * when it materialized, scanner fallback when it turned out unreadable. */
+static void finalize_dir_stats(TreeNode *dir, const ComputeOpts *c) {
+    if (dir->was_expanded) {
+        dir_stats_from_children(dir, c);
+    } else {
+        compute_dir_stats_frontier(&dir->entry, c);
+    }
+}
+
 static void build_tree_children(TreeNode *parent, int depth,
                                  const TreeBuildOpts *opts, GitCache *git,
                                  int in_git_repo, int parent_is_ignored) {
@@ -396,21 +451,69 @@ static void build_tree_children(TreeNode *parent, int depth,
                                                  parent_is_ignored);
     if (!is_git_repo_root) return;  /* unreadable or empty: nothing to recurse */
 
+    const ComputeOpts *c = &opts->compute;
+    int is_virtual = path_is_virtual_fs(parent->entry.path);
+    int want_dir_stats = (c->sizes || c->file_counts) && !is_virtual;
+    int want_content = (c->line_counts || c->media_info) && !is_virtual;
+
+    /* --min-size prunes recursion on a directory's total size, which must
+     * then be known before descending: scan every child directory eagerly
+     * and keep those totals (the pre-Phase-5 cost model, for this flag
+     * only). Otherwise materialized directories are summed bottom-up. */
+    int eager_stats = (opts->skip_fn != NULL) && want_dir_stats;
+    if (eager_stats) {
+        for (size_t i = 0; i < parent->child_count; i++) {
+            TreeNode *child = &parent->children[i];
+            if (!node_is_directory(child)) continue;
+            #pragma omp task firstprivate(child)
+            compute_dir_stats_frontier(&child->entry, c);
+        }
+        #pragma omp taskwait
+    }
+
     for (size_t i = 0; i < parent->child_count; i++) {
         TreeNode *child = &parent->children[i];
 
-        /* Don't descend into hidden directories unless -a: their entries are
-         * kept in the tree, but scanning their contents (e.g. .git, .cache) is
-         * wasteful and their git status is read from the cache by path. */
-        int skip_hidden_dir = !opts->show_hidden && child->entry.name[0] == '.';
-        if (node_is_directory(child) && !skip_hidden_dir &&
-            !should_skip_dir(child->entry.name, child->entry.is_ignored, opts->skip_gitignored) &&
-            !(opts->skip_fn && opts->skip_fn(&child->entry, opts->skip_ctx))) {
-            int child_in_git_repo = in_git_repo || is_git_repo_root[i];
-            build_tree_children(child, depth + 1, opts, git, child_in_git_repo, child->entry.is_ignored);
+        if (node_is_directory(child)) {
+            /* Don't descend into hidden directories unless -a: their entries
+             * are kept in the tree, but scanning their contents (e.g. .git,
+             * .cache) is wasteful and their git status is read from the
+             * cache by path. */
+            int skip_hidden_dir = !opts->show_hidden && child->entry.name[0] == '.';
+            int recurse = !skip_hidden_dir &&
+                !should_skip_dir(child->entry.name, child->entry.is_ignored,
+                                 opts->skip_gitignored) &&
+                !(opts->skip_fn && opts->skip_fn(&child->entry, opts->skip_ctx));
+
+            if (recurse) {
+                int child_in_git_repo = in_git_repo || is_git_repo_root[i];
+                int child_ignored = child->entry.is_ignored;
+                #pragma omp task firstprivate(child, child_in_git_repo, child_ignored)
+                {
+                    build_tree_children(child, depth + 1, opts, git,
+                                        child_in_git_repo, child_ignored);
+                    if (!eager_stats && want_dir_stats) {
+                        finalize_dir_stats(child, c);
+                    }
+                }
+            } else if (!eager_stats && want_dir_stats) {
+                #pragma omp task firstprivate(child)
+                compute_dir_stats_frontier(&child->entry, c);
+            }
+        } else if (want_content) {
+            int is_file = (child->entry.type == FTYPE_FILE ||
+                           child->entry.type == FTYPE_EXEC ||
+                           child->entry.type == FTYPE_SYMLINK ||
+                           child->entry.type == FTYPE_SYMLINK_EXEC);
+            if (is_file) {
+                #pragma omp task firstprivate(child)
+                fileinfo_compute_content(&child->entry, c->line_counts, c->media_info);
+            }
         }
     }
+    #pragma omp taskwait
 
+    order_children(parent, opts);
     free(is_git_repo_root);
 }
 
@@ -444,7 +547,11 @@ TreeNode *build_tree(const char *path, const TreeBuildOpts *opts,
     root->entry.abs_path = xstrdup(root_real);
 
     int is_dir = node_is_directory(root);
-    file_entry_compute(&root->entry, &opts->compute, is_virtual_fs);
+    /* Files get their content metadata now; directory stats wait until the
+     * subtree is built (bottom-up) or proven frontier (scan) below. */
+    if (!is_dir) {
+        file_entry_compute(&root->entry, &opts->compute, is_virtual_fs);
+    }
 
     if (opts->compute.git_status) {
         apply_git_status(&root->entry, git, opts->compute.git_diff);
@@ -464,7 +571,22 @@ TreeNode *build_tree(const char *path, const TreeBuildOpts *opts,
     }
 
     if (is_dir) {
+        /* One parallel region for the whole build: recursion, per-file
+         * content, git populates, and frontier scans all run as tasks
+         * inside it (nested regions would be serialized by the runtime). */
+        #pragma omp parallel
+        #pragma omp single
         build_tree_children(root, 0, opts, git, in_git_repo, root->entry.is_ignored);
+
+        if ((opts->compute.sizes || opts->compute.file_counts) && !is_virtual_fs) {
+            if (root->was_expanded && !opts->skip_fn) {
+                dir_stats_from_children(root, &opts->compute);
+            } else {
+                /* Depth 0, unreadable, or --min-size (eager) mode: whole-tree
+                 * scan, with its own parallel region (we are outside ours). */
+                file_entry_compute(&root->entry, &opts->compute, is_virtual_fs);
+            }
+        }
     }
 
     return root;
@@ -487,7 +609,22 @@ void tree_expand_node(TreeNode *node, const TreeBuildOpts *opts,
 
     int *is_git_repo_root = materialize_children(node, opts, git, in_git_repo,
                                                  node->entry.is_ignored);
+    if (!is_git_repo_root) return;
     free(is_git_repo_root);
+
+    /* One level only (interactive expansion doesn't recurse), so every child
+     * is a leaf from this call's perspective: compute file content and
+     * directory totals directly, in parallel. */
+    const ComputeOpts *c = &opts->compute;
+    int is_virtual = path_is_virtual_fs(node->entry.path);
+    if (!is_virtual && (c->sizes || c->file_counts || c->line_counts || c->media_info)) {
+        #pragma omp parallel for schedule(dynamic)
+        for (size_t i = 0; i < node->child_count; i++) {
+            file_entry_compute(&node->children[i].entry, c, is_virtual);
+        }
+    }
+
+    order_children(node, opts);
 }
 
 void tree_rescan_node(TreeNode *node, const TreeBuildOpts *opts,

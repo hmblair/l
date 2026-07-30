@@ -57,12 +57,15 @@ static FileType get_symlink_target_type(const struct stat *target_st) {
  * File Type Detection
  * ============================================================================ */
 
-FileType detect_file_type(const char *path, struct stat *st, char **symlink_target) {
+FileType detect_file_type(const char *path, struct stat *st,
+                          char **symlink_target, off_t *lalloc) {
     struct stat lst;
     *symlink_target = NULL;
+    if (lalloc) *lalloc = 0;
 
     if (lstat(path, &lst) != 0) return FTYPE_UNKNOWN;
     *st = lst;
+    if (lalloc) *lalloc = (off_t)lst.st_blocks * 512;
 
     if (S_ISLNK(lst.st_mode)) {
         *symlink_target = resolve_symlink(path);

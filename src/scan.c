@@ -207,6 +207,22 @@ ScanResult scan_directory(const char *path,
     return result;
 }
 
+ScanResult scan_directory_tasks(const char *path,
+                                scan_store_fn store_fn,
+                                scan_cache_fn cache_fn,
+                                volatile int *shutdown,
+                                long threshold) {
+    ScanResult result;
+    VisitedSet visited;
+    visited_init(&visited);
+    ScanContext ctx = {store_fn, cache_fn, shutdown, threshold, &visited};
+
+    result = scan_impl(path, 0, &ctx);
+
+    visited_free(&visited);
+    return result;
+}
+
 #ifdef __APPLE__
 /* macOS: use getattrlistbulk for faster metadata fetching */
 static ScanResult scan_impl(const char *path, int depth,
@@ -260,11 +276,13 @@ static ScanResult scan_impl(const char *path, int depth,
             fsobj_type_t obj_type = *(fsobj_type_t *)p;
             p += sizeof(fsobj_type_t);
 
+            /* getattrlistbulk records are only 4-byte aligned; copy the
+             * 8-byte size out instead of dereferencing (UB, and a real trap
+             * on stricter targets). */
             off_t alloc_size = 0;
-            if (obj_type == VREG && (returned.fileattr & ATTR_FILE_ALLOCSIZE)) {
-                alloc_size = *(off_t *)p;
-            } else if (obj_type == VDIR && (returned.dirattr & ATTR_DIR_ALLOCSIZE)) {
-                alloc_size = *(off_t *)p;
+            if ((obj_type == VREG && (returned.fileattr & ATTR_FILE_ALLOCSIZE)) ||
+                (obj_type == VDIR && (returned.dirattr & ATTR_DIR_ALLOCSIZE))) {
+                memcpy(&alloc_size, p, sizeof(alloc_size));
             }
 
             if (!PATH_IS_DOT_OR_DOTDOT(name)) {

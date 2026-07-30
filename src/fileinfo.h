@@ -25,7 +25,12 @@ typedef enum {
  * File Type Detection
  * ============================================================================ */
 
-FileType detect_file_type(const char *path, struct stat *st, char **symlink_target);
+/* Detect the entry's type. st receives the followed stat for valid symlinks
+ * (the target's), the lstat otherwise. lalloc (may be NULL) receives the
+ * entry's OWN allocated bytes (lstat st_blocks * 512) — for symlinks that is
+ * the link itself, matching how the size scanner accounts for them. */
+FileType detect_file_type(const char *path, struct stat *st,
+                          char **symlink_target, off_t *lalloc);
 const char *get_file_color(FileType type, int is_ignored, int is_tty, int color_all);
 
 /* ============================================================================
