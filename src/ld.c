@@ -13,7 +13,7 @@
 #include <time.h>
 #include <omp.h>
 
-#define LOG_FILE "/tmp/l-cached.log"
+#define LOG_FILE L_DAEMON_LOG_FILE
 #define DAEMON_MAX_THREADS 4
 
 static volatile sig_atomic_t g_shutdown = 0;
@@ -47,9 +47,8 @@ static void rotate_log(void) {
 }
 
 static void write_status(const char *status) {
-    const char *home = getenv("HOME");
     char path[PATH_MAX];
-    snprintf(path, sizeof(path), "%s/.cache/l/status", home ? home : "/tmp");
+    daemon_status_get_path(path, sizeof(path));
     FILE *f = fopen(path, "w");
     if (f) {
         fprintf(f, "%s\n", status);

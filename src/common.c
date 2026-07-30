@@ -522,6 +522,11 @@ void cache_get_path(char *buf, size_t len) {
     snprintf(buf, len, "%s/.cache/l/sizes-v3.db", home ? home : "/tmp");
 }
 
+void daemon_status_get_path(char *buf, size_t len) {
+    const char *home = getenv("HOME");
+    snprintf(buf, len, "%s/.cache/l/status", home ? home : "/tmp");
+}
+
 int path_is_network_fs(const char *path) {
 #ifdef __linux__
     /* Network filesystem magic numbers */

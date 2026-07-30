@@ -246,4 +246,9 @@ int path_is_virtual_fs(const char *path);
 /* Get cache database path */
 void cache_get_path(char *buf, size_t len);
 
+/* Daemon runtime files - single definitions shared by l's management UI
+ * (daemon.c) and the daemon itself (ld.c) */
+#define L_DAEMON_LOG_FILE "/tmp/l-cached.log"
+void daemon_status_get_path(char *buf, size_t len);
+
 #endif /* L_COMMON_H */

@@ -233,23 +233,15 @@ static void get_service_path(char *buf, size_t len) {
 #endif
 }
 
-static void get_cache_path(char *buf, size_t len) {
-    const char *home = getenv("HOME");
-    snprintf(buf, len, "%s/.cache/l/sizes-v2.db", home ? home : "/tmp");
-}
-
+/* Cache, log, and status paths come from common.c/common.h so the daemon,
+ * the client, and this management UI can never disagree about them. */
 static void get_log_path(char *buf, size_t len) {
-    snprintf(buf, len, "/tmp/l-cached.log");
-}
-
-static void get_status_path(char *buf, size_t len) {
-    const char *home = getenv("HOME");
-    snprintf(buf, len, "%s/.cache/l/status", home ? home : "/tmp");
+    snprintf(buf, len, "%s", L_DAEMON_LOG_FILE);
 }
 
 static int is_daemon_scanning(void) {
     char path[PATH_MAX];
-    get_status_path(path, sizeof(path));
+    daemon_status_get_path(path, sizeof(path));
     FILE *f = fopen(path, "r");
     if (!f) return 0;
     char status[16] = "";
@@ -435,7 +427,7 @@ static void daemon_remove_service(void) {
 
 static int cache_get_count(void) {
     char cache_path[PATH_MAX];
-    get_cache_path(cache_path, sizeof(cache_path));
+    cache_get_path(cache_path, sizeof(cache_path));
 
     sqlite3 *db;
     if (sqlite3_open_v2(cache_path, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK) {
@@ -456,7 +448,7 @@ static int cache_get_count(void) {
 
 static time_t cache_get_mtime(void) {
     char cache_path[PATH_MAX];
-    get_cache_path(cache_path, sizeof(cache_path));
+    cache_get_path(cache_path, sizeof(cache_path));
 
     /* Check WAL file first (SQLite WAL mode) */
     char wal_path[PATH_MAX + 8];
@@ -478,7 +470,7 @@ static time_t cache_get_mtime(void) {
 
 static off_t cache_get_size(void) {
     char cache_path[PATH_MAX];
-    get_cache_path(cache_path, sizeof(cache_path));
+    cache_get_path(cache_path, sizeof(cache_path));
 
     off_t total = 0;
     struct stat st;
@@ -500,7 +492,7 @@ static off_t cache_get_size(void) {
 
 static void cache_clear(void) {
     char cache_path[PATH_MAX];
-    get_cache_path(cache_path, sizeof(cache_path));
+    cache_get_path(cache_path, sizeof(cache_path));
 
     char wal_path[PATH_MAX + 8], shm_path[PATH_MAX + 8];
     snprintf(wal_path, sizeof(wal_path), "%s-wal", cache_path);
@@ -535,7 +527,7 @@ static void print_status(void) {
             }
             /* Get status (scanning/idle) and last scan duration */
             char status_path[PATH_MAX];
-            get_status_path(status_path, sizeof(status_path));
+            daemon_status_get_path(status_path, sizeof(status_path));
             char status[32] = "idle";
             FILE *sf = fopen(status_path, "r");
             if (sf) {
@@ -573,7 +565,7 @@ static void print_status(void) {
     time_t mtime = cache_get_mtime();
     off_t size = cache_get_size();
     char cache_path[PATH_MAX];
-    get_cache_path(cache_path, sizeof(cache_path));
+    cache_get_path(cache_path, sizeof(cache_path));
 
     if (count > 0) {
         char time_buf[64];
