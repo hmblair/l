@@ -16,11 +16,33 @@
 #define SCANF_PATH "%" TOSTRING(PATH_SCANF_WIDTH) "[^\n]"
 
 /* ============================================================================
+ * Status Classification
+ * ============================================================================ */
+
+unsigned git_flags_from_porcelain(const char *status) {
+    if (!status || !status[0]) return 0;
+    if (strcmp(status, "!!") == 0) return GITF_IGNORED;
+    if (strcmp(status, "??") == 0) return GITF_UNTRACKED;
+
+    unsigned flags = 0;
+    if (status[0] == 'D') flags |= GITF_STAGED_DELETED;
+    else if (status[0] != ' ' && status[0] != '?' && status[0] != '!') flags |= GITF_STAGED;
+
+    if (status[1] == 'M') flags |= GITF_WT_MODIFIED;
+    else if (status[1] == 'D') flags |= GITF_WT_DELETED;
+    else if (status[1] == 'R') flags |= GITF_WT_RENAMED;
+    else if (status[1] == 'T') flags |= GITF_WT_TYPECHANGE;
+
+    return flags;
+}
+
+/* ============================================================================
  * GitCache Functions
  * ============================================================================ */
 
 void git_cache_init(GitCache *cache) {
     memset(cache->buckets, 0, sizeof(cache->buckets));
+    memset(cache->agg_buckets, 0, sizeof(cache->agg_buckets));
     cache->repo_root_count = 0;
 #ifdef _OPENMP
     omp_init_lock(&cache->lock);
@@ -63,6 +85,19 @@ static int git_cache_path_in_repo(GitCache *cache, const char *dir_path) {
     return 0;
 }
 
+static void git_cache_free_aggregates(GitCache *cache) {
+    for (int i = 0; i < L_HASH_SIZE; i++) {
+        struct GitDirAggregate *agg = cache->agg_buckets[i];
+        while (agg) {
+            struct GitDirAggregate *next = agg->next;
+            free(agg->path);
+            free(agg);
+            agg = next;
+        }
+        cache->agg_buckets[i] = NULL;
+    }
+}
+
 void git_cache_free(GitCache *cache) {
     for (int i = 0; i < L_HASH_SIZE; i++) {
         GitStatusNode *node = cache->buckets[i];
@@ -74,6 +109,7 @@ void git_cache_free(GitCache *cache) {
         }
         cache->buckets[i] = NULL;
     }
+    git_cache_free_aggregates(cache);
     for (int i = 0; i < cache->repo_root_count; i++) {
         free(cache->repo_roots[i]);
     }
@@ -104,8 +140,7 @@ void git_cache_add(GitCache *cache, const char *path, const char *status) {
 
     GitStatusNode *node = xmalloc(sizeof(GitStatusNode));
     node->path = xstrdup(path);
-    strncpy(node->status, status, 2);
-    node->status[2] = '\0';
+    node->flags = git_flags_from_porcelain(status);
     node->lines_added = 0;
     node->lines_removed = 0;
     node->next = cache->buckets[h];
@@ -116,18 +151,18 @@ void git_cache_add(GitCache *cache, const char *path, const char *status) {
 #endif
 }
 
-const char *git_cache_get(GitCache *cache, const char *path) {
+unsigned git_cache_get_flags(GitCache *cache, const char *path) {
     unsigned int h = hash_string(path);
 
 #ifdef _OPENMP
     omp_set_lock(&cache->lock);
 #endif
 
-    const char *result = NULL;
+    unsigned result = 0;
     GitStatusNode *node = cache->buckets[h];
     while (node) {
         if (strcmp(node->path, path) == 0) {
-            result = node->status;
+            result = node->flags;
             break;
         }
         node = node->next;
@@ -209,42 +244,92 @@ static void git_reset_diff_stats(GitCache *cache, const char *repo_path) {
 #endif
 }
 
-/* Classify a two-char git status into a directory summary, applying it with the
- * given sign (+1 to add, -1 to remove). Single source of truth for the
- * status -> bucket mapping: a staged deletion (index 'D', e.g. git rm) counts
- * as a deletion rather than a generic staged change, matching get_git_indicator. */
-void git_summary_apply_status(GitSummary *s, const char *status, int sign) {
-    if (!status[0] || strcmp(status, "!!") == 0) return;
-    if (strcmp(status, "??") == 0) { s->untracked += sign; return; }
-    if (status[0] == 'D') s->staged_deleted += sign;
-    else if (status[0] != ' ' && status[0] != '?' && status[0] != '!') s->staged += sign;
-    if (status[1] == 'M') s->modified += sign;
-    else if (status[1] == 'D') s->deleted += sign;
+/* Classify normalized status flags into a directory summary, applying them
+ * with the given sign (+1 to add, -1 to remove). Single source of truth for
+ * the flags -> bucket mapping: a staged deletion counts as a deletion rather
+ * than a generic staged change, matching the row indicator. */
+void git_summary_apply_flags(GitSummary *s, unsigned flags, int sign) {
+    if (!flags || (flags & GITF_IGNORED)) return;
+    if (flags & GITF_UNTRACKED) { s->untracked += sign; return; }
+    if (flags & GITF_STAGED_DELETED) s->staged_deleted += sign;
+    else if (flags & GITF_STAGED) s->staged += sign;
+    if (flags & GITF_WT_MODIFIED) s->modified += sign;
+    else if (flags & GITF_WT_DELETED) s->deleted += sign;
+}
+
+/* ---- Per-directory aggregates ------------------------------------------- */
+
+/* Find or create the aggregate for a directory. Caller holds the lock. */
+static GitSummary *git_agg_get_or_create(GitCache *cache, const char *dir) {
+    unsigned int h = hash_string(dir);
+    for (struct GitDirAggregate *a = cache->agg_buckets[h]; a; a = a->next) {
+        if (strcmp(a->path, dir) == 0) return &a->sum;
+    }
+    struct GitDirAggregate *a = xmalloc(sizeof(*a));
+    a->path = xstrdup(dir);
+    memset(&a->sum, 0, sizeof(a->sum));
+    a->next = cache->agg_buckets[h];
+    cache->agg_buckets[h] = a;
+    return &a->sum;
+}
+
+/* Rebuild every directory aggregate from the current status nodes. Each
+ * change contributes to all ancestors that lie inside a known repo root
+ * (containment is downward-closed, so the walk stops at the first ancestor
+ * outside every root — the same scope the old full-cache prefix scan had via
+ * its in-repo gate). Called at the end of every git_populate_repo; a global
+ * wipe-and-rebuild keeps re-populates and nested repos consistent without
+ * ordering concerns. */
+static void git_cache_rebuild_aggregates(GitCache *cache) {
+#ifdef _OPENMP
+    omp_set_lock(&cache->lock);
+#endif
+    git_cache_free_aggregates(cache);
+
+    for (int i = 0; i < L_HASH_SIZE; i++) {
+        for (GitStatusNode *node = cache->buckets[i]; node; node = node->next) {
+            int has_counts = GITF_IS_CHANGE(node->flags);
+            int has_lines = node->lines_added || node->lines_removed;
+            if (!has_counts && !has_lines) continue;
+
+            char dir[PATH_MAX];
+            strncpy(dir, node->path, sizeof(dir) - 1);
+            dir[sizeof(dir) - 1] = '\0';
+
+            for (;;) {
+                char *slash = strrchr(dir, '/');
+                if (!slash || slash == dir) break;  /* reached filesystem root */
+                *slash = '\0';
+                if (!git_cache_path_in_repo(cache, dir)) break;
+
+                GitSummary *s = git_agg_get_or_create(cache, dir);
+                git_summary_apply_flags(s, node->flags, +1);
+                s->diff_added += node->lines_added;
+                s->diff_removed += node->lines_removed;
+            }
+        }
+    }
+#ifdef _OPENMP
+    omp_unset_lock(&cache->lock);
+#endif
 }
 
 GitSummary git_get_dir_summary(GitCache *cache, const char *dir_path) {
     GitSummary summary = {0};
+    unsigned int h = hash_string(dir_path);
 
-    /* Only return git status for directories inside a known git repo */
-    if (!git_cache_path_in_repo(cache, dir_path))
-        return summary;
-
-    size_t dir_len = strlen(dir_path);
-
-    /* Iterate through all buckets */
-    for (int i = 0; i < L_HASH_SIZE; i++) {
-        GitStatusNode *node = cache->buckets[i];
-        while (node) {
-            /* Check if this path is under dir_path */
-            if (strncmp(node->path, dir_path, dir_len) == 0 &&
-                node->path[dir_len] == '/') {
-                git_summary_apply_status(&summary, node->status, +1);
-                summary.diff_added += node->lines_added;
-                summary.diff_removed += node->lines_removed;
-            }
-            node = node->next;
+#ifdef _OPENMP
+    omp_set_lock(&cache->lock);
+#endif
+    for (struct GitDirAggregate *a = cache->agg_buckets[h]; a; a = a->next) {
+        if (strcmp(a->path, dir_path) == 0) {
+            summary = a->sum;
+            break;
         }
     }
+#ifdef _OPENMP
+    omp_unset_lock(&cache->lock);
+#endif
     return summary;
 }
 
@@ -260,8 +345,7 @@ int git_path_in_ignored(GitCache *cache, const char *path, const char *git_root)
     check_path[sizeof(check_path) - 1] = '\0';
 
     while (strlen(check_path) > root_len) {
-        const char *status = git_cache_get(cache, check_path);
-        if (status && strcmp(status, "!!") == 0) {
+        if (git_cache_get_flags(cache, check_path) & GITF_IGNORED) {
             return 1;
         }
         /* Move up to parent directory */
@@ -708,6 +792,8 @@ void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_
     if (include_diff_stats) {
         git_populate_diff_stats_shell(cache, repo_path);
     }
+
+    git_cache_rebuild_aggregates(cache);
 }
 
 char *git_get_latest_tag(const char *repo_path) {
@@ -833,6 +919,7 @@ void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_
     }
 
     free(escaped);
+    git_cache_rebuild_aggregates(cache);
 }
 
 #endif /* HAVE_LIBGIT2 */

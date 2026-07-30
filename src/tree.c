@@ -51,6 +51,7 @@ void file_entry_init(FileEntry *fe, const char *path, int is_virtual_fs) {
     fe->dev = st.st_dev;
     fe->mtime = GET_MTIME(st);
     fe->size = is_virtual_fs ? -1 : st.st_size;
+    fe->is_readonly = (access(fe->path, W_OK) != 0);
 }
 
 void file_entry_compute(FileEntry *fe, const ComputeOpts *c, int is_virtual_fs) {
@@ -228,10 +229,13 @@ static int should_skip_dir(const char *name, int is_ignored, int skip_gitignored
 }
 
 static void apply_git_status(FileEntry *fe, GitCache *git, int compute_diff) {
-    GitStatusNode *git_node = git_cache_get_node(git, fe->path);
+    /* Key by the canonical path when available: the cache is keyed by paths
+     * derived from the (resolved) repo root, which the display path can
+     * differ from under a symlinked cwd. */
+    const char *key = fe->abs_path ? fe->abs_path : fe->path;
+    GitStatusNode *git_node = git_cache_get_node(git, key);
     if (git_node) {
-        strncpy(fe->git_status, git_node->status, sizeof(fe->git_status) - 1);
-        fe->git_status[sizeof(fe->git_status) - 1] = '\0';
+        fe->git_flags = git_node->flags;
         if (compute_diff) {
             fe->diff_added = git_node->lines_added;
             fe->diff_removed = git_node->lines_removed;
@@ -239,9 +243,30 @@ static void apply_git_status(FileEntry *fe, GitCache *git, int compute_diff) {
     }
 }
 
+/* Annotate a git repo root entry with everything its row displays: remote
+ * URL, latest tag, and branch/upstream state. Runs at build time so the
+ * renderer never touches git (git_get_branch_info can spawn git rev-list
+ * when the branch is out of sync with its upstream). */
+static void annotate_git_root(FileEntry *fe) {
+    fe->is_git_root = 1;
+    fe->remote = git_get_remote_url(fe->path);
+    fe->tag = git_get_latest_tag(fe->path);
+
+    GitBranchInfo gi;
+    if (git_get_branch_info(fe->path, &gi)) {
+        fe->branch = gi.branch;  /* takes ownership */
+        snprintf(fe->short_hash, sizeof(fe->short_hash), "%.7s", gi.commit);
+        fe->has_upstream = gi.has_upstream;
+        fe->out_of_sync = gi.out_of_sync;
+        fe->ahead = gi.ahead;
+        fe->behind = gi.behind;
+    }
+}
+
 /* Find git repo roots in a file list and mark them.
- * Returns array of repo paths to populate (caller must free).
- * Sets is_git_repo_root[i] and is_submodule[i] for each entry. */
+ * Returns array of repo paths (canonical, for cache keying) to populate
+ * (caller must free the array). Sets is_git_repo_root[i] and is_submodule[i]
+ * for each entry, and annotates each root with its repo info. */
 static char **find_git_repo_roots(FileList *list, int in_git_repo,
                                    int *is_git_repo_root, int *is_submodule,
                                    size_t *out_count) {
@@ -255,14 +280,12 @@ static char **find_git_repo_roots(FileList *list, int in_git_repo,
         if ((fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR) &&
             strcmp(fe->name, ".git") != 0 && path_is_git_root(fe->path)) {
             is_git_repo_root[i] = 1;
-            fe->is_git_root = 1;
-            fe->remote = git_get_remote_url(fe->path);
-            fe->tag = git_get_latest_tag(fe->path);
+            annotate_git_root(fe);
             if (in_git_repo) {
                 is_submodule[i] = 1;
             } else {
                 git_repos = xrealloc(git_repos, (count + 1) * sizeof(char *));
-                git_repos[count++] = fe->path;
+                git_repos[count++] = fe->abs_path ? fe->abs_path : fe->path;
             }
         }
     }
@@ -294,6 +317,19 @@ static int *materialize_children(TreeNode *parent, const TreeBuildOpts *opts,
         return NULL;
     }
 
+    /* Derive canonical paths from the parent's before any git work, so cache
+     * keys (populate) and lookups always agree even when the display path
+     * goes through a symlink — and realpath() runs once per tree, not once
+     * per entry. */
+    if (parent->entry.abs_path) {
+        for (size_t i = 0; i < list.count; i++) {
+            FileEntry *fe = &list.entries[i];
+            size_t n = strlen(parent->entry.abs_path) + 1 + strlen(fe->name) + 1;
+            fe->abs_path = xmalloc(n);
+            snprintf(fe->abs_path, n, "%s/%s", parent->entry.abs_path, fe->name);
+        }
+    }
+
     /* Discover and populate any git repos rooted directly at a child. Zero-init
      * the flags so the git-status-off path (find_git_repo_roots skipped) still
      * threads a defined in_git_repo downward. */
@@ -320,20 +356,13 @@ static int *materialize_children(TreeNode *parent, const TreeBuildOpts *opts,
         child->entry = list.entries[i];
         /* Mark mount boundaries (different filesystem than parent) */
         child->entry.is_mount_point = (child->entry.dev != parent->entry.dev);
-        /* Derive canonical path from the parent's (no realpath syscall). */
-        if (parent->entry.abs_path) {
-            size_t n = strlen(parent->entry.abs_path) + 1 + strlen(child->entry.name) + 1;
-            child->entry.abs_path = xmalloc(n);
-            snprintf(child->entry.abs_path, n, "%s/%s", parent->entry.abs_path, child->entry.name);
-        }
 
         if (opts->compute.git_status) {
             apply_git_status(&child->entry, git, opts->compute.git_diff);
         }
 
-        const char *git_status = child->entry.git_status[0] ? child->entry.git_status : NULL;
         child->entry.is_ignored = parent_is_ignored ||
-                                   (git_status && strcmp(git_status, "!!") == 0) ||
+                                   (child->entry.git_flags & GITF_IGNORED) ||
                                    path_name_is_opaque(child->entry.name) ||
                                    is_submodule[i];
 
@@ -347,7 +376,7 @@ static int *materialize_children(TreeNode *parent, const TreeBuildOpts *opts,
          * pass doesn't re-run. The static path recomputes this authoritatively,
          * so setting it here is harmless there. Don't bubble across repo
          * boundaries — only propagate when the parent is itself inside a repo. */
-        if (git_status && strcmp(git_status, "!!") != 0) {
+        if (GITF_IS_CHANGE(child->entry.git_flags)) {
             child->has_git_status = 1;
             if (in_git_repo) parent->has_git_status = 1;
         }
@@ -421,7 +450,7 @@ TreeNode *build_tree(const char *path, const TreeBuildOpts *opts,
         apply_git_status(&root->entry, git, opts->compute.git_diff);
     }
 
-    root->entry.is_ignored = (root->entry.git_status[0] && strcmp(root->entry.git_status, "!!") == 0) ||
+    root->entry.is_ignored = (root->entry.git_flags & GITF_IGNORED) ||
                               path_name_is_opaque(root->entry.name) ||
                               (in_git_repo && git_path_in_ignored(git, abs_path, git_root));
 
@@ -431,9 +460,7 @@ TreeNode *build_tree(const char *path, const TreeBuildOpts *opts,
     }
 
     if (is_dir && in_git_repo && strcmp(abs_path, git_root) == 0) {
-        root->entry.is_git_root = 1;
-        root->entry.remote = git_get_remote_url(abs_path);
-        root->entry.tag = git_get_latest_tag(abs_path);
+        annotate_git_root(&root->entry);
     }
 
     if (is_dir) {
@@ -500,9 +527,7 @@ static TreeNode *build_ancestor_node(const char *path, const TreeBuildOpts *opts
     file_entry_compute(&node->entry, &opts->compute, is_virtual_fs);
 
     if (node_is_directory(node) && path_is_git_root(path)) {
-        node->entry.is_git_root = 1;
-        node->entry.remote = git_get_remote_url(path);
-        node->entry.tag = git_get_latest_tag(path);
+        annotate_git_root(&node->entry);
     }
 
     return node;
@@ -644,8 +669,7 @@ int compute_git_status_flags(TreeNode *node, GitCache *git) {
      * cache roll-up over its whole subtree (git_get_dir_summary — exactly what
      * fileinfo_compute_git_dir_status draws), not a walk of the built children,
      * which would miss modifications below the built depth. */
-    int result = (node->entry.git_status[0] != '\0' &&
-                  strcmp(node->entry.git_status, "!!") != 0);
+    int result = GITF_IS_CHANGE(node->entry.git_flags);
 
     if (!result && node_is_directory(node)) {
         GitSummary s = git_get_dir_summary(git, node->entry.path);

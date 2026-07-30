@@ -52,6 +52,7 @@ typedef struct FileEntry {
     time_t mtime;                /* Last modification time */
     long file_count;             /* Number of files (directories only) */
     int is_mount_point;          /* 1 if on different filesystem than parent */
+    int is_readonly;             /* No write access (draws the lock icon) */
 
     /* --- Content analysis --- */
     ContentType content_type;    /* text/binary/image/etc. */
@@ -65,7 +66,7 @@ typedef struct FileEntry {
     /* --- Git file status --- */
     int is_ignored;              /* In .gitignore */
     int is_git_root;             /* Is a git repository root */
-    char git_status[3];          /* Two-char status (e.g., "M ", " M") */
+    unsigned git_flags;          /* Normalized status bits (GITF_*) */
     int diff_added;              /* Lines added */
     int diff_removed;            /* Lines removed */
 
@@ -79,7 +80,11 @@ typedef struct FileEntry {
                                   * on their own row). Recomputed per view. */
     int has_view_git_summary;    /* 1 if view_git_summary is valid */
 
-    /* --- Git repository info (git roots only, requires git_repo_info) --- */
+    /* --- Git repository info (git roots only) ---
+     * branch/tag/remote/short_hash and the upstream fields are filled at
+     * build time for every repo root row (annotate_git_root in tree.c);
+     * commit_count/tag_distance/repo_status additionally require the
+     * git_repo_info compute (summary mode). */
     char *branch;                /* Current branch name */
     char *tag;                   /* Latest tag, if any */
     int tag_distance;            /* Commits since tag (0 if at tag) */

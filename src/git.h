@@ -15,9 +15,29 @@
  * Types
  * ============================================================================ */
 
+/* Normalized git status bits. The two-char porcelain code is classified once
+ * at populate time (git_flags_from_porcelain); everything downstream reads
+ * these flags instead of re-parsing the code. */
+enum {
+    GITF_IGNORED        = 1u << 0,  /* !! */
+    GITF_UNTRACKED      = 1u << 1,  /* ?? */
+    GITF_STAGED         = 1u << 2,  /* index A/M/R/T/C/U */
+    GITF_STAGED_DELETED = 1u << 3,  /* index D (e.g. git rm) */
+    GITF_WT_MODIFIED    = 1u << 4,  /* worktree M */
+    GITF_WT_DELETED     = 1u << 5,  /* worktree D */
+    GITF_WT_RENAMED     = 1u << 6,  /* worktree R (no icon/summary, but "changed") */
+    GITF_WT_TYPECHANGE  = 1u << 7,  /* worktree T (no icon/summary, but "changed") */
+};
+
+/* An entry counts as a change (for -m and directory roll-ups) iff it has
+ * flags and is not ignored. */
+#define GITF_IS_CHANGE(flags) ((flags) != 0 && !((flags) & GITF_IGNORED))
+
+unsigned git_flags_from_porcelain(const char *status);
+
 typedef struct GitStatusNode {
     char *path;
-    char status[3];
+    unsigned flags;
     int lines_added;
     int lines_removed;
     struct GitStatusNode *next;
@@ -27,6 +47,7 @@ typedef struct GitStatusNode {
 
 typedef struct {
     GitStatusNode *buckets[L_HASH_SIZE];
+    struct GitDirAggregate *agg_buckets[L_HASH_SIZE];
     char *repo_roots[L_MAX_GIT_ROOTS];
     int repo_root_count;
 #ifdef _OPENMP
@@ -48,6 +69,16 @@ typedef struct {
     int diff_removed;   /* Lines removed across descendants */
 } GitSummary;
 
+/* Per-directory roll-up of every change strictly beneath it, rebuilt from the
+ * status nodes at the end of each git_populate_repo (git aggregates walk each
+ * changed entry's ancestors up to the outermost enclosing repo root). Makes
+ * git_get_dir_summary an O(1) lookup instead of a full-cache prefix scan. */
+struct GitDirAggregate {
+    char *path;
+    GitSummary sum;
+    struct GitDirAggregate *next;
+};
+
 /* ============================================================================
  * GitCache Functions
  * ============================================================================ */
@@ -67,10 +98,10 @@ void git_cache_set_diff(GitCache *cache, const char *path, int added, int remove
 /* Add diff stats to existing values for a cached path (accumulates) */
 void git_cache_add_diff(GitCache *cache, const char *path, int added, int removed);
 
-/* Look up status for a path (returns NULL if not found) */
-const char *git_cache_get(GitCache *cache, const char *path);
+/* Look up normalized status flags for a path (0 if not in the cache) */
+unsigned git_cache_get_flags(GitCache *cache, const char *path);
 
-/* Look up diff stats for a path (returns node, or NULL if not found) */
+/* Look up the full status node for a path (flags + diff stats), or NULL */
 GitStatusNode *git_cache_get_node(GitCache *cache, const char *path);
 
 /* ============================================================================
@@ -85,12 +116,13 @@ int git_find_root(const char *path, char *root, size_t root_len);
  * If include_diff_stats is true, also populate lines added/removed. */
 void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_stats);
 
-/* Get aggregated git status for all files under a directory */
+/* Get aggregated git status for all files under a directory (O(1) lookup of
+ * the aggregate built at populate time; zero summary if none) */
 GitSummary git_get_dir_summary(GitCache *cache, const char *dir_path);
 
-/* Apply a two-char git status to a directory summary (+1 to add, -1 to remove).
- * Single source of truth for the status -> bucket classification. */
-void git_summary_apply_status(GitSummary *s, const char *status, int sign);
+/* Apply normalized status flags to a directory summary (+1 to add, -1 to
+ * remove). Single source of truth for the flags -> bucket classification. */
+void git_summary_apply_flags(GitSummary *s, unsigned flags, int sign);
 
 /* Check if a path is inside an ignored directory (walks up ancestors) */
 int git_path_in_ignored(GitCache *cache, const char *path, const char *git_root);

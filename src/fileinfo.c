@@ -1500,7 +1500,10 @@ static void format_count_local(long count, char *buf, size_t len) {
 void fileinfo_compute_git_repo_info(struct FileEntry *fe, GitCache *git) {
     if (!fe->is_git_root) return;
 
-    /* Branch and upstream status */
+    /* Branch and upstream status (annotate_git_root may have filled these at
+     * build time; re-fetch and replace rather than leak) */
+    free(fe->branch);
+    fe->branch = NULL;
     GitBranchInfo gi;
     if (git_get_branch_info(fe->path, &gi)) {
         fe->branch = gi.branch;  /* Takes ownership */

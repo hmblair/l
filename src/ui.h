@@ -125,8 +125,8 @@ void print_summary(TreeNode *node, PrintContext *ctx);
  * Git Status Indicator
  * ============================================================================ */
 
-const char *get_git_indicator(GitCache *cache, const char *path,
-                              const Icons *icons, const Config *cfg);
+const char *git_indicator_from_flags(unsigned flags, const Icons *icons,
+                                     const Config *cfg);
 
 /* ============================================================================
  * Path Resolution Helpers

@@ -140,16 +140,14 @@ void git_summary_clamp(GitSummary *s) {
  * its whole subtree, which that child's row already accounts for. */
 void view_summary_remove_shown_child(GitSummary *s, const TreeNode *child, GitCache *git) {
     /* Look the child's own status up in the cache by absolute path — the same
-     * key git_get_dir_summary uses — rather than entry.git_status, which is set
-     * via the (possibly relative) display path and isn't always populated. */
+     * key git_get_dir_summary uses. */
     const char *abs = child->entry.abs_path ? child->entry.abs_path
                                             : child->entry.path;
-    const char *status = git_cache_get(git, abs);
-    if (status) git_summary_apply_status(s, status, -1);
-    /* The child's own line stats live on its cache node (files have them;
-     * directories usually don't). Subtree line stats are folded in below. */
     GitStatusNode *node = git_cache_get_node(git, abs);
     if (node) {
+        git_summary_apply_flags(s, node->flags, -1);
+        /* The child's own line stats live on its cache node (files have them;
+         * directories usually don't). Subtree line stats are folded in below. */
         s->diff_added -= node->lines_added;
         s->diff_removed -= node->lines_removed;
     }
@@ -268,29 +266,28 @@ static char *append_git_icon(char *buf, size_t *remaining,
     return buf + written;
 }
 
-const char *get_git_indicator(GitCache *cache, const char *path,
-                              const Icons *icons, const Config *cfg) {
+const char *git_indicator_from_flags(unsigned flags, const Icons *icons,
+                                     const Config *cfg) {
     static __thread char indicator[L_GIT_INDICATOR_SIZE];
     indicator[0] = '\0';
 
     if (cfg->no_icons) return indicator;
-
-    const char *status = git_cache_get(cache, path);
-    if (!status || strcmp(status, "!!") == 0) return indicator;
+    if (!flags || (flags & GITF_IGNORED)) return indicator;
 
     char *p = indicator;
     size_t remaining = sizeof(indicator);
 
-    if (strcmp(status, "??") == 0) {
+    if (flags & GITF_UNTRACKED) {
         append_git_icon(p, &remaining, icons->git_untracked, CLR(cfg, COLOR_RED), cfg);
     } else {
-        if (status[1] == 'M') {
+        if (flags & GITF_WT_MODIFIED) {
             p = append_git_icon(p, &remaining, icons->git_modified, CLR(cfg, COLOR_RED), cfg);
-        } else if (status[1] == 'D') {
+        } else if (flags & GITF_WT_DELETED) {
             p = append_git_icon(p, &remaining, icons->git_deleted, CLR(cfg, COLOR_RED), cfg);
         }
-        if (status[0] != ' ' && status[0] != '?' && status[0] != '!') {
-            const char *staged_icon = (status[0] == 'D') ? icons->git_deleted : icons->git_staged;
+        if (flags & (GITF_STAGED | GITF_STAGED_DELETED)) {
+            const char *staged_icon = (flags & GITF_STAGED_DELETED)
+                ? icons->git_deleted : icons->git_staged;
             append_git_icon(p, &remaining, staged_icon, CLR(cfg, COLOR_YELLOW), cfg);
         }
     }
@@ -426,11 +423,10 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, const PrintCo
 
     emit_prefix(line, &pos, ENTRY_BUF_SIZE, depth, ctx->continuation, ctx->cfg);
 
-    int is_readonly = (access(fe->path, W_OK) != 0);
     int is_dir = (fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR);
     /* Grey lock before any entry you can't write to (read-only or no access).
      * A writable-but-unreadable dir (drop-box) stays unlocked but renders red. */
-    if (!ctx->cfg->no_icons && is_readonly) {
+    if (!ctx->cfg->no_icons && fe->is_readonly) {
         EMIT(line, pos, ENTRY_BUF_SIZE, "%s%s%s ", CLR(ctx->cfg, COLOR_GREY), ctx->icons->readonly, RST(ctx->cfg));
     }
 
@@ -460,7 +456,7 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, const PrintCo
             EMIT(line, pos, ENTRY_BUF_SIZE, "%s%d %s%s ", CLR(ctx->cfg, COLOR_RED), gs.deleted, ctx->icons->git_deleted, RST(ctx->cfg));
         }
     } else {
-        const char *git_ind = get_git_indicator(ctx->git, abs_path, ctx->icons, ctx->cfg);
+        const char *git_ind = git_indicator_from_flags(fe->git_flags, ctx->icons, ctx->cfg);
         EMIT(line, pos, ENTRY_BUF_SIZE, "%s", git_ind);
     }
 
@@ -495,31 +491,29 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, const PrintCo
         EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s", CLR(ctx->cfg, COLOR_YELLOW), ctx->icons->cwd_marker, RST(ctx->cfg));
     }
 
-    if (is_dir && fe->is_git_root) {
-        GitBranchInfo gi;
-        if (git_get_branch_info(fe->path, &gi)) {
-            EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s %s%s%s", CLR(ctx->cfg, COLOR_GREY), ctx->icons->git_branch, CLR(ctx->cfg, STYLE_ITALIC), gi.branch, RST(ctx->cfg));
-            if (gi.commit[0]) {
-                EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s %s%s%s", CLR(ctx->cfg, COLOR_GREY), ctx->icons->git_commit, CLR(ctx->cfg, STYLE_ITALIC), gi.commit, RST(ctx->cfg));
+    /* Repo root decorations: all fields were computed at build time
+     * (annotate_git_root), so rendering never touches git. */
+    if (is_dir && fe->is_git_root && fe->branch) {
+        EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s %s%s%s", CLR(ctx->cfg, COLOR_GREY), ctx->icons->git_branch, CLR(ctx->cfg, STYLE_ITALIC), fe->branch, RST(ctx->cfg));
+        if (fe->short_hash[0]) {
+            EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s %s%s%s", CLR(ctx->cfg, COLOR_GREY), ctx->icons->git_commit, CLR(ctx->cfg, STYLE_ITALIC), fe->short_hash, RST(ctx->cfg));
+        }
+        if (fe->tag) {
+            EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s %s%s", CLR(ctx->cfg, COLOR_GREY), ctx->icons->git_tag, fe->tag, RST(ctx->cfg));
+        }
+        if (fe->has_upstream) {
+            const char *cloud_color = fe->out_of_sync ? COLOR_RED : COLOR_GREY;
+            char *web_url = git_remote_to_web_url(fe->remote);
+            if (web_url && ctx->cfg->is_tty) {
+                EMIT(line, pos, ENTRY_BUF_SIZE, " %s\033]8;;%s\033\\%s\033]8;;\033\\%s", CLR(ctx->cfg, cloud_color), web_url, ctx->icons->git_upstream, RST(ctx->cfg));
+            } else {
+                EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s", CLR(ctx->cfg, cloud_color), ctx->icons->git_upstream, RST(ctx->cfg));
             }
-            if (fe->tag) {
-                EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s %s%s", CLR(ctx->cfg, COLOR_GREY), ctx->icons->git_tag, fe->tag, RST(ctx->cfg));
-            }
-            if (gi.has_upstream) {
-                const char *cloud_color = gi.out_of_sync ? COLOR_RED : COLOR_GREY;
-                char *web_url = git_remote_to_web_url(fe->remote);
-                if (web_url && ctx->cfg->is_tty) {
-                    EMIT(line, pos, ENTRY_BUF_SIZE, " %s\033]8;;%s\033\\%s\033]8;;\033\\%s", CLR(ctx->cfg, cloud_color), web_url, ctx->icons->git_upstream, RST(ctx->cfg));
-                } else {
-                    EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s", CLR(ctx->cfg, cloud_color), ctx->icons->git_upstream, RST(ctx->cfg));
-                }
-                free(web_url);
-                if (gi.ahead > 0)
-                    EMIT(line, pos, ENTRY_BUF_SIZE, " %s+%d%s", CLR(ctx->cfg, COLOR_RED), gi.ahead, RST(ctx->cfg));
-                if (gi.behind > 0)
-                    EMIT(line, pos, ENTRY_BUF_SIZE, " %s-%d%s", CLR(ctx->cfg, COLOR_RED), gi.behind, RST(ctx->cfg));
-            }
-            free(gi.branch);
+            free(web_url);
+            if (fe->ahead > 0)
+                EMIT(line, pos, ENTRY_BUF_SIZE, " %s+%d%s", CLR(ctx->cfg, COLOR_RED), fe->ahead, RST(ctx->cfg));
+            if (fe->behind > 0)
+                EMIT(line, pos, ENTRY_BUF_SIZE, " %s-%d%s", CLR(ctx->cfg, COLOR_RED), fe->behind, RST(ctx->cfg));
         }
     }
 
