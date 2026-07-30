@@ -20,7 +20,7 @@ count_duration = ""
 cursor = "❯"
 cwd_marker = ""
 
-[opaque_directories]
+[opaque]
 names = ".git, __pycache__, node_modules, .venv, .*cache, *.egg-info"
 
 [icons]

@@ -168,7 +168,7 @@ void path_join(char *dest, size_t dest_len, const char *dir, const char *name);
 
 /* Opaque directories are shown as entries but never descended into: not
  * expanded (even with -e) and not recursed into for file counts. The names come
- * entirely from [opaque_directories] in config.toml and may be literal names or
+ * entirely from [opaque] in config.toml and may be literal names or
  * glob patterns (.git, __pycache__, *.egg-info, ...). The registry lazy-loads
  * from the installed config on first query, so the cache daemon and l agree
  * without extra wiring; l also loads it explicitly from its config dir. */

@@ -98,8 +98,8 @@ static void opaque_dir_add(const char *name) {
     g_opaque_count++;
 }
 
-/* Parse the comma-separated names in the [opaque_directories] section's
- * `names` key, e.g. `names = "__pycache__, node_modules, .venv"`. */
+/* Parse the comma-separated names in the [opaque] section's `names` key,
+ * e.g. `names = "__pycache__, node_modules, .venv"`. */
 static void opaque_dirs_parse_file(const char *config_dir) {
     char path[PATH_MAX];
     snprintf(path, sizeof(path), "%s/%s", config_dir, L_CONFIG_FILE);
@@ -114,7 +114,7 @@ static void opaque_dirs_parse_file(const char *config_dir) {
         while (*p && isspace((unsigned char)*p)) p++;
         if (*p == '#' || *p == '\0') continue;
         if (*p == '[') {
-            in_section = (strncmp(p, "[opaque_directories]", 20) == 0);
+            in_section = (strncmp(p, "[opaque]", 8) == 0);
             continue;
         }
         if (!in_section) continue;
