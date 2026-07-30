@@ -114,24 +114,19 @@ typedef struct Icons {
  * Icons Functions
  * ============================================================================ */
 
+/* Loading from config.toml lives in config.c (config_load_all); these are the
+ * runtime lookup functions only. */
 void icons_init_defaults(Icons *icons);
-void icons_load(Icons *icons, const char *script_dir);
 const char *get_icon(const Icons *icons, FileType type, int is_expanded,
                      int is_binary, const char *name);
 const char *get_ext_icon(const Icons *icons, const char *name);
 
 /* File type functions */
 void filetypes_init(FileTypes *ft);
-void filetypes_load(FileTypes *ft, const char *script_dir);
 const char *filetypes_lookup(const FileTypes *ft, const char *path);
 
 /* Shebang functions */
 void shebangs_init(Shebangs *sb);
-void shebangs_load(Shebangs *sb, const char *script_dir);
 const char *shebangs_lookup(const Shebangs *sb, const char *interp);
-
-/* [display] settings. Reads the column separator glyph into sep (unchanged if
- * the key is absent, so callers can seed sep with a default beforehand). */
-void settings_load(const char *script_dir, char *sep, size_t sep_len);
 
 #endif /* L_ICONS_H */

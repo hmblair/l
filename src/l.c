@@ -7,6 +7,7 @@
 
 #include "common.h"
 #include "cache.h"
+#include "config.h"
 #include "git.h"
 #include "ui.h"
 #include "daemon.h"
@@ -534,26 +535,19 @@ int main(int argc, char **argv) {
     if (cfg.sort_by == SORT_SIZE) cfg.compute.sizes = 1;
     if (cfg.min_size > 0) cfg.compute.sizes = 1;
 
-    /* Load display settings (overrides the built-in separator default) */
-    settings_load(cfg.script_dir, cfg.column_separator, sizeof(cfg.column_separator));
-
     /* Load the opaque-directory list (dirs shown but never descended into) */
     opaque_dirs_load(cfg.script_dir);
 
-    /* Load icons */
+    /* Load icons, file types, shebangs, and display settings in one pass over
+     * config.toml (the separator keeps its built-in default if absent). */
     Icons icons;
-    icons_init_defaults(&icons);
-    icons_load(&icons, cfg.script_dir);
-
-    /* Load file types */
     FileTypes filetypes;
-    filetypes_init(&filetypes);
-    filetypes_load(&filetypes, cfg.script_dir);
-
-    /* Load shebangs */
     Shebangs shebangs;
+    icons_init_defaults(&icons);
+    filetypes_init(&filetypes);
     shebangs_init(&shebangs);
-    shebangs_load(&shebangs, cfg.script_dir);
+    config_load_all(cfg.script_dir, &icons, &filetypes, &shebangs,
+                    cfg.column_separator, sizeof(cfg.column_separator));
 
     /* Load size cache (only needed when computing sizes or file counts) */
     if (cfg.compute.sizes || cfg.compute.file_counts) {

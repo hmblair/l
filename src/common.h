@@ -160,6 +160,25 @@ char *xstrdup(const char *s);
 unsigned int hash_string(const char *str);
 
 /* ============================================================================
+ * Config File Reading (shared by l and l-cached)
+ * ============================================================================ */
+
+/* Minimal reader for l's config.toml dialect: [section] headers, key = "value"
+ * lines (value must be double-quoted; key may be a comma-separated list),
+ * comments (#) and blank lines. Calls cb once per key/value line. key and
+ * value point into a per-line buffer that the callback may mutate (e.g. via
+ * split_csv) but must not retain. Returns 0 if the file was read, -1 if it
+ * could not be opened. */
+typedef void (*toml_cb)(const char *section, const char *key, char *value,
+                        void *ud);
+int toml_read(const char *path, toml_cb cb, void *ud);
+
+/* Split a comma-separated list in place, trimming whitespace around each
+ * item; calls cb once per non-empty item. */
+typedef void (*csv_cb)(const char *item, void *ud);
+void split_csv(char *list, csv_cb cb, void *ud);
+
+/* ============================================================================
  * Path Utilities
  * ============================================================================ */
 

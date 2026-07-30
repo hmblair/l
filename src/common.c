@@ -79,6 +79,68 @@ int config_get_threshold(void) {
 }
 
 /* ============================================================================
+ * Config File Reading
+ * ============================================================================ */
+
+int toml_read(const char *path, toml_cb cb, void *ud) {
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+
+    char line[L_TOML_LINE_MAX];
+    char section[64] = "";
+
+    while (fgets(line, sizeof(line), f)) {
+        char *p = line;
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (*p == '#' || *p == '\0') continue;
+
+        if (*p == '[') {
+            char *end = strchr(p, ']');
+            if (end) {
+                size_t n = (size_t)(end - p) - 1;
+                if (n >= sizeof(section)) n = sizeof(section) - 1;
+                memcpy(section, p + 1, n);
+                section[n] = '\0';
+            }
+            continue;
+        }
+
+        /* key = "value" -- key ends at '=' or whitespace */
+        char *key = p;
+        while (*p && *p != '=' && !isspace((unsigned char)*p)) p++;
+        if (p == key) continue;
+        char *key_end = p;
+
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (*p != '=') continue;
+        p++;
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (*p != '"') continue;
+        p++;
+
+        char *value = p;
+        while (*p && *p != '"') p++;
+        *p = '\0';
+        *key_end = '\0';
+
+        cb(section, key, value, ud);
+    }
+
+    fclose(f);
+    return 0;
+}
+
+void split_csv(char *list, csv_cb cb, void *ud) {
+    char *item;
+    while ((item = strsep(&list, ",")) != NULL) {
+        while (*item && isspace((unsigned char)*item)) item++;
+        char *end = item + strlen(item);
+        while (end > item && isspace((unsigned char)end[-1])) *--end = '\0';
+        if (*item) cb(item, ud);
+    }
+}
+
+/* ============================================================================
  * Opaque Directories
  * ============================================================================ */
 
@@ -98,52 +160,25 @@ static void opaque_dir_add(const char *name) {
     g_opaque_count++;
 }
 
+static void opaque_add_cb(const char *name, void *ud) {
+    (void)ud;
+    opaque_dir_add(name);
+}
+
+static void opaque_toml_cb(const char *section, const char *key, char *value,
+                           void *ud) {
+    (void)ud;
+    if (strcmp(section, "opaque") == 0 && strcmp(key, "names") == 0) {
+        split_csv(value, opaque_add_cb, NULL);
+    }
+}
+
 /* Parse the comma-separated names in the [opaque] section's `names` key,
  * e.g. `names = "__pycache__, node_modules, .venv"`. */
 static void opaque_dirs_parse_file(const char *config_dir) {
     char path[PATH_MAX];
     snprintf(path, sizeof(path), "%s/%s", config_dir, L_CONFIG_FILE);
-
-    FILE *f = fopen(path, "r");
-    if (!f) return;
-
-    char line[L_TOML_LINE_MAX];
-    int in_section = 0;
-    while (fgets(line, sizeof(line), f)) {
-        char *p = line;
-        while (*p && isspace((unsigned char)*p)) p++;
-        if (*p == '#' || *p == '\0') continue;
-        if (*p == '[') {
-            in_section = (strncmp(p, "[opaque]", 8) == 0);
-            continue;
-        }
-        if (!in_section) continue;
-
-        char *eq = strchr(p, '=');
-        if (!eq) continue;
-        *eq = '\0';
-        /* Trim the key and require it to be `names`. */
-        char *kend = eq - 1;
-        while (kend >= p && isspace((unsigned char)*kend)) *kend-- = '\0';
-        if (strcmp(p, "names") != 0) continue;
-
-        /* Take the quoted value, then split on commas. */
-        char *v = eq + 1;
-        while (*v && isspace((unsigned char)*v)) v++;
-        if (*v == '"') v++;
-        char *vend = v + strlen(v);
-        while (vend > v && (isspace((unsigned char)vend[-1]) || vend[-1] == '"'))
-            *--vend = '\0';
-
-        char *name;
-        while ((name = strsep(&v, ",")) != NULL) {
-            while (*name && isspace((unsigned char)*name)) name++;
-            char *nend = name + strlen(name);
-            while (nend > name && isspace((unsigned char)nend[-1])) *--nend = '\0';
-            if (*name) opaque_dir_add(name);
-        }
-    }
-    fclose(f);
+    toml_read(path, opaque_toml_cb, NULL);
 }
 
 void opaque_dirs_load(const char *config_dir) {

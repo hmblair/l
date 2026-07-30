@@ -138,7 +138,6 @@ const char *get_git_indicator(GitCache *cache, const char *path,
  * ============================================================================ */
 
 int get_terminal_width(void);
-void resolve_source_dir(const char *argv0, char *src_dir, size_t len);
 void get_realpath(const char *path, char *resolved, const Config *cfg);
 void get_abspath(const char *path, char *resolved, const Config *cfg);
 void abbreviate_home(const char *path, char *buf, size_t len, const Config *cfg);

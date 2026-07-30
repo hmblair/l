@@ -9,126 +9,11 @@
 #include <limits.h>
 
 /* ============================================================================
- * Icon Key Mapping
- * ============================================================================ */
-
-static const struct { const char *key; size_t offset; } icon_keys[] = {
-    #define X(field, key) { key, offsetof(Icons, field) },
-    ICON_FIELDS(X)
-    #undef X
-    { NULL, 0 }
-};
-
-/* ============================================================================
  * Icons Functions
  * ============================================================================ */
 
 void icons_init_defaults(Icons *icons) {
     memset(icons, 0, sizeof(Icons));
-}
-
-static void icons_set(Icons *icons, const char *key, const char *value) {
-    for (int i = 0; icon_keys[i].key; i++) {
-        if (strcmp(key, icon_keys[i].key) == 0) {
-            char *dest = (char *)icons + icon_keys[i].offset;
-            strncpy(dest, value, L_MAX_ICON_LEN - 1);
-            dest[L_MAX_ICON_LEN - 1] = '\0';
-            return;
-        }
-    }
-}
-
-static int parse_toml_line(const char *line, char *key, size_t key_len,
-                           char *value, size_t value_len) {
-    const char *p = line;
-
-    while (*p && isspace(*p)) p++;
-    if (*p == '#' || *p == '\0') return 0;
-
-    const char *key_start = p;
-    while (*p && *p != '=' && !isspace(*p)) p++;
-    size_t klen = p - key_start;
-    if (klen == 0 || klen >= key_len) return 0;
-
-    memcpy(key, key_start, klen);
-    key[klen] = '\0';
-
-    while (*p && isspace(*p)) p++;
-    if (*p != '=') return 0;
-    p++;
-
-    while (*p && isspace(*p)) p++;
-    if (*p != '"') return 0;
-    p++;
-
-    const char *val_start = p;
-    while (*p && *p != '"') p++;
-    size_t vlen = p - val_start;
-    if (vlen >= value_len) return 0;
-
-    memcpy(value, val_start, vlen);
-    value[vlen] = '\0';
-
-    return 1;
-}
-
-void icons_load(Icons *icons, const char *script_dir) {
-    char path[PATH_MAX];
-    snprintf(path, sizeof(path), "%s/%s", script_dir, L_CONFIG_FILE);
-
-    FILE *f = fopen(path, "r");
-    if (!f) return;
-
-    char line[L_TOML_LINE_MAX];
-    char key[64], value[L_MAX_ICON_LEN];
-    int in_icons = 0;
-    int in_extensions = 0;
-
-    while (fgets(line, sizeof(line), f)) {
-        const char *p = line;
-        while (*p && isspace(*p)) p++;
-        if (*p == '[') {
-            /* UI icons (git status, counts, cursor, ...) live under [display]
-             * alongside the file-type icons under [icons]; both feed icons_set,
-             * and non-icon [display] keys simply find no match. */
-            in_icons = (strncmp(p, "[icons]", 7) == 0) ||
-                       (strncmp(p, "[display]", 9) == 0);
-            in_extensions = (strncmp(p, "[extensions]", 12) == 0);
-            continue;
-        }
-
-        if (!parse_toml_line(line, key, sizeof(key), value, sizeof(value)))
-            continue;
-
-        if (in_extensions) {
-            /* Parse comma-separated extensions (e.g., "jpg,png,gif") */
-            char *ext_list = key;
-            char *ext;
-            while ((ext = strsep(&ext_list, ",")) != NULL) {
-                /* Skip leading whitespace */
-                while (*ext && isspace(*ext)) ext++;
-                /* Trim trailing whitespace */
-                char *end = ext + strlen(ext) - 1;
-                while (end > ext && isspace(*end)) *end-- = '\0';
-
-                if (*ext && icons->ext_count < L_MAX_EXT_ICONS) {
-                    size_t ext_len = strlen(ext);
-                    size_t icon_len = strlen(value);
-                    if (ext_len >= L_MAX_EXT_LEN) ext_len = L_MAX_EXT_LEN - 1;
-                    if (icon_len >= L_MAX_ICON_LEN) icon_len = L_MAX_ICON_LEN - 1;
-                    memcpy(icons->ext_icons[icons->ext_count].ext, ext, ext_len);
-                    icons->ext_icons[icons->ext_count].ext[ext_len] = '\0';
-                    memcpy(icons->ext_icons[icons->ext_count].icon, value, icon_len);
-                    icons->ext_icons[icons->ext_count].icon[icon_len] = '\0';
-                    icons->ext_count++;
-                }
-            }
-        } else if (in_icons) {
-            icons_set(icons, key, value);
-        }
-    }
-
-    fclose(f);
 }
 
 const char *get_ext_icon(const Icons *icons, const char *name) {
@@ -195,54 +80,6 @@ void filetypes_init(FileTypes *ft) {
     memset(ft, 0, sizeof(FileTypes));
 }
 
-void filetypes_load(FileTypes *ft, const char *script_dir) {
-    char path[PATH_MAX];
-    snprintf(path, sizeof(path), "%s/%s", script_dir, L_CONFIG_FILE);
-
-    FILE *f = fopen(path, "r");
-    if (!f) return;
-
-    char line[L_TOML_LINE_MAX];
-    char key[64], value[L_MAX_FILETYPE_NAME];
-    int in_filetypes = 0;
-
-    while (fgets(line, sizeof(line), f)) {
-        const char *p = line;
-        while (*p && isspace(*p)) p++;
-        if (*p == '[') {
-            in_filetypes = (strncmp(p, "[filetypes]", 11) == 0);
-            continue;
-        }
-
-        if (!in_filetypes) continue;
-        if (!parse_toml_line(line, key, sizeof(key), value, sizeof(value)))
-            continue;
-
-        /* Parse comma-separated extensions */
-        char *ext_list = key;
-        char *ext;
-        while ((ext = strsep(&ext_list, ",")) != NULL) {
-            while (*ext && isspace(*ext)) ext++;
-            char *end = ext + strlen(ext) - 1;
-            while (end > ext && isspace(*end)) *end-- = '\0';
-
-            if (*ext && ft->count < L_MAX_FILETYPES) {
-                size_t ext_len = strlen(ext);
-                size_t name_len = strlen(value);
-                if (ext_len >= L_MAX_EXT_LEN) ext_len = L_MAX_EXT_LEN - 1;
-                if (name_len >= L_MAX_FILETYPE_NAME) name_len = L_MAX_FILETYPE_NAME - 1;
-                memcpy(ft->mappings[ft->count].ext, ext, ext_len);
-                ft->mappings[ft->count].ext[ext_len] = '\0';
-                memcpy(ft->mappings[ft->count].name, value, name_len);
-                ft->mappings[ft->count].name[name_len] = '\0';
-                ft->count++;
-            }
-        }
-    }
-
-    fclose(f);
-}
-
 const char *filetypes_lookup(const FileTypes *ft, const char *path) {
     const char *ext = strrchr(path, '.');
     const char *basename = strrchr(path, '/');
@@ -270,54 +107,6 @@ void shebangs_init(Shebangs *sb) {
     memset(sb, 0, sizeof(Shebangs));
 }
 
-void shebangs_load(Shebangs *sb, const char *script_dir) {
-    char path[PATH_MAX];
-    snprintf(path, sizeof(path), "%s/%s", script_dir, L_CONFIG_FILE);
-
-    FILE *f = fopen(path, "r");
-    if (!f) return;
-
-    char line[L_TOML_LINE_MAX];
-    char key[64], value[L_MAX_FILETYPE_NAME];
-    int in_shebangs = 0;
-
-    while (fgets(line, sizeof(line), f)) {
-        const char *p = line;
-        while (*p && isspace(*p)) p++;
-        if (*p == '[') {
-            in_shebangs = (strncmp(p, "[shebangs]", 10) == 0);
-            continue;
-        }
-
-        if (!in_shebangs) continue;
-        if (!parse_toml_line(line, key, sizeof(key), value, sizeof(value)))
-            continue;
-
-        /* Parse comma-separated interpreters */
-        char *interp_list = key;
-        char *interp;
-        while ((interp = strsep(&interp_list, ",")) != NULL) {
-            while (*interp && isspace(*interp)) interp++;
-            char *end = interp + strlen(interp) - 1;
-            while (end > interp && isspace(*end)) *end-- = '\0';
-
-            if (*interp && sb->count < L_MAX_SHEBANGS) {
-                size_t interp_len = strlen(interp);
-                size_t name_len = strlen(value);
-                if (interp_len >= L_MAX_EXT_LEN) interp_len = L_MAX_EXT_LEN - 1;
-                if (name_len >= L_MAX_FILETYPE_NAME) name_len = L_MAX_FILETYPE_NAME - 1;
-                memcpy(sb->mappings[sb->count].interp, interp, interp_len);
-                sb->mappings[sb->count].interp[interp_len] = '\0';
-                memcpy(sb->mappings[sb->count].name, value, name_len);
-                sb->mappings[sb->count].name[name_len] = '\0';
-                sb->count++;
-            }
-        }
-    }
-
-    fclose(f);
-}
-
 const char *shebangs_lookup(const Shebangs *sb, const char *interp) {
     for (int i = 0; i < sb->count; i++) {
         if (strcmp(interp, sb->mappings[i].interp) == 0) {
@@ -327,38 +116,3 @@ const char *shebangs_lookup(const Shebangs *sb, const char *interp) {
     return NULL;
 }
 
-/* ============================================================================
- * Display Settings
- * ============================================================================ */
-
-void settings_load(const char *script_dir, char *sep, size_t sep_len) {
-    char path[PATH_MAX];
-    snprintf(path, sizeof(path), "%s/%s", script_dir, L_CONFIG_FILE);
-
-    FILE *f = fopen(path, "r");
-    if (!f) return;
-
-    char line[L_TOML_LINE_MAX];
-    char key[64], value[L_TOML_LINE_MAX];
-    int in_display = 0;
-
-    while (fgets(line, sizeof(line), f)) {
-        const char *p = line;
-        while (*p && isspace(*p)) p++;
-        if (*p == '[') {
-            in_display = (strncmp(p, "[display]", 9) == 0);
-            continue;
-        }
-
-        if (!in_display) continue;
-        if (!parse_toml_line(line, key, sizeof(key), value, sizeof(value)))
-            continue;
-
-        if (strcmp(key, "column_separator") == 0) {
-            strncpy(sep, value, sep_len - 1);
-            sep[sep_len - 1] = '\0';
-        }
-    }
-
-    fclose(f);
-}
