@@ -82,7 +82,7 @@ CACHE_DAEMON_OBJS = $(SRCDIR)/cache_daemon.o
 SCAN_OBJS = $(SRCDIR)/scan.o
 GIT_OBJS = $(SRCDIR)/git.o
 TREE_OBJS = $(SRCDIR)/tree.o
-UI_OBJS = $(SRCDIR)/ui.o $(SRCDIR)/icons.o $(SRCDIR)/fileinfo.o $(SRCDIR)/config.o
+UI_OBJS = $(SRCDIR)/ui.o $(SRCDIR)/icons.o $(SRCDIR)/fileinfo.o $(SRCDIR)/config.o $(SRCDIR)/format.o
 DAEMON_OBJS = $(SRCDIR)/daemon.o
 SELECT_OBJS = $(SRCDIR)/select.o
 
@@ -126,6 +126,9 @@ $(SRCDIR)/icons.o: $(SRCDIR)/icons.c $(SRCDIR)/icons.h $(SRCDIR)/common.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(SRCDIR)/config.o: $(SRCDIR)/config.c $(SRCDIR)/config.h $(SRCDIR)/icons.h $(SRCDIR)/common.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(SRCDIR)/format.o: $(SRCDIR)/format.c $(SRCDIR)/format.h $(SRCDIR)/tree.h $(SRCDIR)/icons.h $(SRCDIR)/common.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(SRCDIR)/fileinfo.o: $(SRCDIR)/fileinfo.c $(SRCDIR)/fileinfo.h $(SRCDIR)/icons.h $(SRCDIR)/common.h

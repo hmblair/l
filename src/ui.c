@@ -30,63 +30,6 @@ void abbreviate_home(const char *path, char *buf, size_t len, const Config *cfg)
 }
 
 /* ============================================================================
- * Size and Time Formatting
- * ============================================================================ */
-
-void format_size(off_t bytes, char *buf, size_t len) {
-    if (bytes < 0) {
-        snprintf(buf, len, "-");
-        return;
-    }
-    const char *units[] = {"B", "K", "M", "G", "T", "P"};
-    int unit_idx = 0;
-    double size = (double)bytes;
-
-    while (size >= 1024 && unit_idx < 5) {
-        size /= 1024;
-        unit_idx++;
-    }
-
-    if (unit_idx == 0) {
-        snprintf(buf, len, "%lld%s", (long long)bytes, units[0]);
-    } else if (size < 10) {
-        snprintf(buf, len, "%.1f%s", size, units[unit_idx]);
-    } else {
-        snprintf(buf, len, "%.0f%s", size, units[unit_idx]);
-    }
-}
-
-void format_count(long count, char *buf, size_t len) {
-    if (count >= 1000000) {
-        double m = count / 1000000.0;
-        snprintf(buf, len, m < 10 ? "%.1fM" : "%.0fM", m);
-    } else if (count >= 1000) {
-        double k = count / 1000.0;
-        snprintf(buf, len, k < 10 ? "%.1fK" : "%.0fK", k);
-    } else {
-        snprintf(buf, len, "%ld", count);
-    }
-}
-
-void format_relative_time(time_t mtime, char *buf, size_t len) {
-    time_t now = time(NULL);
-    long diff = (long)(now - mtime);
-
-    if (diff < L_SECONDS_PER_MINUTE) {
-        snprintf(buf, len, "now");
-    } else if (diff < L_SECONDS_PER_HOUR) {
-        snprintf(buf, len, "%ldm ago", diff / L_SECONDS_PER_MINUTE);
-    } else if (diff < L_SECONDS_PER_DAY) {
-        snprintf(buf, len, "%ldh ago", diff / L_SECONDS_PER_HOUR);
-    } else if (diff < L_SECONDS_PER_WEEK) {
-        snprintf(buf, len, "%ldd ago", diff / L_SECONDS_PER_DAY);
-    } else {
-        struct tm *tm = localtime(&mtime);
-        strftime(buf, len, "%b %d", tm);
-    }
-}
-
-/* ============================================================================
  * Column Formatters
  * ============================================================================ */
 
@@ -101,50 +44,7 @@ static void col_format_size(const FileEntry *fe, const Icons *icons, char *buf, 
 
 static void col_format_lines(const FileEntry *fe, const Icons *icons, char *buf, size_t len) {
     (void)icons;
-
-    if (fe->file_count >= 0) {
-        if (fe->file_count >= 1000000) {
-            double m = fe->file_count / 1000000.0;
-            snprintf(buf, len, m < 10 ? "%.1fM" : "%.0fM", m);
-        } else if (fe->file_count >= 1000) {
-            double k = fe->file_count / 1000.0;
-            snprintf(buf, len, k < 10 ? "%.1fK" : "%.0fK", k);
-        } else {
-            snprintf(buf, len, "%ld", fe->file_count);
-        }
-    } else if (fe->content_type == CONTENT_IMAGE && fe->line_count >= 0) {
-        /* line_count holds megapixels * 10 */
-        double mp = fe->line_count / 10.0;
-        if (mp >= 10.0) {
-            snprintf(buf, len, "%.0fM", mp);
-        } else {
-            snprintf(buf, len, "%.1fM", mp);
-        }
-    } else if (fe->content_type == CONTENT_AUDIO && fe->line_count >= 0) {
-        /* line_count holds duration in seconds */
-        int secs = fe->line_count;
-        int hours = secs / 3600;
-        int mins = (secs % 3600) / 60;
-        int s = secs % 60;
-        if (hours > 0) {
-            snprintf(buf, len, "%d:%02d:%02d", hours, mins, s);
-        } else {
-            snprintf(buf, len, "%d:%02d", mins, s);
-        }
-    } else if (fe->content_type == CONTENT_PDF && fe->line_count >= 0) {
-        /* line_count holds page count */
-        snprintf(buf, len, "%d", fe->line_count);
-    } else if (fe->line_count >= 1000000) {
-        double m = fe->line_count / 1000000.0;
-        snprintf(buf, len, m < 10 ? "%.1fM" : "%.0fM", m);
-    } else if (fe->line_count >= 1000) {
-        double k = fe->line_count / 1000.0;
-        snprintf(buf, len, k < 10 ? "%.1fK" : "%.0fK", k);
-    } else if (fe->line_count >= 0) {
-        snprintf(buf, len, "%d", fe->line_count);
-    } else {
-        snprintf(buf, len, "-");
-    }
+    format_content_quantity(fe, buf, len);
 }
 
 static void col_format_time(const FileEntry *fe, const Icons *icons, char *buf, size_t len) {
@@ -310,22 +210,6 @@ void diff_widths_update(int *add_width, int *del_width, const FileEntry *fe,
     }
 }
 
-const char *get_count_icon(const FileEntry *fe, const Icons *icons) {
-    if (fe->file_count >= 0) {
-        return icons->count_files;
-    } else if (fe->content_type == CONTENT_IMAGE && fe->line_count >= 0) {
-        return icons->count_pixels;
-    } else if (fe->content_type == CONTENT_AUDIO && fe->line_count >= 0) {
-        return icons->count_duration;
-    } else if (fe->content_type == CONTENT_PDF && fe->line_count >= 0) {
-        return icons->count_pages;
-    } else if (fe->line_count >= 0) {
-        return icons->count_lines;
-    }
-    return "";
-}
-
-
 
 /* ============================================================================
  * Config to TreeBuildOpts Conversion
@@ -484,7 +368,7 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, const PrintCo
             ctx->columns[i].format(fe, ctx->icons, col_buf, sizeof(col_buf));
             EMIT(line, pos, ENTRY_BUF_SIZE, "%s%*s%s", CLR(ctx->cfg, COLOR_GREY), ctx->columns[i].width, col_buf, RST(ctx->cfg));
             if (i == COL_LINES) {
-                const char *count_icon = get_count_icon(fe, ctx->icons);
+                const char *count_icon = content_quantity_icon(fe, ctx->icons);
                 if (count_icon[0]) {
                     EMIT(line, pos, ENTRY_BUF_SIZE, " %s%s%s", CLR(ctx->cfg, COLOR_GREY), count_icon, RST(ctx->cfg));
                 } else {
@@ -1185,16 +1069,8 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
             card_add(&card, "%sWords:%s    %s", CLR(cfg, COLOR_GREY), RST(cfg), word_buf);
         }
     } else if (fe->content_type == CONTENT_AUDIO && fe->line_count >= 0) {
-        int secs = fe->line_count;
-        int hours = secs / 3600;
-        int mins = (secs % 3600) / 60;
-        int s = secs % 60;
         char dur_buf[32];
-        if (hours > 0) {
-            snprintf(dur_buf, sizeof(dur_buf), "%d:%02d:%02d", hours, mins, s);
-        } else {
-            snprintf(dur_buf, sizeof(dur_buf), "%d:%02d", mins, s);
-        }
+        format_duration(fe->line_count, dur_buf, sizeof(dur_buf));
         card_add(&card, "%sDuration:%s %s", CLR(cfg, COLOR_GREY), RST(cfg), dur_buf);
     } else if (fe->content_type == CONTENT_IMAGE && fe->line_count >= 0) {
         double mp = fe->line_count / 10.0;

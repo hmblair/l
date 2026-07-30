@@ -8,6 +8,7 @@
 #include "common.h"
 #include "icons.h"
 #include "tree.h"
+#include "format.h"
 
 /* ============================================================================
  * Display Configuration
@@ -78,12 +79,6 @@ void diff_widths_update(int *add_width, int *del_width, const FileEntry *fe,
  * directory's rolled-up view summary. Shared by the renderer and width pass. */
 void entry_diff_stats(const FileEntry *fe, GitCache *git,
                       int *added, int *removed);
-
-/* Formatting helpers */
-void format_size(off_t bytes, char *buf, size_t len);
-void format_relative_time(time_t mtime, char *buf, size_t len);
-void format_count(long count, char *buf, size_t len);
-const char *get_count_icon(const FileEntry *fe, const Icons *icons);
 
 /* ============================================================================
  * Print Context
