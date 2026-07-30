@@ -5,6 +5,7 @@
 #include "common.h"
 #include <errno.h>
 #include <ctype.h>
+#include <fnmatch.h>
 
 #ifdef __linux__
 #include <sys/vfs.h>
@@ -166,7 +167,9 @@ static void opaque_dirs_ensure_loaded(void) {
 int path_name_is_opaque(const char *name) {
     opaque_dirs_ensure_loaded();
     for (int i = 0; i < g_opaque_count; i++) {
-        if (strcmp(name, g_opaque_dirs[i]) == 0) return 1;
+        /* fnmatch treats a literal pattern as an exact match, so plain names
+         * (node_modules) and globs (*.egg-info) are handled uniformly. */
+        if (fnmatch(g_opaque_dirs[i], name, 0) == 0) return 1;
     }
     return 0;
 }

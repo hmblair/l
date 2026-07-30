@@ -21,7 +21,7 @@ cursor = "❯"
 cwd_marker = ""
 
 [opaque_directories]
-names = ".git, __pycache__, node_modules, .venv, .mypy_cache, .pytest_cache"
+names = ".git, __pycache__, node_modules, .venv, .*cache, *.egg-info"
 
 [icons]
 default = ""
