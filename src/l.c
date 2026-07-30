@@ -72,7 +72,8 @@ static void print_usage(void) {
     printf("  --summary               Show summary info for file/directory\n");
     printf("  --no-icons              Hide file/folder/git icons\n");
     printf("  -c, --color-all         Don't gray out gitignored files\n");
-    printf("  -g                      Git-changed files, rooted at the repo (fails outside a repo)\n");
+    printf("  -m                      Git-changed files, rooted at the repo (fails outside a repo)\n");
+    printf("  -g                      Hide gitignored files and folders\n");
     printf("  -f, --filter STRING     Show only files/folders matching pattern (glob or substring)\n");
     printf("  --min-size SIZE         Show only entries >= SIZE (e.g., 100M, 1G)\n");
     printf("  --dir-only              Show only directories\n");
@@ -92,7 +93,7 @@ static void print_usage(void) {
 
 /* Track which options have been set to detect conflicts/duplicates */
 typedef struct {
-    const char *depth;   /* -t, -d, --tree, --depth, -g */
+    const char *depth;   /* -t, -d, --tree, --depth, -m */
     const char *format;  /* -s, -l, --short, --long */
     const char *sort;    /* -S, -T, -N */
     const char *filter;  /* -f, --filter */
@@ -121,7 +122,8 @@ static int apply_short_flag(char flag, Config *cfg, OptionSet *set) {
         case 'e': cfg->expand_all = 1; return 1;
         case 'c': cfg->color_all = 1; return 1;
         case 'i': cfg->interactive = 1; return 1;
-        case 'g': cfg->git_only = 1; cfg->show_hidden = 1; cfg->max_depth = L_MAX_DEPTH; return 1;
+        case 'm': cfg->git_only = 1; cfg->show_hidden = 1; return 1;
+        case 'g': cfg->hide_gitignored = 1; return 1;
         case 'S': check_conflict(&set->sort, "-S", cfg);
                   cfg->sort_by = SORT_SIZE; return 1;
         case 'T': check_conflict(&set->sort, "-T", cfg);
@@ -439,6 +441,7 @@ int main(int argc, char **argv) {
         .no_icons = 0,
         .sort_reverse = 0,
         .git_only = 0,
+        .hide_gitignored = 0,
         .show_ancestry = 0,
         .color_all = 0,
         .interactive = 0,
@@ -496,7 +499,7 @@ int main(int argc, char **argv) {
     int dir_count;
     parse_args(argc, argv, &cfg, &dirs, &dir_count);
 
-    /* -g requires a git repo: fail outside one, otherwise show the ancestry up
+    /* -m requires a git repo: fail outside one, otherwise show the ancestry up
      * to the repo root (git_only filtering then collapses it to just the repo
      * root when there are no changes). */
     if (cfg.git_only) {
@@ -621,7 +624,7 @@ int main(int argc, char **argv) {
     /* Pre-compute visibility flags for filtering */
     if (cfg.git_only) {
         for (int i = 0; i < dir_count; i++) {
-            compute_git_status_flags(trees[i], &git, cfg.show_hidden);
+            compute_git_status_flags(trees[i], &git);
         }
     }
     if (cfg.grep_pattern) {

@@ -22,7 +22,8 @@ _l() {
         '--summary[Show summary info for file/directory]' \
         '--no-icons[Hide file/folder/git icons]' \
         '(-c --color-all)'{-c,--color-all}"[Don't gray out gitignored files]" \
-        '-g[Show only git-modified/untracked files (implies -at)]' \
+        '-m[Show only git-modified entries at the current depth (implies -a; add -t for full tree)]' \
+        '-g[Hide gitignored files and folders]' \
         '(-f --filter)'{-f,--filter}'[Show only files/folders matching pattern (glob or substring)]:pattern:' \
         '--min-size[Show only entries >= SIZE (e.g., 100M, 1G)]:size:' \
         '--dir-only[Show only directories]' \

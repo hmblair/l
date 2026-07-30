@@ -673,25 +673,26 @@ TreeNode *build_ancestry_tree(const char *path, const TreeBuildOpts *opts,
  * Tree Traversal Helpers
  * ============================================================================ */
 
-int compute_git_status_flags(TreeNode *node, GitCache *git, int show_hidden) {
+int compute_git_status_flags(TreeNode *node, GitCache *git) {
+    /* A node counts as "changed" for -m using the same signal as its rendered
+     * git icon, so visibility never disagrees with what's drawn and stays
+     * correct at any depth: a file uses its own status; a directory uses the
+     * cache roll-up over its whole subtree (git_get_dir_summary — exactly what
+     * fileinfo_compute_git_dir_status draws), not a walk of the built children,
+     * which would miss modifications below the built depth. */
     int result = (node->entry.git_status[0] != '\0' &&
                   strcmp(node->entry.git_status, "!!") != 0);
 
-    for (size_t i = 0; i < node->child_count; i++) {
-        if (compute_git_status_flags(&node->children[i], git, show_hidden)) {
-            result = 1;
-        }
+    if (!result && node_is_directory(node)) {
+        GitSummary s = git_get_dir_summary(git, node->entry.path);
+        result = s.modified || s.untracked || s.staged ||
+                 s.deleted || s.staged_deleted;
     }
-
-    /* If hidden files aren't shown, check if this directory has hidden children
-     * with git status that wouldn't otherwise be visible */
-    if (!show_hidden && (node->entry.type == FTYPE_DIR || node->entry.type == FTYPE_SYMLINK_DIR)) {
-        if (git_dir_has_hidden_status(git, node->entry.path)) {
-            result = 1;
-        }
-    }
-
     node->has_git_status = result;
+
+    for (size_t i = 0; i < node->child_count; i++) {
+        compute_git_status_flags(&node->children[i], git);
+    }
     return result;
 }
 

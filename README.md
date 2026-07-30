@@ -76,7 +76,8 @@ l [OPTIONS] [FILE ...]
 | `-e, --expand-all` | Expand all directories (ignore skip list) |
 | `-p, --path` | Show ancestry from `~` (or `/`) to target |
 | `-i, --interactive` | Interactive selection mode |
-| `-g` | Git-changed files, rooted at the repo (errors outside a repo; shows just the repo root when clean) |
+| `-m` | Git-changed files, rooted at the repo (errors outside a repo; shows just the repo root when clean) |
+| `-g` | Hide gitignored files and folders |
 | `-f, --filter PATTERN` | Filter files matching pattern (implies `-at`) |
 | `--min-size SIZE` | Show only entries >= SIZE (e.g., `100M`, `1G`) |
 | `--dir-only` | Show only directories |
@@ -139,7 +140,8 @@ Completion changes need a shell reload (`exec zsh`) to take effect.
 l                    # Current directory
 l -at                # All files with full tree
 l -al ~/projects     # Long format, hidden files
-l -g                 # Git-changed files, as a tree from the repo root
+l -m                 # Git-changed files, as a tree from the repo root
+l -g                 # Hide gitignored files and folders
 l -f "*.go"          # Filter to Go files
 l -i                 # Interactive selection
 l -d3 --min-size 1G  # Directories/files >= 1GB, depth 3

@@ -23,9 +23,10 @@ typedef struct {
     int summary_mode;
     int no_icons;
     int sort_reverse;
-    int git_only;
+    int git_only;            /* -m: show only git-changed entries, rooted at repo */
+    int hide_gitignored;     /* -g: hide entries that are gitignored */
     int show_ancestry;
-    int ancestry_explicit;   /* -p was given explicitly (vs. implied by -g),
+    int ancestry_explicit;   /* -p was given explicitly (vs. implied by -m),
                               * so anchor the ancestry at ~ (or /), not the
                               * enclosing repo root. */
     int color_all;

@@ -92,9 +92,6 @@ GitSummary git_get_dir_summary(GitCache *cache, const char *dir_path);
  * Single source of truth for the status -> bucket classification. */
 void git_summary_apply_status(GitSummary *s, const char *status, int sign);
 
-/* Check if a directory has hidden direct children with git status */
-int git_dir_has_hidden_status(GitCache *cache, const char *dir_path);
-
 /* Check if a path is inside an ignored directory (walks up ancestors) */
 int git_path_in_ignored(GitCache *cache, const char *path, const char *git_root);
 

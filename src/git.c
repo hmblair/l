@@ -248,33 +248,6 @@ GitSummary git_get_dir_summary(GitCache *cache, const char *dir_path) {
     return summary;
 }
 
-/* Check if a path under dir_path has a hidden first component.
- * Returns 1 if the first path component after dir_path/ starts with '.'. */
-static int is_under_hidden_child(const char *node_path, const char *dir_path, size_t dir_len) {
-    if (strncmp(node_path, dir_path, dir_len) != 0 || node_path[dir_len] != '/')
-        return 0;
-    return node_path[dir_len + 1] == '.';
-}
-
-int git_dir_has_hidden_status(GitCache *cache, const char *dir_path) {
-    if (!cache || !dir_path) return 0;
-
-    size_t dir_len = strlen(dir_path);
-
-    for (int i = 0; i < L_HASH_SIZE; i++) {
-        GitStatusNode *node = cache->buckets[i];
-        while (node) {
-            if (is_under_hidden_child(node->path, dir_path, dir_len) &&
-                node->status[0] != '\0' &&
-                strcmp(node->status, "!!") != 0) {
-                return 1;
-            }
-            node = node->next;
-        }
-    }
-    return 0;
-}
-
 int git_path_in_ignored(GitCache *cache, const char *path, const char *git_root) {
     if (!cache || !path || !git_root) return 0;
 

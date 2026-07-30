@@ -184,8 +184,10 @@ void tree_rescan_node(TreeNode *node, const TreeBuildOpts *opts,
  * Tree Traversal Helpers
  * ============================================================================ */
 
-/* Compute git status flags recursively (returns 1 if any node has status) */
-int compute_git_status_flags(TreeNode *node, GitCache *git, int show_hidden);
+/* Set has_git_status on every node from the same signal as its git icon (own
+ * status for files, subtree cache roll-up for directories). Returns the root's
+ * flag. Depth-independent. */
+int compute_git_status_flags(TreeNode *node, GitCache *git);
 
 /* Compute grep match flags recursively (returns 1 if any node matches) */
 int compute_grep_flags(TreeNode *node, const char *pattern);
