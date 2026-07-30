@@ -68,7 +68,7 @@ int cache_lookup(const char *path, CacheEntry *out) {
     return found;
 }
 
-const CacheEntry *cache_lookup_entry(const char *path) {
+static const CacheEntry *cache_lookup_entry(const char *path) {
     static __thread CacheEntry entry;  /* Thread-local storage for OpenMP safety */
     if (cache_lookup(path, &entry)) {
         return &entry;
@@ -91,7 +91,7 @@ void cache_unload(void) {
 
 int cache_load(void) { return -1; }
 int cache_lookup(const char *path, CacheEntry *out) { (void)path; (void)out; return 0; }
-const CacheEntry *cache_lookup_entry(const char *path) { (void)path; return NULL; }
+static const CacheEntry *cache_lookup_entry(const char *path) { (void)path; return NULL; }
 void cache_unload(void) {}
 
 #endif /* HAVE_SQLITE */

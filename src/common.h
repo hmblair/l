@@ -75,7 +75,6 @@
 
 /* Git */
 #define L_GIT_HEAD_BUF_SIZE     256
-#define L_GIT_STATUS_LINE_MAX   (PATH_MAX + 8)
 #define L_SHELL_CMD_BUF_SIZE    (PATH_MAX * 2 + 64)
 #define L_GIT_INDICATOR_SIZE    64
 
@@ -103,12 +102,6 @@
 int config_get_interval(void);   /* Scan interval in seconds */
 int config_get_threshold(void);  /* Min files to cache a directory */
 
-/* Error codes */
-#define L_OK                    0
-#define L_ERR_NOMEM             (-1)
-#define L_ERR_IO                (-2)
-#define L_ERR_INVALID           (-3)
-
 /* ============================================================================
  * Tree Drawing Characters (UTF-8)
  * ============================================================================ */
@@ -131,7 +124,6 @@ extern const char *COLOR_MAGENTA;
 extern const char *COLOR_CYAN;
 extern const char *COLOR_GREY;
 extern const char *COLOR_WHITE;
-extern const char *COLOR_YELLOW_BOLD;
 extern const char *STYLE_BOLD;
 extern const char *STYLE_ITALIC;
 

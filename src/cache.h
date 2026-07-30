@@ -44,9 +44,6 @@ int cache_load(void);
 /* Look up a path in the cache (thread-safe) - returns 1 if found, 0 otherwise */
 int cache_lookup(const char *path, CacheEntry *out);
 
-/* Wrapper that returns pointer (for compatibility) */
-const CacheEntry *cache_lookup_entry(const char *path);
-
 /* Close the cache */
 void cache_unload(void);
 
