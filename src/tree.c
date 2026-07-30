@@ -428,6 +428,28 @@ static void dir_stats_from_children(TreeNode *dir, const ComputeOpts *c) {
         }
     }
 
+    const char *abs = dir->entry.abs_path ? dir->entry.abs_path : dir->entry.path;
+
+    /* A materialized firmlink endpoint defines the pair's memoized stats the
+     * same way a scanned one does. */
+    int pair = firmlink_lookup_path(abs);
+    if (pair >= 0) firmlink_stats_offer(pair, size, count);
+
+    /* This directory may be the one point containing both endpoints of a
+     * pair. Make sure the pair size is known — when both children came out
+     * of the size cache, no walk ever reached an endpoint to memoize it —
+     * then subtract the double count once. */
+    for (int i = 0; i < firmlink_count(); i++) {
+        off_t ps;
+        long pc;
+        if (strcmp(firmlink_lca(i), abs) != 0) continue;
+        if (!firmlink_stats_get(i, &ps, &pc)) {
+            DirStats ds = get_dir_stats_cached_tasks(firmlink_alias(i));
+            if (ds.size >= 0) firmlink_stats_offer(i, ds.size, ds.file_count);
+        }
+    }
+    firmlink_adjust_dir(abs, &size, &count);
+
     if (c->sizes) dir->entry.size = size;
     if (c->file_counts) dir->entry.file_count = count;
 }

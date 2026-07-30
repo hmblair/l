@@ -215,6 +215,157 @@ int path_is_opaque_dir(const char *path) {
 }
 
 /* ============================================================================
+ * Firmlinks (macOS)
+ * ============================================================================ */
+
+#include <pthread.h>
+
+#define L_MAX_FIRMLINKS 64
+
+typedef struct {
+    char alias[PATH_MAX];    /* user-visible side, e.g. /Users */
+    char target[PATH_MAX];   /* data-volume side */
+    char lca[PATH_MAX];      /* deepest directory containing both */
+    dev_t dev;
+    ino_t ino;
+    int have_stats;
+    off_t size;
+    long file_count;
+} FirmlinkPair;
+
+static FirmlinkPair g_firmlinks[L_MAX_FIRMLINKS];
+static int g_firmlink_count = 0;
+static int g_firmlinks_loaded = 0;
+static pthread_mutex_t g_firmlink_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* Deepest directory that is an ancestor of both paths */
+static void path_common_dir(const char *a, const char *b, char *out, size_t n) {
+    size_t i = 0, last_slash = 0;
+    while (a[i] && a[i] == b[i]) {
+        if (a[i] == '/') last_slash = i;
+        i++;
+    }
+    if (last_slash == 0) {
+        snprintf(out, n, "/");
+    } else {
+        if (last_slash >= n) last_slash = n - 1;
+        memcpy(out, a, last_slash);
+        out[last_slash] = '\0';
+    }
+}
+
+void firmlinks_load(void) {
+    if (g_firmlinks_loaded) return;
+    g_firmlinks_loaded = 1;
+
+#if defined(__APPLE__) && defined(__MACH__)
+    FILE *f = fopen("/usr/share/firmlinks", "r");
+    if (!f) return;
+
+    char line[PATH_MAX * 2];
+    while (fgets(line, sizeof(line), f) && g_firmlink_count < L_MAX_FIRMLINKS) {
+        char *tab = strchr(line, '\t');
+        if (!tab || line[0] != '/') continue;
+        *tab = '\0';
+        char *rel = tab + 1;
+        rel[strcspn(rel, "\r\n")] = '\0';
+        if (!*rel) continue;
+
+        FirmlinkPair *p = &g_firmlinks[g_firmlink_count];
+        snprintf(p->alias, sizeof(p->alias), "%s", line);
+        snprintf(p->target, sizeof(p->target), "/System/Volumes/Data/%s", rel);
+
+        /* Only keep pairs that exist and really are the same directory */
+        struct stat sa, st;
+        if (stat(p->alias, &sa) != 0 || stat(p->target, &st) != 0) continue;
+        if (sa.st_dev != st.st_dev || sa.st_ino != st.st_ino) continue;
+        if (!S_ISDIR(sa.st_mode)) continue;
+
+        p->dev = sa.st_dev;
+        p->ino = sa.st_ino;
+        path_common_dir(p->alias, p->target, p->lca, sizeof(p->lca));
+        p->have_stats = 0;
+        g_firmlink_count++;
+    }
+    fclose(f);
+#endif
+}
+
+void firmlink_stats_reset(void) {
+    pthread_mutex_lock(&g_firmlink_lock);
+    for (int i = 0; i < g_firmlink_count; i++) {
+        g_firmlinks[i].have_stats = 0;
+    }
+    pthread_mutex_unlock(&g_firmlink_lock);
+}
+
+int firmlink_count(void) {
+    return g_firmlink_count;
+}
+
+const char *firmlink_alias(int idx) {
+    return g_firmlinks[idx].alias;
+}
+
+const char *firmlink_lca(int idx) {
+    return g_firmlinks[idx].lca;
+}
+
+int firmlink_lookup_inode(dev_t dev, ino_t ino) {
+    for (int i = 0; i < g_firmlink_count; i++) {
+        if (g_firmlinks[i].dev == dev && g_firmlinks[i].ino == ino) return i;
+    }
+    return -1;
+}
+
+int firmlink_lookup_path(const char *path) {
+    for (int i = 0; i < g_firmlink_count; i++) {
+        if (strcmp(g_firmlinks[i].alias, path) == 0 ||
+            strcmp(g_firmlinks[i].target, path) == 0) return i;
+    }
+    return -1;
+}
+
+int firmlink_stats_get(int idx, off_t *size, long *file_count) {
+    int have;
+    pthread_mutex_lock(&g_firmlink_lock);
+    have = g_firmlinks[idx].have_stats;
+    if (have) {
+        *size = g_firmlinks[idx].size;
+        *file_count = g_firmlinks[idx].file_count;
+    }
+    pthread_mutex_unlock(&g_firmlink_lock);
+    return have;
+}
+
+void firmlink_stats_offer(int idx, off_t size, long file_count) {
+    pthread_mutex_lock(&g_firmlink_lock);
+    if (!g_firmlinks[idx].have_stats) {
+        g_firmlinks[idx].size = size;
+        g_firmlinks[idx].file_count = file_count;
+        g_firmlinks[idx].have_stats = 1;
+    }
+    pthread_mutex_unlock(&g_firmlink_lock);
+}
+
+void firmlink_adjust_dir(const char *dir_path, off_t *size, long *file_count) {
+    for (int i = 0; i < g_firmlink_count; i++) {
+        if (strcmp(g_firmlinks[i].lca, dir_path) != 0) continue;
+        off_t s;
+        long c;
+        if (!firmlink_stats_get(i, &s, &c)) continue;  /* endpoint never walked */
+        if (*size >= 0) {
+            *size -= s;
+            if (*size < 0) *size = 0;
+        }
+        if (*file_count >= 0 && c >= 0) {
+            *file_count -= c;
+            if (*file_count < 0) *file_count = 0;
+        }
+    }
+}
+
+/* ============================================================================
  * Memory Allocation
  * ============================================================================ */
 
@@ -364,8 +515,11 @@ void path_abbreviate_home(const char *path, char *buf, size_t len, const char *h
 }
 
 void cache_get_path(char *buf, size_t len) {
+    /* v3: firmlink-aware values (both endpoints stored full, dedup only at
+     * each pair's common ancestor). v2 databases encode the old first-wins
+     * attribution with 0|0 duplicate markers and must not be read. */
     const char *home = getenv("HOME");
-    snprintf(buf, len, "%s/.cache/l/sizes-v2.db", home ? home : "/tmp");
+    snprintf(buf, len, "%s/.cache/l/sizes-v3.db", home ? home : "/tmp");
 }
 
 int path_is_network_fs(const char *path) {

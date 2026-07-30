@@ -562,8 +562,10 @@ int main(int argc, char **argv) {
     if (cfg.req.sort_by == SORT_SIZE) cfg.compute.sizes = 1;
     if (cfg.req.min_size > 0) cfg.compute.sizes = 1;
 
-    /* Load the opaque-directory list (dirs shown but never descended into) */
+    /* Load the opaque-directory list (dirs shown but never descended into)
+     * and the firmlink pair table (macOS) before any parallel work */
     opaque_dirs_load(cfg.env.config_dir);
+    firmlinks_load();
 
     /* Load icons, file types, shebangs, and display settings in one pass over
      * config.toml (the separator keeps its built-in default if absent). */

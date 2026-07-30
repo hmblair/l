@@ -99,11 +99,15 @@ int main(int argc, char *argv[]) {
 
     int scan_interval = config_get_interval();
     long threshold = config_get_threshold();
+    firmlinks_load();
     log_info("starting (scan interval: %ds)", scan_interval);
 
     while (!g_shutdown) {
         rotate_log();
         time_t start = time(NULL);
+        /* Pair sizes are memoized per scan so stored values within one scan
+         * agree; a fresh cycle must re-measure them. */
+        firmlink_stats_reset();
 
         /* Create fresh temp database for this scan */
         if (cache_daemon_init() != 0) {

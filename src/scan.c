@@ -100,9 +100,14 @@ typedef struct {
 static ScanResult scan_impl(const char *path, int depth,
                             const ScanContext *ctx);
 
-/* Common setup for scan_impl - returns dirfd on success, -1 to skip, -2 on error */
+/* Common setup for scan_impl - returns dirfd on success, -1 to skip, -2 on
+ * error, -3 when the directory is a firmlink endpoint whose full stats are
+ * already memoized (*memo receives them; no re-walk). *pair_out is the
+ * endpoint's pair index (walk with a private visited set and offer the
+ * result), or -1. */
 static int scan_setup(const char *path, struct stat *dir_st, int depth,
-                      const ScanContext *ctx) {
+                      const ScanContext *ctx, int *pair_out, ScanResult *memo) {
+    *pair_out = -1;
     if (ctx->shutdown && *ctx->shutdown) return -1;
     if (depth >= MAX_SCAN_DEPTH) return -1;
 
@@ -119,9 +124,23 @@ static int scan_setup(const char *path, struct stat *dir_st, int depth,
         return -2;
     }
 
+    /* Firmlink endpoints report full stats on both sides and are exempt from
+     * the visited-set (the double count is subtracted once at the pair's
+     * common ancestor instead — see firmlink_adjust_dir in scan_finalize). */
+    int pair = firmlink_lookup_inode(dir_st->st_dev, dir_st->st_ino);
+    if (pair >= 0) {
+        if (firmlink_stats_get(pair, &memo->size, &memo->file_count)) {
+            close(dirfd);
+            return -3;
+        }
+        *pair_out = pair;
+        return dirfd;
+    }
+
     if (visited_check_and_insert(ctx->visited, dir_st->st_dev, dir_st->st_ino)) {
         close(dirfd);
-        /* Cache duplicates at 0 so live-scan fallbacks find them */
+        /* Cache duplicates at 0 so live-scan fallbacks find them (non-firmlink
+         * duplicates only: bind mounts and the like) */
         if (ctx->store_fn) {
             #pragma omp critical
             ctx->store_fn(path, 0, 0);
@@ -167,9 +186,12 @@ static void scan_process_subdirs(char **subdirs, size_t subdir_count,
     free(subdirs);
 }
 
-/* Finalize scan result: optionally store and handle skip_file_count */
+/* Finalize scan result: firmlink adjustment (this directory may be the one
+ * point that contains both endpoints of a pair), optional store, and the
+ * skip_file_count marker. */
 static void scan_finalize(const char *path, const ScanContext *ctx,
                           int skip_file_count, ScanResult *result) {
+    firmlink_adjust_dir(path, &result->size, &result->file_count);
     if (ctx->store_fn && !skip_file_count &&
         result->file_count >= ctx->threshold && strcmp(path, "/") != 0) {
         #pragma omp critical
@@ -228,10 +250,28 @@ ScanResult scan_directory_tasks(const char *path,
 static ScanResult scan_impl(const char *path, int depth,
                             const ScanContext *ctx) {
     struct stat dir_st;
+    int pair = -1;
+    ScanResult memo;
 
-    int dirfd = scan_setup(path, &dir_st, depth, ctx);
+    int dirfd = scan_setup(path, &dir_st, depth, ctx, &pair, &memo);
     if (dirfd == -1) return (ScanResult){0, 0};
     if (dirfd == -2) return (ScanResult){-1, -1};
+    if (dirfd == -3) {
+        scan_finalize(path, ctx, 0, &memo);
+        return memo;
+    }
+
+    /* First walk of a firmlink endpoint: use a private visited set so the
+     * other endpoint's walk (earlier or concurrent) can't hollow this one
+     * out; the result is offered as the pair's memoized stats below. */
+    VisitedSet pair_visited;
+    ScanContext pair_ctx;
+    if (pair >= 0) {
+        visited_init(&pair_visited);
+        pair_ctx = *ctx;
+        pair_ctx.visited = &pair_visited;
+        ctx = &pair_ctx;
+    }
 
     ScanResult result = {dir_st.st_blocks * 512, 0};
     int skip_file_count = path_is_opaque_dir(path);
@@ -323,6 +363,10 @@ static ScanResult scan_impl(const char *path, int depth,
 
     scan_teardown(path, subdirs, subdir_count, depth,
                   ctx, skip_file_count, &result);
+    if (pair >= 0) {
+        firmlink_stats_offer(pair, result.size, result.file_count);
+        visited_free(&pair_visited);
+    }
     return result;
 }
 
@@ -331,10 +375,28 @@ static ScanResult scan_impl(const char *path, int depth,
 static ScanResult scan_impl(const char *path, int depth,
                             const ScanContext *ctx) {
     struct stat dir_st;
+    int pair = -1;
+    ScanResult memo;
 
-    int dirfd = scan_setup(path, &dir_st, depth, ctx);
+    int dirfd = scan_setup(path, &dir_st, depth, ctx, &pair, &memo);
     if (dirfd == -1) return (ScanResult){0, 0};
     if (dirfd == -2) return (ScanResult){-1, -1};
+    if (dirfd == -3) {
+        scan_finalize(path, ctx, 0, &memo);
+        return memo;
+    }
+
+    /* First walk of a firmlink endpoint: use a private visited set so the
+     * other endpoint's walk (earlier or concurrent) can't hollow this one
+     * out; the result is offered as the pair's memoized stats below. */
+    VisitedSet pair_visited;
+    ScanContext pair_ctx;
+    if (pair >= 0) {
+        visited_init(&pair_visited);
+        pair_ctx = *ctx;
+        pair_ctx.visited = &pair_visited;
+        ctx = &pair_ctx;
+    }
 
     ScanResult result = {dir_st.st_blocks * 512, 0};
     int skip_file_count = path_is_opaque_dir(path);
@@ -397,6 +459,10 @@ static ScanResult scan_impl(const char *path, int depth,
 
     scan_teardown(path, subdirs, subdir_count, depth,
                   ctx, skip_file_count, &result);
+    if (pair >= 0) {
+        firmlink_stats_offer(pair, result.size, result.file_count);
+        visited_free(&pair_visited);
+    }
     return result;
 }
 #endif

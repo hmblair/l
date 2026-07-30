@@ -191,6 +191,40 @@ int path_name_is_opaque(const char *name);
 /* True if the last component of a path names an opaque directory. */
 int path_is_opaque_dir(const char *path);
 
+/* ============================================================================
+ * Firmlinks (macOS) - directories reachable at two paths
+ * ============================================================================ */
+
+/* Pairs are loaded from /usr/share/firmlinks (the registry is empty on other
+ * platforms). Size semantics: every directory reports the FULL size of
+ * everything reachable under it — both endpoints of a pair show real numbers.
+ * Only the single directory that contains both endpoints (the pair's nearest
+ * common ancestor, "lca") subtracts the shared content once, so ancestors
+ * like / are not double-counted. Pair sizes are memoized per process so both
+ * endpoints and the lca adjustment agree within one run. */
+
+void firmlinks_load(void);         /* idempotent; call before parallel work */
+void firmlink_stats_reset(void);   /* clear memoized sizes (daemon: per scan) */
+
+int firmlink_count(void);
+const char *firmlink_alias(int idx);   /* e.g. /Users */
+const char *firmlink_lca(int idx);     /* e.g. /       */
+
+/* Pair index for a directory that is an endpoint, or -1 */
+int firmlink_lookup_inode(dev_t dev, ino_t ino);
+int firmlink_lookup_path(const char *path);
+
+/* Memoized full stats of a pair's shared content. offer is first-write-wins
+ * (both endpoints hold the same content; whichever walk finishes first
+ * defines the value everyone else uses). */
+int firmlink_stats_get(int idx, off_t *size, long *file_count);
+void firmlink_stats_offer(int idx, off_t size, long file_count);
+
+/* Subtract each memoized pair whose lca is exactly dir_path — the one point
+ * where the shared content would otherwise be counted twice. A negative
+ * *file_count (unknown) is left untouched. */
+void firmlink_adjust_dir(const char *dir_path, off_t *size, long *file_count);
+
 /* Check if directory is a git repository root (contains .git) */
 int path_is_git_root(const char *path);
 

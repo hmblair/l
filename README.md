@@ -186,7 +186,7 @@ Features:
 - Shows last scan duration in status display
 - Configurable via `~/.config/l/daemon.conf`
 
-The daemon is managed via launchd on macOS and systemd on Linux, storing its cache in `~/.cache/l/sizes-v2.db`.
+The daemon is managed via launchd on macOS and systemd on Linux, storing its cache in `~/.cache/l/sizes-v3.db`.
 
 ## Configuration
 
