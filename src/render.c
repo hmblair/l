@@ -336,8 +336,7 @@ void render_view(const View *view, PrintContext *ctx) {
             for (int d = 0; d < row->depth && d < L_MAX_DEPTH; d++) {
                 ctx->continuation[d] = (row->cont_mask >> d) & 1;
             }
-            print_entry(&row->node->entry, row->depth,
-                        row->node->was_expanded, ctx);
+            print_entry(&row->node->entry, row->depth, row->expanded, ctx);
         }
     }
 }

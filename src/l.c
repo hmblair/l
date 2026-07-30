@@ -626,29 +626,9 @@ int main(int argc, char **argv) {
      * view, flat-list, and interactive renderers all query the same cache by
      * path (the picker flattens all trees into one list, so a per-argument
      * cache would leave non-first inputs without git data). */
-    TreeNode **trees = xmalloc(dir_count * sizeof(TreeNode *));
     GitCache git;
     git_cache_init(&git);
-
-    for (int i = 0; i < dir_count; i++) {
-        if (cfg.req.show_ancestry) {
-            trees[i] = build_ancestry_tree_from_config(dirs[i], &git, &cfg, &icons);
-        } else {
-            trees[i] = build_tree_from_config(dirs[i], &git, &cfg, &icons);
-        }
-    }
-
-    /* Pre-compute visibility flags for filtering */
-    if (cfg.req.git_only) {
-        for (int i = 0; i < dir_count; i++) {
-            compute_git_status_flags(trees[i], &git);
-        }
-    }
-    if (cfg.req.grep_pattern) {
-        for (int i = 0; i < dir_count; i++) {
-            compute_grep_flags(trees[i], cfg.req.grep_pattern);
-        }
-    }
+    TreeNode **trees = forest_build(dirs, dir_count, &cfg, &git, &icons);
 
     /* Flatten the forest into the exact rows to draw, attribute git changes
      * to their nearest visible ancestor, and measure column widths — all
@@ -693,11 +673,7 @@ int main(int argc, char **argv) {
 
     /* Cleanup */
     view_free(view);
-    for (int i = 0; i < dir_count; i++) {
-        tree_node_free(trees[i]);
-        free(trees[i]);
-    }
-    free(trees);
+    forest_free(trees, dir_count);
     git_cache_free(&git);
 
     cache_unload();

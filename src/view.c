@@ -247,27 +247,35 @@ void git_attribute_to_view(GitCache *git, TreeNode *const *visible, size_t count
  * View Building
  * ============================================================================ */
 
-static void view_push(View *v, TreeNode *node, int depth, uint64_t cont_mask) {
+static void view_push(View *v, TreeNode *node, int depth, int expanded,
+                      uint64_t cont_mask) {
     if (v->count >= v->capacity) {
         v->capacity = v->capacity ? v->capacity * 2 : 256;
         v->rows = xrealloc(v->rows, v->capacity * sizeof(ViewRow));
     }
-    v->rows[v->count++] = (ViewRow){ node, depth, cont_mask };
+    v->rows[v->count++] = (ViewRow){ node, depth, expanded, cont_mask };
 }
 
 /* Emit a shown node and every shown descendant, depth-first — the exact set
  * and order the renderer draws. */
 static void view_emit_subtree(View *v, TreeNode *node, int depth,
                               uint64_t cont_mask, const Config *cfg,
-                              int filtering) {
-    view_push(v, node, depth, cont_mask);
+                              const ViewOptions *vo) {
+    int expanded = vo->interactive ? node->ui_expanded : node->was_expanded;
+    view_push(v, node, depth, expanded, cont_mask);
 
     if (node->child_count == 0) return;
+    if (vo->interactive && !node->ui_expanded) return;  /* collapsed */
+
+    /* Content filters apply only within the initial depth in the picker
+     * (levels the user expanded past the scan depth are always shown);
+     * static mode filters at every depth (filter_depth = INT_MAX). */
+    int filtering = (depth < vo->filter_depth) && is_filtering_active(cfg);
 
     size_t *visible_indices = xmalloc(node->child_count * sizeof(size_t));
     size_t visible_count = 0;
     for (size_t i = 0; i < node->child_count; i++) {
-        if (node_is_shown(&node->children[i], cfg, filtering, 0)) {
+        if (node_is_shown(&node->children[i], cfg, filtering, vo->live_filter)) {
             visible_indices[visible_count++] = i;
         }
     }
@@ -277,7 +285,7 @@ static void view_emit_subtree(View *v, TreeNode *node, int depth,
         int is_last = (vi == visible_count - 1);
         uint64_t child_mask = cont_mask;
         if (!is_last) child_mask |= 1ull << depth;
-        view_emit_subtree(v, child, depth + 1, child_mask, cfg, filtering);
+        view_emit_subtree(v, child, depth + 1, child_mask, cfg, vo);
     }
 
     free(visible_indices);
@@ -285,17 +293,31 @@ static void view_emit_subtree(View *v, TreeNode *node, int depth,
 
 View *view_build(TreeNode **trees, int tree_count, const Config *cfg,
                  GitCache *git, const Icons *icons) {
+    ViewOptions vo = { .interactive = 0, .live_filter = 0, .filter_depth = INT_MAX };
+    return view_build_opts(trees, tree_count, cfg, git, icons, &vo);
+}
+
+View *view_build_opts(TreeNode **trees, int tree_count, const Config *cfg,
+                      GitCache *git, const Icons *icons, const ViewOptions *vo) {
     View *v = xcalloc(1, sizeof(View));
     columns_init(v->cols);
     v->tree_count = tree_count;
     v->tree_row_start = xmalloc((tree_count + 1) * sizeof(size_t));
     v->tree_no_matches = xcalloc(tree_count, sizeof(int));
 
-    int filtering = is_filtering_active(cfg);
+    int filtering = (0 < vo->filter_depth) && is_filtering_active(cfg);
 
     for (int t = 0; t < tree_count; t++) {
         v->tree_row_start[t] = v->count;
         TreeNode *root = trees[t];
+
+        if (vo->interactive) {
+            /* The picker draws every root (no "No matches." rows, no list
+             * mode), except roots hidden by an active '/' query. */
+            if (vo->live_filter && !root->matches_grep) continue;
+            view_emit_subtree(v, root, 0, 0, cfg, vo);
+            continue;
+        }
 
         /* Filtering that leaves no visible children shows "No matches."
          * instead of a lone root row. -g/-m still shows the repo root even
@@ -322,10 +344,10 @@ View *view_build(TreeNode **trees, int tree_count, const Config *cfg,
             for (size_t j = 0; j < root->child_count; j++) {
                 TreeNode *child = &root->children[j];
                 if (!node_is_shown(child, cfg, filtering, 0)) continue;
-                view_emit_subtree(v, child, 0, 0, cfg, filtering);
+                view_emit_subtree(v, child, 0, 0, cfg, vo);
             }
         } else {
-            view_emit_subtree(v, root, 0, 0, cfg, filtering);
+            view_emit_subtree(v, root, 0, 0, cfg, vo);
         }
     }
     v->tree_row_start[tree_count] = v->count;
@@ -409,4 +431,44 @@ void tree_expand_node_from_config(TreeNode *node, GitCache *git,
                                    const Config *cfg, const Icons *icons) {
     TreeBuildOpts opts = config_to_build_opts(cfg);
     tree_expand_node(node, &opts, git, icons);
+}
+
+/* ============================================================================
+ * Forest Building - the full data pass for a set of arguments
+ * ============================================================================ */
+
+TreeNode **forest_build(char *const *dirs, int dir_count, const Config *cfg,
+                        GitCache *git, const Icons *icons) {
+    TreeNode **trees = xmalloc(dir_count * sizeof(TreeNode *));
+
+    for (int i = 0; i < dir_count; i++) {
+        if (cfg->req.show_ancestry) {
+            trees[i] = build_ancestry_tree_from_config(dirs[i], git, cfg, icons);
+        } else {
+            trees[i] = build_tree_from_config(dirs[i], git, cfg, icons);
+        }
+    }
+
+    /* Pre-compute visibility flags for filtering */
+    if (cfg->req.git_only) {
+        for (int i = 0; i < dir_count; i++) {
+            compute_git_status_flags(trees[i], git);
+        }
+    }
+    if (cfg->req.grep_pattern) {
+        for (int i = 0; i < dir_count; i++) {
+            compute_grep_flags(trees[i], cfg->req.grep_pattern);
+        }
+    }
+
+    return trees;
+}
+
+void forest_free(TreeNode **trees, int dir_count) {
+    if (!trees) return;
+    for (int i = 0; i < dir_count; i++) {
+        tree_node_free(trees[i]);
+        free(trees[i]);
+    }
+    free(trees);
 }

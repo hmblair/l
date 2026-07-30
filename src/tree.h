@@ -138,7 +138,12 @@ typedef struct TreeNode {
     size_t child_count;
     int has_git_status;
     int matches_grep;
-    int was_expanded;
+    int was_expanded;      /* Materialization state: children have been read */
+    int ui_expanded;       /* Display state: open in the interactive picker.
+                            * Set alongside was_expanded at build time so a
+                            * fresh tree starts expanded to its build depth;
+                            * collapse clears only this flag (children stay
+                            * materialized). */
     int is_ancestor;       /* Node is part of an ancestry chain (-p) and must be
                             * shown even if its name is a dotfile. */
 } TreeNode;

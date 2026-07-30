@@ -296,6 +296,7 @@ static int *materialize_children(TreeNode *parent, const TreeBuildOpts *opts,
                                  int parent_is_ignored) {
     if (access(parent->entry.path, R_OK) != 0) return NULL;
     parent->was_expanded = 1;
+    parent->ui_expanded = 1;
 
     FileList list;
     file_list_init(&list);
@@ -699,6 +700,7 @@ static TreeNode *tree_node_adopt_single(TreeNode *parent, TreeNode *child) {
     parent->children[0] = *child;   /* shallow move: slot now owns contents */
     parent->child_count = 1;
     parent->was_expanded = 1;
+    parent->ui_expanded = 1;
     free(child);                    /* shell only; contents live on in the slot */
     return &parent->children[0];
 }

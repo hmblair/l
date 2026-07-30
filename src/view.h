@@ -66,6 +66,8 @@ int node_is_shown(const TreeNode *node, const Config *cfg,
 typedef struct {
     TreeNode *node;
     int depth;
+    int expanded;          /* drives the open/closed folder icon (static:
+                            * was_expanded; interactive: ui_expanded) */
     uint64_t cont_mask;    /* bit d set: the ancestor at depth d has later
                             * siblings (drives the │ / └ tree glyphs) */
 } ViewRow;
@@ -85,10 +87,26 @@ typedef struct {
     int diff_del_width;
 } View;
 
+/* Mode parameters for view building. Zero-initialized (with filter_depth
+ * INT_MAX) means the static listing; the interactive picker sets all three. */
+typedef struct {
+    int interactive;    /* gate recursion on node->ui_expanded; no "No
+                         * matches." rows, no list-mode root suppression */
+    int live_filter;    /* a '/' query is active: matches_grep filters at
+                         * every depth, including tree roots */
+    int filter_depth;   /* content filters (-f/-m/--min-size/...) apply only
+                         * to children of nodes at depth < filter_depth;
+                         * INT_MAX for static mode, the initial build depth
+                         * for the picker (interactively expanded levels are
+                         * always shown) */
+} ViewOptions;
+
 /* One traversal + one attribution pass + one width pass, all over the same
  * row set. Requires the git/grep visibility flags to be computed first. */
 View *view_build(TreeNode **trees, int tree_count, const Config *cfg,
                  GitCache *git, const Icons *icons);
+View *view_build_opts(TreeNode **trees, int tree_count, const Config *cfg,
+                      GitCache *git, const Icons *icons, const ViewOptions *vo);
 void view_free(View *view);
 
 /* Bottom-up git attribution: zero every visible directory's view summary,
@@ -109,5 +127,13 @@ TreeNode *build_ancestry_tree_from_config(const char *path, GitCache *git,
                                            const Config *cfg, const Icons *icons);
 void tree_expand_node_from_config(TreeNode *node, GitCache *git,
                                    const Config *cfg, const Icons *icons);
+
+/* Build all argument trees into the shared git cache and run the git-only /
+ * grep visibility-flag passes — everything main() does between parsing and
+ * view_build. The picker's reload key uses the same call, so reloading is
+ * identical to re-running l. */
+TreeNode **forest_build(char *const *dirs, int dir_count, const Config *cfg,
+                        GitCache *git, const Icons *icons);
+void forest_free(TreeNode **trees, int dir_count);
 
 #endif /* L_VIEW_H */
