@@ -21,6 +21,7 @@
 
 void git_cache_init(GitCache *cache) {
     memset(cache->buckets, 0, sizeof(cache->buckets));
+    cache->repo_root_count = 0;
 #ifdef _OPENMP
     omp_init_lock(&cache->lock);
 #endif
