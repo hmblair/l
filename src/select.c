@@ -411,33 +411,18 @@ static void recalculate_widths(SelectState *state, const PrintContext *ctx) {
 }
 
 /* Data pass: for each visible directory, precompute the git status of its
- * descendants not shown on their own row. The flattened set IS the set of shown
- * rows, so we mark those nodes and remove each shown child from its parent's
- * full recursive summary. A collapsed dir has no shown children and keeps its
- * full summary; an expanded one keeps only its hidden/filtered children and
- * deleted files. Mirrors compute_view_summaries for the picker. */
+ * descendants not shown on their own row. The flattened items ARE the shown
+ * rows, so hand them to the shared bottom-up attribution (view.c) — the same
+ * engine the static view uses. */
 static void recompute_view_summaries(SelectState *state, const PrintContext *ctx) {
+    if (state->count == 0) return;
+    TreeNode **visible = malloc(state->count * sizeof(TreeNode *));
+    if (!visible) return;
     for (int i = 0; i < state->count; i++) {
-        state->items[i].node->in_view = 1;
+        visible[i] = state->items[i].node;
     }
-    for (int i = 0; i < state->count; i++) {
-        TreeNode *node = state->items[i].node;
-        if (!node_is_directory(node)) continue;
-        const char *abs = node->entry.abs_path ? node->entry.abs_path
-                                               : node->entry.path;
-        GitSummary s = git_get_dir_summary(ctx->git, abs);
-        for (size_t c = 0; c < node->child_count; c++) {
-            if (node->children[c].in_view) {
-                view_summary_remove_shown_child(&s, &node->children[c], ctx->git);
-            }
-        }
-        git_summary_clamp(&s);
-        node->entry.view_git_summary = s;
-        node->entry.has_view_git_summary = 1;
-    }
-    for (int i = 0; i < state->count; i++) {
-        state->items[i].node->in_view = 0;
-    }
+    git_attribute_to_view(ctx->git, visible, (size_t)state->count);
+    free(visible);
 }
 
 /* Re-prepare everything the renderer reads after the visible set changes. View
@@ -624,7 +609,7 @@ static void render_line(SelectState *state, int index, int is_selected,
     print_entry(&item->node->entry, item->depth, is_expanded, &line_ctx);
 }
 
-static void render_view(SelectState *state, PrintContext *ctx, ExpandedSet *expanded, int files_only) {
+static void render_picker(SelectState *state, PrintContext *ctx, ExpandedSet *expanded, int files_only) {
     int max_visible = state->term_rows - 2;  /* Leave room for status line */
     if (max_visible < 1) max_visible = 1;
     if (max_visible > state->count) max_visible = state->count;
@@ -865,7 +850,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
 
     /* Enter raw mode and render */
     term_enable_raw();
-    render_view(&state, &render_ctx, &expanded, files_only);
+    render_picker(&state, &render_ctx, &expanded, files_only);
 
     char *result = NULL;
 
@@ -922,7 +907,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                 snap_cursor(&state, files_only);
 
                 get_terminal_size(&state.term_rows);
-                render_view(&state, &render_ctx, &expanded, files_only);
+                render_picker(&state, &render_ctx, &expanded, files_only);
             } else if (do_git) {
                 last_git_refresh = now;
             }
@@ -944,7 +929,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                 } else {
                     state.cursor = (state.cursor - 1 + state.count) % state.count;
                 }
-                render_view(&state, &render_ctx, &expanded, files_only);
+                render_picker(&state, &render_ctx, &expanded, files_only);
                 break;
 
             case KEY_DOWN:
@@ -955,7 +940,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                 } else {
                     state.cursor = (state.cursor + 1) % state.count;
                 }
-                render_view(&state, &render_ctx, &expanded, files_only);
+                render_picker(&state, &render_ctx, &expanded, files_only);
                 break;
 
             case KEY_LEFT:
@@ -973,7 +958,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                             break;
                         }
                     }
-                    render_view(&state, &render_ctx, &expanded, files_only);
+                    render_picker(&state, &render_ctx, &expanded, files_only);
                 }
                 break;
 
@@ -997,7 +982,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                             break;
                         }
                     }
-                    render_view(&state, &render_ctx, &expanded, files_only);
+                    render_picker(&state, &render_ctx, &expanded, files_only);
                 }
                 break;
 
@@ -1020,7 +1005,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                 } else {
                     files_only = 0;
                 }
-                render_view(&state, &render_ctx, &expanded, files_only);
+                render_picker(&state, &render_ctx, &expanded, files_only);
                 break;
 
             case KEY_OPEN:
@@ -1047,7 +1032,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                             break;
                         }
                     }
-                    render_view(&state, &render_ctx, &expanded, files_only);
+                    render_picker(&state, &render_ctx, &expanded, files_only);
                 } else {
                     /* Open file: use system handler for binary, EDITOR for text */
                     char cmd[PATH_MAX + 64];
@@ -1103,7 +1088,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                 /* '/' opens the interactive filter; an existing query is kept
                  * so it can be edited rather than retyped. */
                 state.filter_mode = 1;
-                render_view(&state, &render_ctx, &expanded, files_only);
+                render_picker(&state, &render_ctx, &expanded, files_only);
                 break;
 
             case KEY_CHAR:
@@ -1111,7 +1096,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                     state.filter[state.filter_len++] = typed;
                     state.filter[state.filter_len] = '\0';
                     apply_filter(&state, trees, tree_count, ctx, &expanded);
-                    render_view(&state, &render_ctx, &expanded, files_only);
+                    render_picker(&state, &render_ctx, &expanded, files_only);
                 }
                 break;
 
@@ -1119,7 +1104,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                 if (state.filter_len > 0) {
                     state.filter[--state.filter_len] = '\0';
                     apply_filter(&state, trees, tree_count, ctx, &expanded);
-                    render_view(&state, &render_ctx, &expanded, files_only);
+                    render_picker(&state, &render_ctx, &expanded, files_only);
                 }
                 break;
 
@@ -1131,7 +1116,7 @@ char *select_run(TreeNode **trees, int tree_count, PrintContext *ctx) {
                     state.filter[0] = '\0';
                     apply_filter(&state, trees, tree_count, ctx, &expanded);
                 }
-                render_view(&state, &render_ctx, &expanded, files_only);
+                render_picker(&state, &render_ctx, &expanded, files_only);
                 break;
 
             case KEY_QUIT:

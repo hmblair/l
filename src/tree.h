@@ -137,8 +137,6 @@ typedef struct TreeNode {
     int has_git_status;
     int matches_grep;
     int was_expanded;
-    int in_view;           /* Transient: shown on its own row in the current
-                            * interactive view (set during view-summary prep). */
     int is_ancestor;       /* Node is part of an ancestry chain (-p) and must be
                             * shown even if its name is a dotfile. */
 } TreeNode;

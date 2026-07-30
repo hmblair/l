@@ -1,8 +1,10 @@
 /*
- * ui.c - Display functions: icons, columns, tree, colors
+ * render.c - Rendering: row printing, the view renderer, and the summary
+ * card. Everything here is presentation: all facts are read from FileEntry
+ * and the View; no filesystem or git queries happen at draw time.
  */
 
-#include "ui.h"
+#include "render.h"
 #include "cache.h"
 #include <dirent.h>
 #include <ctype.h>
@@ -13,246 +15,17 @@
 #include <stdarg.h>
 #include <sys/ioctl.h>
 
-/* ============================================================================
- * Path Wrappers (using Config)
- * ============================================================================ */
-
-void get_realpath(const char *path, char *resolved, const Config *cfg) {
+/* Path convenience wrappers over the Config environment */
+static void get_realpath(const char *path, char *resolved, const Config *cfg) {
     path_get_realpath(path, resolved, cfg->env.cwd);
 }
 
-void get_abspath(const char *path, char *resolved, const Config *cfg) {
+static void get_abspath(const char *path, char *resolved, const Config *cfg) {
     path_get_abspath(path, resolved, cfg->env.cwd);
 }
 
-void abbreviate_home(const char *path, char *buf, size_t len, const Config *cfg) {
+static void abbreviate_home(const char *path, char *buf, size_t len, const Config *cfg) {
     path_abbreviate_home(path, buf, len, cfg->env.home);
-}
-
-/* ============================================================================
- * Column Formatters
- * ============================================================================ */
-
-static void col_format_size(const FileEntry *fe, const Icons *icons, char *buf, size_t len) {
-    (void)icons;
-    if (fe->size < 0) {
-        snprintf(buf, len, "-");
-    } else {
-        format_size(fe->size, buf, len);
-    }
-}
-
-static void col_format_lines(const FileEntry *fe, const Icons *icons, char *buf, size_t len) {
-    (void)icons;
-    format_content_quantity(fe, buf, len);
-}
-
-static void col_format_time(const FileEntry *fe, const Icons *icons, char *buf, size_t len) {
-    (void)icons;
-    format_relative_time(fe->mtime, buf, len);
-}
-
-void columns_init(Column *cols) {
-    cols[COL_SIZE].name = "size";
-    cols[COL_SIZE].width = 1;
-    cols[COL_SIZE].format = col_format_size;
-
-    cols[COL_LINES].name = "lines";
-    cols[COL_LINES].width = 1;
-    cols[COL_LINES].format = col_format_lines;
-
-    cols[COL_TIME].name = "time";
-    cols[COL_TIME].width = 1;
-    cols[COL_TIME].format = col_format_time;
-}
-
-void columns_update_widths(Column *cols, const FileEntry *fe, const Icons *icons) {
-    char buf[32];
-    for (int i = 0; i < NUM_COLUMNS; i++) {
-        cols[i].format(fe, icons, buf, sizeof(buf));
-        int len = (int)strlen(buf);
-        if (len > cols[i].width) cols[i].width = len;
-    }
-}
-
-static void columns_reset_widths(Column *cols) {
-    for (int i = 0; i < NUM_COLUMNS; i++) {
-        cols[i].width = 1;
-    }
-}
-
-int is_filtering_active(const Config *cfg) {
-    return cfg->req.git_only || cfg->req.hide_gitignored || cfg->req.grep_pattern ||
-           cfg->req.min_size > 0 || cfg->req.dir_only;
-}
-
-int node_is_visible(const TreeNode *node, const Config *cfg) {
-    if (cfg->req.git_only && !node->has_git_status) return 0;
-    if (cfg->req.hide_gitignored && node->entry.is_ignored) return 0;
-    if (cfg->req.grep_pattern && !node->matches_grep) return 0;
-    if (cfg->req.min_size > 0 && (node->entry.size < 0 || node->entry.size < cfg->req.min_size)) return 0;
-    if (cfg->req.dir_only && !node_is_directory(node)) return 0;
-    return 1;
-}
-
-/* A hidden entry (dotfile) is not displayed unless -a is given. This is kept
- * separate from node_is_visible because, in the interactive picker, the content
- * filters above only apply within the initial scan depth, whereas hidden entries
- * stay hidden at every depth. */
-int node_is_hidden(const TreeNode *node, const Config *cfg) {
-    if (node->is_ancestor) return 0;
-    return !cfg->req.show_hidden && node->entry.name[0] == '.';
-}
-
-/* The single visibility decision shared by both the static renderer and the
- * interactive picker: an entry is shown iff it isn't hidden (without -a), passes
- * the active content filters (-f/--filter, git-only, ...) when those apply, and
- * matches the interactive '/' query when one is active. The two flags capture
- * the only policy difference between the modes — content filters are depth-gated
- * in the picker, and the live query exists only there — so the actual rule lives
- * in exactly one place. */
-int node_is_shown(const TreeNode *node, const Config *cfg,
-                  int apply_content_filters, int live_filter_active) {
-    /* Ancestry-spine nodes (-p) are the path to the target and always render,
-     * bypassing both the hidden and content (git-only, grep, ...) filters. */
-    if (node->is_ancestor) return 1;
-    if (node_is_hidden(node, cfg)) return 0;
-    if (apply_content_filters && !node_is_visible(node, cfg)) return 0;
-    if (live_filter_active && !node->matches_grep) return 0;
-    return 1;
-}
-
-/* Clamp a directory view summary to non-negative counts. Subtraction can
- * under-run when a directory is not itself in a git repo (its total is 0) but
- * contains shown sub-repository children whose own summaries are non-zero. */
-void git_summary_clamp(GitSummary *s) {
-    if (s->modified < 0) s->modified = 0;
-    if (s->untracked < 0) s->untracked = 0;
-    if (s->staged < 0) s->staged = 0;
-    if (s->deleted < 0) s->deleted = 0;
-    if (s->staged_deleted < 0) s->staged_deleted = 0;
-    if (s->diff_added < 0) s->diff_added = 0;
-    if (s->diff_removed < 0) s->diff_removed = 0;
-}
-
-/* Remove from a directory's view summary the git status absorbed by a child
- * shown on its own row: the child's own status, plus (for a shown directory)
- * its whole subtree, which that child's row already accounts for. */
-void view_summary_remove_shown_child(GitSummary *s, const TreeNode *child, GitCache *git) {
-    /* Look the child's own status up in the cache by absolute path — the same
-     * key git_get_dir_summary uses. */
-    const char *abs = child->entry.abs_path ? child->entry.abs_path
-                                            : child->entry.path;
-    GitStatusNode *node = git_cache_get_node(git, abs);
-    if (node) {
-        git_summary_apply_flags(s, node->flags, -1);
-        /* The child's own line stats live on its cache node (files have them;
-         * directories usually don't). Subtree line stats are folded in below. */
-        s->diff_added -= node->lines_added;
-        s->diff_removed -= node->lines_removed;
-    }
-    if (node_is_directory(child)) {
-        GitSummary cs = git_get_dir_summary(git, abs);
-        s->modified -= cs.modified;
-        s->untracked -= cs.untracked;
-        s->staged -= cs.staged;
-        s->deleted -= cs.deleted;
-        s->staged_deleted -= cs.staged_deleted;
-        s->diff_added -= cs.diff_added;
-        s->diff_removed -= cs.diff_removed;
-    }
-}
-
-static int count_digits(int n) {
-    if (n == 0) return 1;
-    int count = 0;
-    if (n < 0) { count = 1; n = -n; }  /* for minus sign */
-    while (n > 0) { count++; n /= 10; }
-    return count;
-}
-
-/* Resolve the diff line counts a row draws. A file reports its own stats; a
- * directory reports its view summary — the lines of descendants not shown on
- * their own row, rolled up to this (the nearest visible) ancestor. Falls back
- * to the full recursive summary if no view was prepared. Single source of truth
- * for both the renderer (print_entry) and the width pass (diff_widths_update). */
-void entry_diff_stats(const FileEntry *fe, GitCache *git,
-                      int *added, int *removed) {
-    if (fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR) {
-        const char *abs = fe->abs_path ? fe->abs_path : fe->path;
-        GitSummary gs = fe->has_view_git_summary ? fe->view_git_summary
-                                                 : git_get_dir_summary(git, abs);
-        *added = gs.diff_added;
-        *removed = gs.diff_removed;
-    } else {
-        *added = fe->diff_added;
-        *removed = fe->diff_removed;
-    }
-}
-
-/* Grow the diff-column widths to fit one entry. Directories read the same
- * rolled-up view summary the renderer draws (see entry_diff_stats), so the
- * measured width matches the printed value exactly. A resulting width of 0
- * means no entry has changes and the column is omitted (see print_entry). */
-void diff_widths_update(int *add_width, int *del_width, const FileEntry *fe,
-                        GitCache *git) {
-    int added, removed;
-    entry_diff_stats(fe, git, &added, &removed);
-    if (added > 0) {
-        int w = count_digits(added);
-        if (w > *add_width) *add_width = w;
-    }
-    if (removed > 0) {
-        int w = count_digits(removed);
-        if (w > *del_width) *del_width = w;
-    }
-}
-
-
-/* ============================================================================
- * Config to TreeBuildOpts Conversion
- * ============================================================================ */
-
-static int skip_below_min_size(const FileEntry *entry, void *ctx) {
-    off_t min_size = *(off_t *)ctx;
-    return entry->size < 0 || entry->size < min_size;
-}
-
-TreeBuildOpts config_to_build_opts(const Config *cfg) {
-    TreeBuildOpts opts = {
-        .max_depth = cfg->req.max_depth,
-        .show_hidden = cfg->req.show_hidden,
-        .skip_gitignored = !cfg->req.expand_all,
-        .sort_by = cfg->req.sort_by,
-        .sort_reverse = cfg->req.sort_reverse,
-        .cwd = cfg->env.cwd,
-        .compute = cfg->compute,
-        .skip_fn = cfg->req.min_size > 0 ? skip_below_min_size : NULL,
-        .skip_ctx = (void *)&cfg->req.min_size,
-        .ancestry_to_repo = cfg->req.git_only && !cfg->req.ancestry_explicit
-    };
-    return opts;
-}
-
-/* Build functions no longer measure column widths: sizing is a single pass over
- * the finished tree (measure_columns) that mirrors exactly what the renderer
- * draws, so it can only run once the git/grep flags it depends on are set. */
-TreeNode *build_tree_from_config(const char *path, GitCache *git,
-                                  const Config *cfg, const Icons *icons) {
-    TreeBuildOpts opts = config_to_build_opts(cfg);
-    return build_tree(path, &opts, git, icons);
-}
-
-TreeNode *build_ancestry_tree_from_config(const char *path, GitCache *git,
-                                           const Config *cfg, const Icons *icons) {
-    TreeBuildOpts opts = config_to_build_opts(cfg);
-    return build_ancestry_tree(path, &opts, git, icons);
-}
-
-void tree_expand_node_from_config(TreeNode *node, GitCache *git,
-                                   const Config *cfg, const Icons *icons) {
-    TreeBuildOpts opts = config_to_build_opts(cfg);
-    tree_expand_node(node, &opts, git, icons);
 }
 
 /* ============================================================================
@@ -548,144 +321,25 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, const PrintCo
     }
 }
 
-static void print_tree_children(const TreeNode *parent, int depth, PrintContext *ctx);
-
-/* A child entry is shown in the static listing: the shared visibility rule with
- * no interactive '/' query. */
-static int child_is_shown(const TreeNode *child, const Config *cfg, int filtering) {
-    return node_is_shown(child, cfg, filtering, 0);
-}
-
-/* Measure one already-rendered node and every descendant the renderer reaches
- * through it (a descendant draws iff its parent drew and child_is_shown). This
- * is the exact traversal print_tree_children performs, so the measured set is
- * identically the drawn set. */
-static void measure_shown_subtree(const TreeNode *node, GitCache *git,
-                                  const Icons *icons, const Config *cfg, int filtering,
-                                  Column *cols, int *add_width, int *del_width) {
-    columns_update_widths(cols, &node->entry, icons);
-    diff_widths_update(add_width, del_width, &node->entry, git);
-    for (size_t i = 0; i < node->child_count; i++) {
-        const TreeNode *child = &node->children[i];
-        if (!child_is_shown(child, cfg, filtering)) continue;
-        measure_shown_subtree(child, git, icons, cfg, filtering, cols, add_width, del_width);
-    }
-}
-
-/* Size every column (the info columns and the git diff +/- columns) from the
- * rows the renderer will actually draw, in a single pass. This is the only
- * width-measuring path: it mirrors print_tree_node exactly — each tree's root
- * always draws (unless list mode suppresses a directory root's own row), and
- * descendants follow child_is_shown — so alignment can never drift from what is
- * printed regardless of which flags or filters are active. Runs after the
- * git/grep visibility flags are computed, since child_is_shown depends on them. */
-void measure_columns(TreeNode **trees, int tree_count, GitCache *git,
-                     const Icons *icons, const Config *cfg,
-                     Column *cols, int *diff_add_width, int *diff_del_width) {
-    int filtering = is_filtering_active(cfg);
-    columns_reset_widths(cols);
-    *diff_add_width = 0;
-    *diff_del_width = 0;
-
-    for (int i = 0; i < tree_count; i++) {
-        TreeNode *root = trees[i];
-        /* List mode does not draw a directory root's own row, only its shown
-         * children (each with its subtree); every other case draws the root. */
-        if (cfg->req.list_mode && root->entry.type == FTYPE_DIR) {
-            for (size_t j = 0; j < root->child_count; j++) {
-                const TreeNode *child = &root->children[j];
-                if (!child_is_shown(child, cfg, filtering)) continue;
-                measure_shown_subtree(child, git, icons, cfg, filtering,
-                                      cols, diff_add_width, diff_del_width);
+/* Draw every row of a built View: decode each row's continuation mask into
+ * the context's array and print. Trees that filtering emptied print the
+ * "No matches." notice instead. */
+void render_view(const View *view, PrintContext *ctx) {
+    for (int t = 0; t < view->tree_count; t++) {
+        if (view->tree_no_matches[t]) {
+            printf("%sNo matches.%s\n",
+                   CLR(ctx->cfg, COLOR_RED), RST(ctx->cfg));
+            continue;
+        }
+        for (size_t i = view->tree_row_start[t]; i < view->tree_row_start[t + 1]; i++) {
+            const ViewRow *row = &view->rows[i];
+            for (int d = 0; d < row->depth && d < L_MAX_DEPTH; d++) {
+                ctx->continuation[d] = (row->cont_mask >> d) & 1;
             }
-        } else {
-            measure_shown_subtree(root, git, icons, cfg, filtering,
-                                  cols, diff_add_width, diff_del_width);
+            print_entry(&row->node->entry, row->depth,
+                        row->node->was_expanded, ctx);
         }
     }
-}
-
-/* Data pass (non-interactive): precompute each shown directory's view summary —
- * the git status of descendants not shown on their own row — so the renderer
- * only reads view_git_summary instead of scanning the git cache itself. */
-void compute_view_summaries(TreeNode *node, const Config *cfg, GitCache *git) {
-    if (!node_is_directory(node)) return;
-    int filtering = is_filtering_active(cfg);
-    const char *abs = node->entry.abs_path ? node->entry.abs_path : node->entry.path;
-    GitSummary s = git_get_dir_summary(git, abs);
-    for (size_t i = 0; i < node->child_count; i++) {
-        TreeNode *child = &node->children[i];
-        if (!child_is_shown(child, cfg, filtering)) continue;  /* non-shown stays in s */
-        view_summary_remove_shown_child(&s, child, git);
-        compute_view_summaries(child, cfg, git);  /* recurse into shown directories */
-    }
-    git_summary_clamp(&s);
-    node->entry.view_git_summary = s;
-    node->entry.has_view_git_summary = 1;
-}
-
-void print_tree_node(const TreeNode *node, int depth, PrintContext *ctx) {
-    int filtering = is_filtering_active(ctx->cfg);
-
-    if (ctx->cfg->req.list_mode && node->entry.type == FTYPE_DIR) {
-        size_t *visible_indices = node->child_count
-            ? xmalloc(node->child_count * sizeof(size_t)) : NULL;
-        size_t visible_count = 0;
-        for (size_t i = 0; i < node->child_count; i++) {
-            if (child_is_shown(&node->children[i], ctx->cfg, filtering)) {
-                visible_indices[visible_count++] = i;
-            }
-        }
-
-        for (size_t vi = 0; vi < visible_count; vi++) {
-            size_t i = visible_indices[vi];
-            const TreeNode *child = &node->children[i];
-            int is_last = (vi == visible_count - 1);
-            if (depth > 0) ctx->continuation[depth - 1] = !is_last;
-
-            print_entry(&child->entry, depth, child->was_expanded, ctx);
-
-            if (child->child_count > 0) {
-                print_tree_children(child, depth, ctx);
-            }
-        }
-        free(visible_indices);
-        return;
-    }
-
-    print_entry(&node->entry, depth, node->was_expanded, ctx);
-
-    if (node->child_count > 0) {
-        print_tree_children(node, depth, ctx);
-    }
-}
-
-static void print_tree_children(const TreeNode *parent, int depth, PrintContext *ctx) {
-    int filtering = is_filtering_active(ctx->cfg);
-    size_t *visible_indices = parent->child_count
-        ? xmalloc(parent->child_count * sizeof(size_t)) : NULL;
-    size_t visible_count = 0;
-    for (size_t i = 0; i < parent->child_count; i++) {
-        if (child_is_shown(&parent->children[i], ctx->cfg, filtering)) {
-            visible_indices[visible_count++] = i;
-        }
-    }
-
-    for (size_t vi = 0; vi < visible_count; vi++) {
-        size_t i = visible_indices[vi];
-        const TreeNode *child = &parent->children[i];
-        int is_last = (vi == visible_count - 1);
-
-        ctx->continuation[depth] = !is_last;
-
-        print_entry(&child->entry, depth + 1, child->was_expanded, ctx);
-
-        if (child->child_count > 0) {
-            print_tree_children(child, depth + 1, ctx);
-        }
-    }
-
-    free(visible_indices);
 }
 
 /* ============================================================================
@@ -882,22 +536,20 @@ static void card_print(const Card *card, const Config *cfg) {
     printf("┘%s\n", RST(cfg));
 }
 
-/* Print summary for a single file or directory */
-void print_summary(TreeNode *node, PrintContext *ctx) {
+/* Data step for summary mode, run before print_summary: compute the type
+ * statistics and git info the card displays, so printing itself is pure.
+ * Summary mode always counts all files (including hidden) to match
+ * file_count. */
+void summary_prepare(TreeNode *node, PrintContext *ctx) {
     FileEntry *fe = &node->entry;
-    const Config *cfg = ctx->cfg;
     int is_dir = (fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR);
-    int is_cwd = (strcmp(fe->path, cfg->env.cwd) == 0);
-    int is_hidden = (fe->name[0] == '.');
 
-    /* Compute extended data if not already done.
-     * Summary mode always counts all files (including hidden) to match file_count. */
     if (is_dir && !fe->has_type_stats) {
         fileinfo_compute_type_stats(fe, node, ctx->filetypes, ctx->shebangs, 1);
     }
 
     char abs_path[PATH_MAX];
-    get_realpath(fe->path, abs_path, cfg);
+    get_realpath(fe->path, abs_path, ctx->cfg);
     char git_root[PATH_MAX];
     int in_git_repo = git_find_root(abs_path, git_root, sizeof(git_root));
 
@@ -908,6 +560,16 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
     if (is_dir && fe->is_git_root && !fe->has_git_repo_info) {
         fileinfo_compute_git_repo_info(fe, ctx->git);
     }
+}
+
+/* Print summary for a single file or directory (summary_prepare must have
+ * run on the node) */
+void print_summary(TreeNode *node, PrintContext *ctx) {
+    FileEntry *fe = &node->entry;
+    const Config *cfg = ctx->cfg;
+    int is_dir = (fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR);
+    int is_cwd = (strcmp(fe->path, cfg->env.cwd) == 0);
+    int is_hidden = (fe->name[0] == '.');
 
     Card card;
     card_init(&card);

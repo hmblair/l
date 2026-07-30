@@ -9,7 +9,8 @@
 #include "cache.h"
 #include "config.h"
 #include "git.h"
-#include "ui.h"
+#include "view.h"
+#include "render.h"
 #include "daemon.h"
 #include "select.h"
 
@@ -595,7 +596,7 @@ int main(int argc, char **argv) {
                  * re-abbreviating the home prefix the shell expanded away. */
                 char missing[PATH_MAX], shown[PATH_MAX];
                 snprintf(missing, sizeof(missing), "%.*s", (int)split, dirs[i]);
-                abbreviate_home(missing, shown, sizeof(shown), &cfg);
+                path_abbreviate_home(missing, shown, sizeof(shown), cfg.env.home);
                 fprintf(stderr, "%sError:%s '%s' does not exist\n",
                         CLR(&cfg, COLOR_RED), RST(&cfg), shown);
             } else {
@@ -614,21 +615,15 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* Process each directory */
     int continuation[L_MAX_DEPTH] = {0};
 
-    /* Initialize shared columns for consistent alignment */
-    Column cols[NUM_COLUMNS];
-    columns_init(cols);
-
-    /* Build all trees first (computes column widths across all arguments).
-     * The git cache is scoped to the whole invocation, not to a single argument:
-     * it is keyed by absolute path and already holds many repo roots at once, so
-     * every argument's tree is built into one shared cache. This keeps the data
-     * layer input-count-agnostic — the tree, flat-list, and interactive renderers
-     * all query the same cache by path (the picker flattens all trees into one
-     * list, so a per-argument cache would leave non-first inputs without git
-     * data). */
+    /* Build all trees first. The git cache is scoped to the whole invocation,
+     * not to a single argument: it is keyed by absolute path and already holds
+     * many repo roots at once, so every argument's tree is built into one
+     * shared cache. This keeps the data layer input-count-agnostic — the
+     * view, flat-list, and interactive renderers all query the same cache by
+     * path (the picker flattens all trees into one list, so a per-argument
+     * cache would leave non-first inputs without git data). */
     TreeNode **trees = xmalloc(dir_count * sizeof(TreeNode *));
     GitCache git;
     git_cache_init(&git);
@@ -652,98 +647,50 @@ int main(int argc, char **argv) {
             compute_grep_flags(trees[i], cfg.req.grep_pattern);
         }
     }
-    /* Data pass: precompute each directory's view summary (git status and diff
-     * lines rolled up to the nearest visible ancestor). Must run before both the
-     * width measurement and printing, since both read view_git_summary. Depends
-     * on the git/grep visibility flags above. Interactive mode recomputes over
-     * its own live visible set (select.c). */
-    if (cfg.compute.git_status) {
-        for (int i = 0; i < dir_count; i++) {
-            compute_view_summaries(trees[i], &cfg, &git);
-        }
-    }
-    /* Measure all column widths in one pass over the rows that will render.
-     * Must run after the git/grep flags above, which child visibility depends
-     * on. Interactive mode re-measures over its own visible set (select.c). */
-    int diff_add_width = 0, diff_del_width = 0;
-    if (cfg.disp.long_format) {
-        measure_columns(trees, dir_count, &git, &icons, &cfg,
-                        cols, &diff_add_width, &diff_del_width);
-    }
 
-    /* Interactive selection mode */
+    /* Flatten the forest into the exact rows to draw, attribute git changes
+     * to their nearest visible ancestor, and measure column widths — all
+     * over the same row set (view.c). Interactive mode re-derives its own
+     * visible set live but starts from these widths and summaries. */
+    View *view = view_build(trees, dir_count, &cfg, &git, &icons);
+
+    PrintContext ctx = {
+        .git = &git,
+        .icons = &icons,
+        .filetypes = &filetypes,
+        .shebangs = &shebangs,
+        .cfg = &cfg,
+        .columns = cfg.disp.long_format ? view->cols : NULL,
+        .continuation = continuation,
+        .diff_add_width = view->diff_add_width,
+        .diff_del_width = view->diff_del_width,
+        .term_width = cfg.disp.is_tty ? get_terminal_width() : 0
+    };
+
+    int exit_code = 0;
     if (cfg.req.interactive) {
-        PrintContext ctx = {
-            .git = &git,
-            .icons = &icons,
-            .filetypes = &filetypes,
-            .shebangs = &shebangs,
-            .cfg = &cfg,
-            .columns = cfg.disp.long_format ? cols : NULL,
-            .continuation = continuation,
-            .diff_add_width = diff_add_width,
-            .diff_del_width = diff_del_width,
-            .term_width = cfg.disp.is_tty ? get_terminal_width() : 0
-        };
         char *selected = select_run(trees, dir_count, &ctx);
-        int exit_code = 0;
         if (selected) {
             printf("%s\n", selected);
             free(selected);
         } else {
             exit_code = 1;  /* No selection made (quit/ESC) */
         }
-        /* Cleanup and exit */
+    } else if (cfg.req.summary_mode) {
         for (int i = 0; i < dir_count; i++) {
-            tree_node_free(trees[i]);
-            free(trees[i]);
-        }
-        free(trees);
-        git_cache_free(&git);
-        cache_unload();
-        return exit_code;
-    }
-    {
-        /* Print all trees (using consistent column widths) */
-        for (int i = 0; i < dir_count; i++) {
-            /* Check if filtering produced no visible children. For -g we still
-             * show the repo root even with no changes, so skip this. */
-            if (is_filtering_active(&cfg) && !cfg.req.git_only) {
-                int has_visible = 0;
-                for (size_t j = 0; j < trees[i]->child_count; j++) {
-                    if (node_is_hidden(&trees[i]->children[j], &cfg)) continue;
-                    if (node_is_visible(&trees[i]->children[j], &cfg)) {
-                        has_visible = 1;
-                        break;
-                    }
-                }
-                if (!has_visible) {
-                    printf("%sNo matches.%s\n",
-                           CLR(&cfg, COLOR_RED), RST(&cfg));
-                    continue;
-                }
+            if (view->tree_no_matches[i]) {
+                printf("%sNo matches.%s\n", CLR(&cfg, COLOR_RED), RST(&cfg));
+                continue;
             }
-            PrintContext ctx = {
-                .git = &git,
-                .icons = &icons,
-                .filetypes = &filetypes,
-                .shebangs = &shebangs,
-                .cfg = &cfg,
-                .columns = cfg.disp.long_format ? cols : NULL,
-                .continuation = continuation,
-                .diff_add_width = diff_add_width,
-                .diff_del_width = diff_del_width,
-                .term_width = cfg.disp.is_tty ? get_terminal_width() : 0
-            };
-            if (cfg.req.summary_mode) {
-                print_summary(trees[i], &ctx);
-            } else {
-                print_tree_node(trees[i], 0, &ctx);
-            }
+            summary_prepare(trees[i], &ctx);
+            print_summary(trees[i], &ctx);
         }
+    } else {
+        render_view(view, &ctx);
     }
 
     /* Cleanup */
+    view_free(view);
     for (int i = 0; i < dir_count; i++) {
         tree_node_free(trees[i]);
         free(trees[i]);
@@ -752,5 +699,5 @@ int main(int argc, char **argv) {
     git_cache_free(&git);
 
     cache_unload();
-    return 0;
+    return exit_code;
 }

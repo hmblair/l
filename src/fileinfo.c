@@ -1235,8 +1235,8 @@ const char *get_file_type_name(const char *path, const FileTypes *ft,
  * Type Statistics
  * ============================================================================ */
 
-/* Include ui.h for FileEntry and TreeNode definitions */
-#include "ui.h"
+/* Include tree.h for FileEntry and TreeNode definitions */
+#include "tree.h"
 
 void type_stats_init(TypeStats *stats) {
     memset(stats, 0, sizeof(*stats));

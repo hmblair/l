@@ -5,7 +5,8 @@
 #ifndef L_SELECT_H
 #define L_SELECT_H
 
-#include "ui.h"
+#include "view.h"
+#include "render.h"
 
 /*
  * Run interactive selection mode on a tree.

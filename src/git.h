@@ -127,6 +127,17 @@ void git_summary_apply_flags(GitSummary *s, unsigned flags, int sign);
 /* Check if a path is inside an ignored directory (walks up ancestors) */
 int git_path_in_ignored(GitCache *cache, const char *path, const char *git_root);
 
+/* True if path is inside (or equal to) any known repo root. Containment is
+ * downward-closed: once an ancestor is outside every root, all higher
+ * ancestors are too. */
+int git_cache_path_in_any_repo(GitCache *cache, const char *path);
+
+/* Iterate every status node under the cache lock. cb must not call locking
+ * cache functions (git_cache_path_in_any_repo is safe). */
+typedef void (*git_change_cb)(const char *path, unsigned flags,
+                              int lines_added, int lines_removed, void *ud);
+void git_cache_foreach_change(GitCache *cache, git_change_cb cb, void *ud);
+
 /* ============================================================================
  * Git Branch Functions
  * ============================================================================ */

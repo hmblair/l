@@ -85,6 +85,24 @@ static int git_cache_path_in_repo(GitCache *cache, const char *dir_path) {
     return 0;
 }
 
+int git_cache_path_in_any_repo(GitCache *cache, const char *path) {
+    return git_cache_path_in_repo(cache, path);
+}
+
+void git_cache_foreach_change(GitCache *cache, git_change_cb cb, void *ud) {
+#ifdef _OPENMP
+    omp_set_lock(&cache->lock);
+#endif
+    for (int i = 0; i < L_HASH_SIZE; i++) {
+        for (GitStatusNode *node = cache->buckets[i]; node; node = node->next) {
+            cb(node->path, node->flags, node->lines_added, node->lines_removed, ud);
+        }
+    }
+#ifdef _OPENMP
+    omp_unset_lock(&cache->lock);
+#endif
+}
+
 static void git_cache_free_aggregates(GitCache *cache) {
     for (int i = 0; i < L_HASH_SIZE; i++) {
         struct GitDirAggregate *agg = cache->agg_buckets[i];
