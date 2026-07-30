@@ -92,13 +92,37 @@ static void print_usage(void) {
     printf("  --daemon                Manage the size caching daemon\n");
 }
 
-/* Track which options have been set to detect conflicts/duplicates */
+/* ----------------------------------------------------------------------------
+ * Option table - single source of truth for every flag: its spellings,
+ * whether it takes an argument, which conflict group it belongs to, and the
+ * handler that applies it to the Config. The parse loop below handles all
+ * spellings (-x, -xVAL, -xyz combined, --long, --long VAL, --long=VAL, --).
+ * ---------------------------------------------------------------------------- */
+
+/* Options in the same group (other than GROUP_NONE) conflict with each other
+ * and with themselves when given twice. */
+typedef enum {
+    GROUP_NONE,
+    GROUP_DEPTH,    /* -t/--tree, -d/--depth */
+    GROUP_FORMAT,   /* -s/--short, -l/--long */
+    GROUP_SORT,     /* -S, -T, -N */
+    GROUP_FILTER    /* -f/--filter */
+} OptGroup;
+
+/* label is the spelling used on the command line ("-d" or "--depth"): it names
+ * the option in conflict and value-parse error messages. val is NULL for
+ * options without arguments. */
+typedef void (*OptApply)(Config *cfg, const char *val, const char *label);
+
 typedef struct {
-    const char *depth;   /* -t, -d, --tree, --depth, -m */
-    const char *format;  /* -s, -l, --short, --long */
-    const char *sort;    /* -S, -T, -N */
-    const char *filter;  /* -f, --filter */
-} OptionSet;
+    char short_c;             /* 0 if no short spelling */
+    const char *short_label;  /* "-d" */
+    const char *long_name;    /* NULL if no long spelling */
+    const char *long_label;   /* "--depth" */
+    int takes_arg;
+    OptGroup group;
+    OptApply apply;
+} OptSpec;
 
 static void check_conflict(const char **slot, const char *opt, const Config *cfg) {
     if (*slot) {
@@ -109,81 +133,97 @@ static void check_conflict(const char **slot, const char *opt, const Config *cfg
     *slot = opt;
 }
 
-/* Returns: 1 = applied, 0 = unknown, -1 = requires argument */
-static int apply_short_flag(char flag, Config *cfg, OptionSet *set) {
-    switch (flag) {
-        case 'a': cfg->show_hidden = 1; return 1;
-        case 's': check_conflict(&set->format, "-s", cfg);
-                  cfg->long_format = 0; cfg->long_format_explicit = 1; return 1;
-        case 'l': check_conflict(&set->format, "-l", cfg);
-                  cfg->long_format = 1; cfg->long_format_explicit = 1; return 1;
-        case 't': check_conflict(&set->depth, "-t", cfg);
-                  cfg->max_depth = L_MAX_DEPTH; return 1;
-        case 'p': cfg->show_ancestry = 1; cfg->ancestry_explicit = 1; return 1;
-        case 'e': cfg->expand_all = 1; return 1;
-        case 'c': cfg->color_all = 1; return 1;
-        case 'i': cfg->interactive = 1; return 1;
-        case 'm': cfg->git_only = 1; cfg->show_hidden = 1; return 1;
-        case 'g': cfg->hide_gitignored = 1; return 1;
-        case 'S': check_conflict(&set->sort, "-S", cfg);
-                  cfg->sort_by = SORT_SIZE; return 1;
-        case 'T': check_conflict(&set->sort, "-T", cfg);
-                  cfg->sort_by = SORT_TIME; return 1;
-        case 'N': check_conflict(&set->sort, "-N", cfg);
-                  cfg->sort_by = SORT_NAME; return 1;
-        case 'r': cfg->sort_reverse = 1; return 1;
-        case 'h': print_usage(); exit(0);
-        case 'd': case 'f': return -1;  /* requires argument */
-        default: return 0;
-    }
-}
+#define OPT_HANDLER(name) \
+    static void name(Config *cfg, const char *val, const char *label)
 
-/*
- * Match an option that takes a required argument.
- * Handles: -x VAL, -xVAL, --xxx VAL, --xxx=VAL
- * Returns the argument value, or NULL if no match.
- * Updates *i if a separate argument was consumed.
- */
-static const char *match_opt_with_arg(const char *arg, int *i, int argc, char **argv,
-                                      char short_opt, const char *long_opt) {
-    size_t long_len = long_opt ? strlen(long_opt) : 0;
+OPT_HANDLER(opt_hidden)      { (void)val; (void)label; cfg->show_hidden = 1; }
+OPT_HANDLER(opt_short_fmt)   { (void)val; (void)label; cfg->long_format = 0; cfg->long_format_explicit = 1; }
+OPT_HANDLER(opt_long_fmt)    { (void)val; (void)label; cfg->long_format = 1; cfg->long_format_explicit = 1; }
+OPT_HANDLER(opt_tree)        { (void)val; (void)label; cfg->max_depth = L_MAX_DEPTH; }
+OPT_HANDLER(opt_depth)       { (void)cfg; cfg->max_depth = parse_depth(val, label); }
+OPT_HANDLER(opt_path)        { (void)val; (void)label; cfg->show_ancestry = 1; cfg->ancestry_explicit = 1; }
+OPT_HANDLER(opt_expand)      { (void)val; (void)label; cfg->expand_all = 1; }
+OPT_HANDLER(opt_color_all)   { (void)val; (void)label; cfg->color_all = 1; }
+OPT_HANDLER(opt_interactive) { (void)val; (void)label; cfg->interactive = 1; }
+OPT_HANDLER(opt_git_only)    { (void)val; (void)label; cfg->git_only = 1; cfg->show_hidden = 1; }
+OPT_HANDLER(opt_hide_ignored){ (void)val; (void)label; cfg->hide_gitignored = 1; }
+OPT_HANDLER(opt_sort_size)   { (void)val; (void)label; cfg->sort_by = SORT_SIZE; }
+OPT_HANDLER(opt_sort_time)   { (void)val; (void)label; cfg->sort_by = SORT_TIME; }
+OPT_HANDLER(opt_sort_name)   { (void)val; (void)label; cfg->sort_by = SORT_NAME; }
+OPT_HANDLER(opt_reverse)     { (void)val; (void)label; cfg->sort_reverse = 1; }
+OPT_HANDLER(opt_help)        { (void)cfg; (void)val; (void)label; print_usage(); exit(0); }
+OPT_HANDLER(opt_filter)      { (void)label; cfg->grep_pattern = val; }
+OPT_HANDLER(opt_list)        { (void)val; (void)label; cfg->list_mode = 1; }
+OPT_HANDLER(opt_summary)     { (void)val; (void)label; cfg->summary_mode = 1;
+                               cfg->max_depth = L_MAX_DEPTH; cfg->long_format = 1; }
+OPT_HANDLER(opt_no_icons)    { (void)val; (void)label; cfg->no_icons = 1; }
+OPT_HANDLER(opt_tty)         { (void)val; (void)label; cfg->is_tty = 1; }
+OPT_HANDLER(opt_dir_only)    { (void)val; (void)label; cfg->dir_only = 1; }
+OPT_HANDLER(opt_min_size)    { (void)label; cfg->min_size = parse_size(val); }
 
-    /* -x VAL */
-    if (short_opt && arg[0] == '-' && arg[1] == short_opt && arg[2] == '\0') {
-        if (*i + 1 >= argc) {
-            char msg[64];
-            snprintf(msg, sizeof(msg), "-%c/--%s requires an argument", short_opt, long_opt);
-            die(msg);
-        }
-        return argv[++(*i)];
-    }
-    /* -xVAL */
-    if (short_opt && arg[0] == '-' && arg[1] == short_opt && arg[2] != '\0') {
-        return arg + 2;
-    }
-    /* --xxx VAL */
-    if (long_opt && strcmp(arg + 2, long_opt) == 0) {
-        if (*i + 1 >= argc) {
-            char msg[64];
-            snprintf(msg, sizeof(msg), "--%s requires an argument", long_opt);
-            die(msg);
-        }
-        return argv[++(*i)];
-    }
-    /* --xxx=VAL */
-    if (long_opt && strncmp(arg + 2, long_opt, long_len) == 0 && arg[2 + long_len] == '=') {
-        return arg + 2 + long_len + 1;
+#undef OPT_HANDLER
+
+static const OptSpec OPT_SPECS[] = {
+    { 'a', "-a", NULL,          NULL,            0, GROUP_NONE,   opt_hidden },
+    { 's', "-s", "short",       "--short",       0, GROUP_FORMAT, opt_short_fmt },
+    { 'l', "-l", "long",        "--long",        0, GROUP_FORMAT, opt_long_fmt },
+    { 't', "-t", "tree",        "--tree",        0, GROUP_DEPTH,  opt_tree },
+    { 'd', "-d", "depth",       "--depth",       1, GROUP_DEPTH,  opt_depth },
+    { 'p', "-p", "path",        "--path",        0, GROUP_NONE,   opt_path },
+    { 'e', "-e", "expand-all",  "--expand-all",  0, GROUP_NONE,   opt_expand },
+    { 'c', "-c", "color-all",   "--color-all",   0, GROUP_NONE,   opt_color_all },
+    { 'i', "-i", "interactive", "--interactive", 0, GROUP_NONE,   opt_interactive },
+    { 'm', "-m", NULL,          NULL,            0, GROUP_NONE,   opt_git_only },
+    { 'g', "-g", NULL,          NULL,            0, GROUP_NONE,   opt_hide_ignored },
+    { 'S', "-S", NULL,          NULL,            0, GROUP_SORT,   opt_sort_size },
+    { 'T', "-T", NULL,          NULL,            0, GROUP_SORT,   opt_sort_time },
+    { 'N', "-N", NULL,          NULL,            0, GROUP_SORT,   opt_sort_name },
+    { 'r', "-r", NULL,          NULL,            0, GROUP_NONE,   opt_reverse },
+    { 'h', "-h", "help",        "--help",        0, GROUP_NONE,   opt_help },
+    { 'f', "-f", "filter",      "--filter",      1, GROUP_FILTER, opt_filter },
+    { 0,   NULL, "list",        "--list",        0, GROUP_NONE,   opt_list },
+    { 0,   NULL, "summary",     "--summary",     0, GROUP_NONE,   opt_summary },
+    { 0,   NULL, "no-icons",    "--no-icons",    0, GROUP_NONE,   opt_no_icons },
+    { 0,   NULL, "tty",         "--tty",         0, GROUP_NONE,   opt_tty },
+    { 0,   NULL, "dir-only",    "--dir-only",    0, GROUP_NONE,   opt_dir_only },
+    { 0,   NULL, "min-size",    "--min-size",    1, GROUP_NONE,   opt_min_size },
+};
+#define NUM_OPT_SPECS (sizeof(OPT_SPECS) / sizeof(OPT_SPECS[0]))
+
+/* Track which option of each group has been seen, for conflict messages */
+typedef struct {
+    const char *slots[5];   /* indexed by OptGroup */
+} OptionSet;
+
+static const OptSpec *find_short_opt(char c) {
+    for (size_t i = 0; i < NUM_OPT_SPECS; i++) {
+        if (OPT_SPECS[i].short_c == c) return &OPT_SPECS[i];
     }
     return NULL;
 }
 
-#define MATCH_LONG(opt) (strcmp(arg, "--" opt) == 0)
+static const OptSpec *find_long_opt(const char *name, size_t len) {
+    for (size_t i = 0; i < NUM_OPT_SPECS; i++) {
+        const char *ln = OPT_SPECS[i].long_name;
+        if (ln && strlen(ln) == len && strncmp(ln, name, len) == 0)
+            return &OPT_SPECS[i];
+    }
+    return NULL;
+}
+
+/* Run one matched option: conflict check under the spelling used, then apply */
+static void apply_opt(const OptSpec *sp, const char *label, const char *val,
+                      Config *cfg, OptionSet *set) {
+    if (sp->group != GROUP_NONE) {
+        check_conflict(&set->slots[sp->group], label, cfg);
+    }
+    sp->apply(cfg, val, label);
+}
 
 static void parse_args(int argc, char **argv, Config *cfg,
                        char ***dirs, int *dir_count) {
     static char *default_dirs[] = {"."};
-    OptionSet set = {0};
-    const char *val;
+    OptionSet set = {{0}};
 
     *dirs = NULL;
     *dir_count = 0;
@@ -210,85 +250,82 @@ static void parse_args(int argc, char **argv, Config *cfg,
                 }
                 break;
             }
-            if (MATCH_LONG("help"))            { print_usage(); exit(0); }
-            else if (MATCH_LONG("short"))      { check_conflict(&set.format, "--short", cfg);
-                                                 cfg->long_format = 0; cfg->long_format_explicit = 1; }
-            else if (MATCH_LONG("long"))       { check_conflict(&set.format, "--long", cfg);
-                                                 cfg->long_format = 1; cfg->long_format_explicit = 1; }
-            else if (MATCH_LONG("tree"))       { check_conflict(&set.depth, "--tree", cfg);
-                                                 cfg->max_depth = L_MAX_DEPTH; }
-            else if (MATCH_LONG("path"))       { cfg->show_ancestry = 1; cfg->ancestry_explicit = 1; }
-            else if (MATCH_LONG("expand-all")) { cfg->expand_all = 1; }
-            else if (MATCH_LONG("list"))       { cfg->list_mode = 1; }
-            else if (MATCH_LONG("summary"))    { cfg->summary_mode = 1;
-                                                 cfg->max_depth = L_MAX_DEPTH;
-                                                 cfg->long_format = 1; }
-            else if (MATCH_LONG("no-icons"))   { cfg->no_icons = 1; }
-            else if (MATCH_LONG("color-all")) { cfg->color_all = 1; }
-            else if (MATCH_LONG("interactive")) { cfg->interactive = 1; }
-            else if (MATCH_LONG("tty"))         { cfg->is_tty = 1; }
-            else if (MATCH_LONG("dir-only"))    { cfg->dir_only = 1; }
-            /* Options with arguments */
-            else if ((val = match_opt_with_arg(arg, &i, argc, argv, 'd', "depth"))) {
-                check_conflict(&set.depth, "--depth", cfg);
-                cfg->max_depth = parse_depth(val, "--depth");
+
+            const char *eq = strchr(arg + 2, '=');
+            size_t name_len = eq ? (size_t)(eq - (arg + 2)) : strlen(arg + 2);
+            const OptSpec *sp = find_long_opt(arg + 2, name_len);
+
+            if (sp && sp->takes_arg) {
+                const char *val;
+                if (eq) {
+                    val = eq + 1;
+                } else {
+                    if (i + 1 >= argc) {
+                        char msg[64];
+                        snprintf(msg, sizeof(msg), "--%s requires an argument", sp->long_name);
+                        die(msg);
+                    }
+                    val = argv[++i];
+                }
+                apply_opt(sp, sp->long_label, val, cfg, &set);
+                continue;
             }
-            else if ((val = match_opt_with_arg(arg, &i, argc, argv, 'f', "filter"))) {
-                check_conflict(&set.filter, "--filter", cfg);
-                cfg->grep_pattern = val;
+            if (sp && !eq) {  /* --list=x etc. stays an unknown option */
+                apply_opt(sp, sp->long_label, NULL, cfg, &set);
+                continue;
             }
-            else if ((val = match_opt_with_arg(arg, &i, argc, argv, 0, "min-size"))) {
-                cfg->min_size = parse_size(val);
-            }
-            else if (strcmp(arg, "--daemon") == 0 || strcmp(arg, "--version") == 0) {
+            if (strcmp(arg, "--daemon") == 0 || strcmp(arg, "--version") == 0) {
                 fprintf(stderr, "%sError:%s %s must be the first argument\n",
                         CLR(cfg, COLOR_RED), RST(cfg), arg);
                 exit(1);
             }
-            else {
-                fprintf(stderr, "%sError:%s Unknown option: %s\n",
-                        CLR(cfg, COLOR_RED), RST(cfg), arg);
-                exit(1);
+            fprintf(stderr, "%sError:%s Unknown option: %s\n",
+                    CLR(cfg, COLOR_RED), RST(cfg), arg);
+            exit(1);
+        }
+
+        /* Standalone short option with argument: -d VAL or -dVAL */
+        const OptSpec *sp0 = find_short_opt(arg[1]);
+        if (sp0 && sp0->takes_arg) {
+            const char *val;
+            if (arg[2] != '\0') {
+                val = arg + 2;
+            } else {
+                if (i + 1 >= argc) {
+                    char msg[64];
+                    snprintf(msg, sizeof(msg), "-%c/--%s requires an argument",
+                             sp0->short_c, sp0->long_name);
+                    die(msg);
+                }
+                val = argv[++i];
             }
+            apply_opt(sp0, sp0->short_label, val, cfg, &set);
             continue;
         }
 
-        /* Short options: -x or -xVAL or -xyz (combined flags) */
-        if ((val = match_opt_with_arg(arg, &i, argc, argv, 'd', "depth"))) {
-            check_conflict(&set.depth, "-d", cfg);
-            cfg->max_depth = parse_depth(val, "-d");
-        } else if ((val = match_opt_with_arg(arg, &i, argc, argv, 'f', "filter"))) {
-            check_conflict(&set.filter, "-f", cfg);
-            cfg->grep_pattern = val;
-        } else {
-            /* Combined short flags like -alt, -ad2, -af "*.c" */
-            for (int j = 1; arg[j]; j++) {
-                int result = apply_short_flag(arg[j], cfg, &set);
-                if (result == -1) {
-                    /* Flag requires argument: consume rest of string or next argv */
-                    const char *flag_arg = arg[j + 1] ? arg + j + 1 : NULL;
-                    if (!flag_arg) {
-                        if (i + 1 >= argc) {
-                            fprintf(stderr, "%sError:%s -%c requires an argument\n",
-                                    CLR(cfg, COLOR_RED), RST(cfg), arg[j]);
-                            exit(1);
-                        }
-                        flag_arg = argv[++i];
-                    }
-                    if (arg[j] == 'd') {
-                        check_conflict(&set.depth, "-d", cfg);
-                        cfg->max_depth = parse_depth(flag_arg, "-d");
-                    } else if (arg[j] == 'f') {
-                        check_conflict(&set.filter, "-f", cfg);
-                        cfg->grep_pattern = flag_arg;
-                    }
-                    break;  /* rest of string consumed */
-                } else if (result == 0) {
-                    fprintf(stderr, "%sError:%s Unknown option: -%c\n",
-                            CLR(cfg, COLOR_RED), RST(cfg), arg[j]);
-                    exit(1);
-                }
+        /* Combined short flags like -alt, -ad2, -af "*.c" */
+        for (int j = 1; arg[j]; j++) {
+            const OptSpec *sp = find_short_opt(arg[j]);
+            if (!sp) {
+                fprintf(stderr, "%sError:%s Unknown option: -%c\n",
+                        CLR(cfg, COLOR_RED), RST(cfg), arg[j]);
+                exit(1);
             }
+            if (sp->takes_arg) {
+                /* Consume the rest of the string, or the next argv */
+                const char *flag_arg = arg[j + 1] ? arg + j + 1 : NULL;
+                if (!flag_arg) {
+                    if (i + 1 >= argc) {
+                        fprintf(stderr, "%sError:%s -%c requires an argument\n",
+                                CLR(cfg, COLOR_RED), RST(cfg), arg[j]);
+                        exit(1);
+                    }
+                    flag_arg = argv[++i];
+                }
+                apply_opt(sp, sp->short_label, flag_arg, cfg, &set);
+                break;  /* rest of string consumed */
+            }
+            apply_opt(sp, sp->short_label, NULL, cfg, &set);
         }
     }
 
@@ -297,8 +334,6 @@ static void parse_args(int argc, char **argv, Config *cfg,
         *dir_count = 1;
     }
 }
-
-#undef MATCH_LONG
 
 /* ============================================================================
  * Main
