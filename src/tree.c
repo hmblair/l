@@ -35,6 +35,40 @@ void file_entry_free(FileEntry *entry) {
     free(entry->remote);
 }
 
+void file_entry_init(FileEntry *fe, const char *path, int is_virtual_fs) {
+    memset(fe, 0, sizeof(*fe));
+    fe->path = xstrdup(path);
+    fe->name = strrchr(fe->path, '/');
+    fe->name = fe->name ? fe->name + 1 : fe->path;
+    fe->line_count = -1;
+    fe->word_count = -1;
+    fe->file_count = -1;
+
+    struct stat st;
+    memset(&st, 0, sizeof(st));
+    fe->type = detect_file_type(fe->path, &st, &fe->symlink_target);
+    fe->mode = st.st_mode;
+    fe->dev = st.st_dev;
+    fe->mtime = GET_MTIME(st);
+    fe->size = is_virtual_fs ? -1 : st.st_size;
+}
+
+void file_entry_compute(FileEntry *fe, const ComputeOpts *c, int is_virtual_fs) {
+    if (is_virtual_fs) return;
+
+    int is_dir = (fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR);
+    int is_file = (fe->type == FTYPE_FILE || fe->type == FTYPE_EXEC ||
+                   fe->type == FTYPE_SYMLINK || fe->type == FTYPE_SYMLINK_EXEC);
+
+    if (is_dir && (c->sizes || c->file_counts)) {
+        DirStats stats = get_dir_stats_cached(fe->path);
+        if (c->sizes) fe->size = stats.size;
+        if (c->file_counts) fe->file_count = stats.file_count;
+    } else if (is_file && (c->line_counts || c->media_info)) {
+        fileinfo_compute_content(fe, c->line_counts, c->media_info);
+    }
+}
+
 void file_list_free(FileList *list) {
     for (size_t i = 0; i < list->count; i++) {
         file_entry_free(&list->entries[i]);
@@ -114,21 +148,7 @@ int read_directory(const char *dir_path, FileList *list,
         path_join(full_path, sizeof(full_path), dir_path, entry->d_name);
 
         FileEntry fe;
-        memset(&fe, 0, sizeof(fe));
-        fe.path = xstrdup(full_path);
-        fe.name = strrchr(fe.path, '/');
-        fe.name = fe.name ? fe.name + 1 : fe.path;
-        fe.line_count = -1;
-        fe.word_count = -1;
-        fe.file_count = -1;
-
-        struct stat st;
-        fe.type = detect_file_type(full_path, &st, &fe.symlink_target);
-        fe.mode = st.st_mode;
-        fe.dev = st.st_dev;
-        fe.mtime = GET_MTIME(st);
-        fe.size = is_virtual_fs ? -1 : st.st_size;
-
+        file_entry_init(&fe, full_path, is_virtual_fs);
         file_list_add(list, &fe);
     }
     closedir(dir);
@@ -139,18 +159,7 @@ int read_directory(const char *dir_path, FileList *list,
     if (list->count > 0 && need_parallel) {
         #pragma omp parallel for schedule(dynamic)
         for (size_t i = 0; i < list->count; i++) {
-            FileEntry *fe = &list->entries[i];
-            int is_dir = (fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR);
-            int is_file = (fe->type == FTYPE_FILE || fe->type == FTYPE_EXEC ||
-                          fe->type == FTYPE_SYMLINK || fe->type == FTYPE_SYMLINK_EXEC);
-
-            if (is_dir && (c->sizes || c->file_counts)) {
-                DirStats stats = get_dir_stats_cached(fe->path);
-                if (c->sizes) fe->size = stats.size;
-                if (c->file_counts) fe->file_count = stats.file_count;
-            } else if (is_file && (c->line_counts || c->media_info)) {
-                fileinfo_compute_content(fe, c->line_counts, c->media_info);
-            }
+            file_entry_compute(&list->entries[i], c, is_virtual_fs);
         }
     }
 
@@ -394,47 +403,19 @@ TreeNode *build_tree(const char *path, const TreeBuildOpts *opts,
         git_populate_repo(git, git_root, opts->compute.git_diff);
     }
 
-    struct stat st;
-    char *symlink_target = NULL;
-    FileType type = detect_file_type(abs_path, &st, &symlink_target);
-
     TreeNode *root = xmalloc(sizeof(TreeNode));
     memset(root, 0, sizeof(TreeNode));
 
-    root->entry.path = xstrdup(abs_path);
-    root->entry.name = strrchr(root->entry.path, '/');
-    root->entry.name = root->entry.name ? root->entry.name + 1 : root->entry.path;
+    int is_virtual_fs = path_is_virtual_fs(abs_path);
+    file_entry_init(&root->entry, abs_path, is_virtual_fs);
     /* Resolve the root once; children derive their canonical paths by appending
      * their names, so realpath() runs once per tree instead of once per entry. */
     char root_real[PATH_MAX];
     path_get_realpath(abs_path, root_real, opts->cwd);
     root->entry.abs_path = xstrdup(root_real);
-    root->entry.type = type;
-    root->entry.symlink_target = symlink_target;
-    root->entry.mode = st.st_mode;
-    root->entry.dev = st.st_dev;
-    root->entry.mtime = GET_MTIME(st);
-    root->entry.line_count = -1;
-    root->entry.word_count = -1;
-    root->entry.file_count = -1;
 
-    int is_virtual_fs = path_is_virtual_fs(abs_path);
-    int is_file = (type == FTYPE_FILE || type == FTYPE_EXEC ||
-                   type == FTYPE_SYMLINK || type == FTYPE_SYMLINK_EXEC);
-    int is_dir = (type == FTYPE_DIR || type == FTYPE_SYMLINK_DIR);
-
-    root->entry.size = is_virtual_fs ? -1 : st.st_size;
-
-    if (!is_virtual_fs && is_file && (opts->compute.line_counts || opts->compute.media_info)) {
-        fileinfo_compute_content(&root->entry, opts->compute.line_counts, opts->compute.media_info);
-    }
-
-    if (!is_virtual_fs && is_dir &&
-        (opts->compute.sizes || opts->compute.file_counts)) {
-        DirStats stats = get_dir_stats_cached(abs_path);
-        if (opts->compute.sizes) root->entry.size = stats.size;
-        if (opts->compute.file_counts) root->entry.file_count = stats.file_count;
-    }
+    int is_dir = node_is_directory(root);
+    file_entry_compute(&root->entry, &opts->compute, is_virtual_fs);
 
     if (opts->compute.git_status) {
         apply_git_status(&root->entry, git, opts->compute.git_diff);
@@ -505,48 +486,37 @@ void tree_rescan_node(TreeNode *node, const TreeBuildOpts *opts,
 
 /* Build a single ancestor node (directory only, no children yet) */
 static TreeNode *build_ancestor_node(const char *path, const TreeBuildOpts *opts) {
-    struct stat st;
-    char *symlink_target = NULL;
-    FileType type = detect_file_type(path, &st, &symlink_target);
-
     TreeNode *node = xmalloc(sizeof(TreeNode));
     memset(node, 0, sizeof(TreeNode));
 
-    node->entry.path = xstrdup(path);
-    node->entry.name = strrchr(node->entry.path, '/');
-    node->entry.name = node->entry.name ? node->entry.name + 1 : node->entry.path;
+    int is_virtual_fs = path_is_virtual_fs(path);
+    file_entry_init(&node->entry, path, is_virtual_fs);
 
     /* Special case for root */
     if (node->entry.path[0] == '/' && node->entry.path[1] == '\0') {
         node->entry.name = "/";
     }
 
-    node->entry.type = type;
-    node->entry.symlink_target = symlink_target;
-    node->entry.mode = st.st_mode;
-    node->entry.dev = st.st_dev;
-    node->entry.mtime = GET_MTIME(st);
-    node->entry.line_count = -1;
-    node->entry.word_count = -1;
-    node->entry.file_count = -1;
+    file_entry_compute(&node->entry, &opts->compute, is_virtual_fs);
 
-    int is_virtual_fs = path_is_virtual_fs(path);
-    node->entry.size = is_virtual_fs ? -1 : st.st_size;
-
-    if (!is_virtual_fs && (type == FTYPE_DIR || type == FTYPE_SYMLINK_DIR) &&
-        (opts->compute.sizes || opts->compute.file_counts)) {
-        DirStats stats = get_dir_stats_cached(path);
-        if (opts->compute.sizes) node->entry.size = stats.size;
-        if (opts->compute.file_counts) node->entry.file_count = stats.file_count;
-    }
-
-    if ((type == FTYPE_DIR || type == FTYPE_SYMLINK_DIR) && path_is_git_root(path)) {
+    if (node_is_directory(node) && path_is_git_root(path)) {
         node->entry.is_git_root = 1;
         node->entry.remote = git_get_remote_url(path);
         node->entry.tag = git_get_latest_tag(path);
     }
 
     return node;
+}
+
+/* Move a heap-allocated node's contents into parent's (single) child slot and
+ * free the shell. Returns the adopted slot. */
+static TreeNode *tree_node_adopt_single(TreeNode *parent, TreeNode *child) {
+    parent->children = xmalloc(sizeof(TreeNode));
+    parent->children[0] = *child;   /* shallow move: slot now owns contents */
+    parent->child_count = 1;
+    parent->was_expanded = 1;
+    free(child);                    /* shell only; contents live on in the slot */
+    return &parent->children[0];
 }
 
 TreeNode *build_ancestry_tree(const char *path, const TreeBuildOpts *opts,
@@ -655,14 +625,8 @@ TreeNode *build_ancestry_tree(const char *path, const TreeBuildOpts *opts,
             child = build_ancestor_node(components[i], opts);
         }
 
-        current->children = xmalloc(sizeof(TreeNode));
-        current->child_count = 1;
-        current->children[0] = *child;
-        current->children[0].is_ancestor = 1;
-        current->was_expanded = 1;
-
-        free(child);
-        current = &current->children[0];
+        current = tree_node_adopt_single(current, child);
+        current->is_ancestor = 1;
         free(components[i]);
     }
 

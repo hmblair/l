@@ -109,6 +109,18 @@ void file_list_add(FileList *list, FileEntry *entry);
 void file_entry_free(FileEntry *entry);
 void file_list_free(FileList *list);
 
+/* Single constructor for every FileEntry (directory children, tree roots,
+ * ancestry nodes): zeroes the entry, duplicates the path, splits out the name,
+ * sets the -1 "not computed" defaults, and fills type/stat fields via
+ * detect_file_type. is_virtual_fs is the caller's per-directory
+ * path_is_virtual_fs result (sizes on virtual filesystems are bogus -> -1). */
+void file_entry_init(FileEntry *fe, const char *path, int is_virtual_fs);
+
+/* Compute the metadata ComputeOpts ask for: directory size/file counts (via
+ * the size cache), or file content info (lines/media). No-op on virtual
+ * filesystems. Safe to call from parallel workers. */
+void file_entry_compute(FileEntry *fe, const ComputeOpts *c, int is_virtual_fs);
+
 /* ============================================================================
  * Tree Node - Recursive tree structure
  * ============================================================================ */
