@@ -83,6 +83,11 @@
 #define L_CONFIG_FILE           "config.toml"
 #define L_TOML_LINE_MAX         256
 
+/* Opaque directories: kept as entries in the listing but never descended into
+ * — not expanded (even with -e) and not recursed into for file counts. */
+#define L_MAX_OPAQUE_DIRS       64
+#define L_MAX_OPAQUE_NAME       64
+
 /* Time constants for relative time formatting */
 #define L_SECONDS_PER_MINUTE    60
 #define L_SECONDS_PER_HOUR      3600
@@ -161,8 +166,19 @@ unsigned int hash_string(const char *str);
 /* Join directory and filename, handling trailing slashes */
 void path_join(char *dest, size_t dest_len, const char *dir, const char *name);
 
-/* Check if path is or ends with .git */
-int path_is_git_dir(const char *path);
+/* Opaque directories are shown as entries but never descended into: not
+ * expanded (even with -e) and not recursed into for file counts. The names come
+ * entirely from [opaque_directories] in config.toml (.git, __pycache__,
+ * node_modules, ...). The registry lazy-loads from the installed config on first
+ * query, so the cache daemon and l agree without extra wiring; l also loads it
+ * explicitly from its resolved config dir at startup. */
+void opaque_dirs_load(const char *config_dir);
+
+/* True if a bare directory name (not a path) is opaque. */
+int path_name_is_opaque(const char *name);
+
+/* True if the last component of a path names an opaque directory. */
+int path_is_opaque_dir(const char *path);
 
 /* Check if directory is a git repository root (contains .git) */
 int path_is_git_root(const char *path);

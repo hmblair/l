@@ -534,6 +534,9 @@ int main(int argc, char **argv) {
     /* Load display settings (overrides the built-in separator default) */
     settings_load(cfg.script_dir, cfg.column_separator, sizeof(cfg.column_separator));
 
+    /* Load the opaque-directory list (dirs shown but never descended into) */
+    opaque_dirs_load(cfg.script_dir);
+
     /* Load icons */
     Icons icons;
     icons_init_defaults(&icons);

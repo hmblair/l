@@ -214,7 +214,7 @@ static int has_ignore_all_gitignore(const char *dir_path) {
 
 static int should_skip_dir(const char *name, int is_ignored, int skip_gitignored) {
     if (is_ignored && skip_gitignored) return 1;
-    if (strcmp(name, ".git") == 0) return 1;
+    if (path_name_is_opaque(name)) return 1;
     return 0;
 }
 
@@ -325,7 +325,7 @@ static int *materialize_children(TreeNode *parent, const TreeBuildOpts *opts,
         const char *git_status = child->entry.git_status[0] ? child->entry.git_status : NULL;
         child->entry.is_ignored = parent_is_ignored ||
                                    (git_status && strcmp(git_status, "!!") == 0) ||
-                                   strcmp(child->entry.name, ".git") == 0 ||
+                                   path_name_is_opaque(child->entry.name) ||
                                    is_submodule[i];
 
         /* Check if directory has .gitignore with "*" (ignores all contents) */
@@ -441,7 +441,7 @@ TreeNode *build_tree(const char *path, const TreeBuildOpts *opts,
     }
 
     root->entry.is_ignored = (root->entry.git_status[0] && strcmp(root->entry.git_status, "!!") == 0) ||
-                              strcmp(root->entry.name, ".git") == 0 ||
+                              path_name_is_opaque(root->entry.name) ||
                               (in_git_repo && git_path_in_ignored(git, abs_path, git_root));
 
     /* Check if directory has .gitignore with "*" (ignores all contents) */

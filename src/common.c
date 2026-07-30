@@ -4,6 +4,7 @@
 
 #include "common.h"
 #include <errno.h>
+#include <ctype.h>
 
 #ifdef __linux__
 #include <sys/vfs.h>
@@ -77,6 +78,106 @@ int config_get_threshold(void) {
 }
 
 /* ============================================================================
+ * Opaque Directories
+ * ============================================================================ */
+
+/* Populated once at startup (or lazily on first query) and read-only during the
+ * possibly-multithreaded tree/scan walk, so no lock is needed. */
+static char g_opaque_dirs[L_MAX_OPAQUE_DIRS][L_MAX_OPAQUE_NAME];
+static int g_opaque_count = 0;
+static int g_opaque_loaded = 0;
+
+static void opaque_dir_add(const char *name) {
+    if (!name || !*name || g_opaque_count >= L_MAX_OPAQUE_DIRS) return;
+    for (int i = 0; i < g_opaque_count; i++) {
+        if (strcmp(g_opaque_dirs[i], name) == 0) return;  /* de-dup */
+    }
+    strncpy(g_opaque_dirs[g_opaque_count], name, L_MAX_OPAQUE_NAME - 1);
+    g_opaque_dirs[g_opaque_count][L_MAX_OPAQUE_NAME - 1] = '\0';
+    g_opaque_count++;
+}
+
+/* Parse the comma-separated names in the [opaque_directories] section's
+ * `names` key, e.g. `names = "__pycache__, node_modules, .venv"`. */
+static void opaque_dirs_parse_file(const char *config_dir) {
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/%s", config_dir, L_CONFIG_FILE);
+
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+
+    char line[L_TOML_LINE_MAX];
+    int in_section = 0;
+    while (fgets(line, sizeof(line), f)) {
+        char *p = line;
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (*p == '#' || *p == '\0') continue;
+        if (*p == '[') {
+            in_section = (strncmp(p, "[opaque_directories]", 20) == 0);
+            continue;
+        }
+        if (!in_section) continue;
+
+        char *eq = strchr(p, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        /* Trim the key and require it to be `names`. */
+        char *kend = eq - 1;
+        while (kend >= p && isspace((unsigned char)*kend)) *kend-- = '\0';
+        if (strcmp(p, "names") != 0) continue;
+
+        /* Take the quoted value, then split on commas. */
+        char *v = eq + 1;
+        while (*v && isspace((unsigned char)*v)) v++;
+        if (*v == '"') v++;
+        char *vend = v + strlen(v);
+        while (vend > v && (isspace((unsigned char)vend[-1]) || vend[-1] == '"'))
+            *--vend = '\0';
+
+        char *name;
+        while ((name = strsep(&v, ",")) != NULL) {
+            while (*name && isspace((unsigned char)*name)) name++;
+            char *nend = name + strlen(name);
+            while (nend > name && isspace((unsigned char)nend[-1])) *--nend = '\0';
+            if (*name) opaque_dir_add(name);
+        }
+    }
+    fclose(f);
+}
+
+void opaque_dirs_load(const char *config_dir) {
+    g_opaque_loaded = 1;
+    if (config_dir && *config_dir) opaque_dirs_parse_file(config_dir);
+}
+
+/* Fall back to the installed config if nothing loaded it explicitly. This lets
+ * the cache daemon (which has no resolved config dir) share l's opaque list, so
+ * cached file counts match what a direct scan would produce. */
+static void opaque_dirs_ensure_loaded(void) {
+    if (g_opaque_loaded) return;
+    g_opaque_loaded = 1;
+    const char *home = getenv("HOME");
+    if (!home) return;
+    char dir[PATH_MAX];
+    snprintf(dir, sizeof(dir), "%s/.config/l", home);
+    opaque_dirs_parse_file(dir);
+}
+
+int path_name_is_opaque(const char *name) {
+    opaque_dirs_ensure_loaded();
+    for (int i = 0; i < g_opaque_count; i++) {
+        if (strcmp(name, g_opaque_dirs[i]) == 0) return 1;
+    }
+    return 0;
+}
+
+int path_is_opaque_dir(const char *path) {
+    const char *name = strrchr(path, '/');
+    name = name ? name + 1 : path;
+    return path_name_is_opaque(name);
+}
+
+/* ============================================================================
  * Memory Allocation
  * ============================================================================ */
 
@@ -132,12 +233,6 @@ void path_join(char *dest, size_t dest_len, const char *dir, const char *name) {
     size_t dir_len = strlen(dir);
     int need_slash = (dir_len > 0 && dir[dir_len - 1] != '/');
     snprintf(dest, dest_len, need_slash ? "%s/%s" : "%s%s", dir, name);
-}
-
-int path_is_git_dir(const char *path) {
-    const char *name = strrchr(path, '/');
-    name = name ? name + 1 : path;
-    return strcmp(name, ".git") == 0;
 }
 
 int path_is_git_root(const char *path) {

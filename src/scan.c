@@ -218,7 +218,7 @@ static ScanResult scan_impl(const char *path, int depth,
     if (dirfd == -2) return (ScanResult){-1, -1};
 
     ScanResult result = {dir_st.st_blocks * 512, 0};
-    int skip_file_count = path_is_git_dir(path);
+    int skip_file_count = path_is_opaque_dir(path);
 
     struct attrlist attrList = {0};
     attrList.bitmapcount = ATTR_BIT_MAP_COUNT;
@@ -319,7 +319,7 @@ static ScanResult scan_impl(const char *path, int depth,
     if (dirfd == -2) return (ScanResult){-1, -1};
 
     ScanResult result = {dir_st.st_blocks * 512, 0};
-    int skip_file_count = path_is_git_dir(path);
+    int skip_file_count = path_is_opaque_dir(path);
 
     DIR *dir = fdopendir(dirfd);
     if (!dir) {
