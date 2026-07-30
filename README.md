@@ -110,6 +110,7 @@ Use `-i` to enter interactive selection mode:
 | `o` | Open file or toggle directory |
 | `f` | Toggle files-only navigation |
 | `/` | Filter entries by name (type to narrow, `Esc` to cancel) |
+| `r` | Reload the tree from scratch (like reopening the picker; cursor is kept) |
 | `Enter` | Print selected path and exit |
 | `y` | Copy path to clipboard |
 | `q` or `Esc` | Quit |
@@ -117,6 +118,8 @@ Use `-i` to enter interactive selection mode:
 Press `/` to filter the listing by name: type to narrow the entries live (substring match, or a glob if the query contains `*`, `?`, or `[`), use `↑/↓` to move through the matches, `Enter` to select the highlighted one, and `Esc` to clear the filter and return to the full listing. Matching is smart-case, like vim: case-insensitive unless the query contains an uppercase letter.
 
 Text files open in `$EDITOR` (default: `vim`). Binary files (images, PDFs, videos, etc.) open with the system handler (`open` on macOS, `xdg-open` on Linux). Directories can be dynamically expanded beyond the initial depth limit.
+
+The listing is a snapshot from when the picker opened: expanding a directory reads it on first open, and nothing updates automatically while the picker is idle. Press `r` to re-read everything (equivalent to quitting and re-running `l -i`).
 
 ### Tab Completion Widget (zsh)
 
