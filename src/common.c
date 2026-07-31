@@ -176,7 +176,8 @@ static void opaque_toml_cb(const char *section, const char *key, char *value,
  * e.g. `names = "__pycache__, node_modules, .venv"`. */
 static void opaque_dirs_parse_file(const char *config_dir) {
     char path[PATH_MAX];
-    snprintf(path, sizeof(path), "%s/%s", config_dir, L_CONFIG_FILE);
+    int n = snprintf(path, sizeof(path), "%s/%s", config_dir, L_CONFIG_FILE);
+    if (n < 0 || (size_t)n >= sizeof(path)) return;  /* config dir path too long */
     toml_read(path, opaque_toml_cb, NULL);
 }
 
@@ -239,7 +240,9 @@ static int g_firmlink_count = 0;
 static int g_firmlinks_loaded = 0;
 static pthread_mutex_t g_firmlink_lock = PTHREAD_MUTEX_INITIALIZER;
 
-/* Deepest directory that is an ancestor of both paths */
+#if defined(__APPLE__) && defined(__MACH__)
+/* Deepest directory that is an ancestor of both paths. Only firmlinks use
+ * it, so it (like the load body) is macOS-only. */
 static void path_common_dir(const char *a, const char *b, char *out, size_t n) {
     size_t i = 0, last_slash = 0;
     while (a[i] && a[i] == b[i]) {
@@ -254,6 +257,7 @@ static void path_common_dir(const char *a, const char *b, char *out, size_t n) {
         out[last_slash] = '\0';
     }
 }
+#endif
 
 void firmlinks_load(void) {
     if (g_firmlinks_loaded) return;
