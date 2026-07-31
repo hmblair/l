@@ -59,6 +59,13 @@ const char *git_indicator_from_flags(unsigned flags, const Icons *icons,
 
 int get_terminal_width(void);
 
+/* Display width excluding ANSI escape sequences */
+int visible_strlen(const char *s);
+
+/* Truncate to max_visible_len visible characters (appending "..."),
+ * preserving escape sequences. Returns a new string the caller frees. */
+char *truncate_visible(const char *s, int max_visible_len);
+
 /* Helper macros */
 #define CLR(cfg, c) ((cfg)->disp.is_tty ? (c) : "")
 #define RST(cfg)    ((cfg)->disp.is_tty ? COLOR_RESET : "")

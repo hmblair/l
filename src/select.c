@@ -368,18 +368,32 @@ static void render_picker(SelectState *state, PrintContext *ctx, int files_only)
         render_line(state, i, i == state->cursor, ctx);
     }
 
-    /* Status line */
+    /* Status line, clamped to the terminal width: line wrap is disabled, so
+     * overflow would repeatedly overwrite the last column instead of
+     * truncating cleanly. */
+    char status[512];
     if (state->filter_mode) {
-        printf("\r\033[K%s/%s%s   %s%d match%s   [Enter] select  [Esc] cancel%s",
-               COLOR_CYAN, COLOR_RESET, state->filter,
-               COLOR_GREY, count, count == 1 ? "" : "es",
-               COLOR_RESET);
+        snprintf(status, sizeof(status),
+                 "%s/%s%s   %s%d match%s   [Enter] select  [Esc] cancel%s",
+                 COLOR_CYAN, COLOR_RESET, state->filter,
+                 COLOR_GREY, count, count == 1 ? "" : "es",
+                 COLOR_RESET);
     } else if (files_only) {
-        printf("\r\033[K%s[j/k] files  [f] all  [/] filter  [h/l] fold  [o] open  [y] yank  [r] reload  [Enter] select  [q] quit%s",
-               COLOR_GREY, COLOR_RESET);
+        snprintf(status, sizeof(status),
+                 "%s[j/k] files  [f] all  [/] filter  [h/l] fold  [o] open  [y] yank  [r] reload  [Enter] select  [q] quit%s",
+                 COLOR_GREY, COLOR_RESET);
     } else {
-        printf("\r\033[K%s[j/k] move  [f] files  [/] filter  [h/l] fold  [o] open  [y] yank  [r] reload  [Enter] select  [q] quit%s",
-               COLOR_GREY, COLOR_RESET);
+        snprintf(status, sizeof(status),
+                 "%s[j/k] move  [f] files  [/] filter  [h/l] fold  [o] open  [y] yank  [r] reload  [Enter] select  [q] quit%s",
+                 COLOR_GREY, COLOR_RESET);
+    }
+    printf("\r\033[K");
+    if (ctx->term_width > 0 && visible_strlen(status) > ctx->term_width) {
+        char *truncated = truncate_visible(status, ctx->term_width);
+        printf("%s", truncated);
+        free(truncated);
+    } else {
+        printf("%s", status);
     }
 
     /* Clear any extra lines from previous render (when tree shrinks) */

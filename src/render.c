@@ -73,9 +73,7 @@ const char *git_indicator_from_flags(unsigned flags, const Icons *icons,
  * Tree Printing
  * ============================================================================ */
 
-/* Forward declarations for string utilities defined later */
-static int visible_strlen(const char *s);
-static char *truncate_visible(const char *s, int max_visible_len);
+/* Declared in render.h; defined later in this file */
 
 /* Buffer size for print_entry line assembly */
 #define ENTRY_BUF_SIZE 8192
@@ -370,7 +368,7 @@ int get_terminal_width(void) {
 }
 
 /* Calculate visible length (excluding ANSI escape sequences) */
-static int visible_strlen(const char *s) {
+int visible_strlen(const char *s) {
     int len = 0;
     for (; *s; s++) {
         if (s[0] == '\033' && s[1] == ']') {
@@ -391,7 +389,7 @@ static int visible_strlen(const char *s) {
 
 /* Truncate string to max_visible_len visible characters, adding "..." if truncated.
  * Preserves ANSI escape sequences. Returns new string that must be freed. */
-static char *truncate_visible(const char *s, int max_visible_len) {
+char *truncate_visible(const char *s, int max_visible_len) {
     if (max_visible_len < 4) max_visible_len = 4;
 
     int visible_len = visible_strlen(s);
