@@ -472,6 +472,38 @@ static int should_open_externally(const char *path) {
     return 0;
 }
 
+/* Open a file for the 'o' action: the system handler for binary files, or
+ * $EDITOR for text. A shell is used ONLY for the editor, and only to word-
+ * split $EDITOR (which may carry arguments, e.g. "code -w"); the path is
+ * bound as $0 there, so it is data and can never be parsed as shell syntax.
+ * The system handlers take the path as a single argument, so they are exec'd
+ * directly with no shell in the picture at all. */
+static void open_selected(const char *path) {
+    pid_t pid = fork();
+    if (pid < 0) return;
+    if (pid == 0) {
+        if (should_open_externally(path)) {
+#ifdef PLATFORM_MACOS
+            execlp("open", "open", path, (char *)NULL);
+#else
+            /* Silence xdg-open's diagnostics (was "2>/dev/null") */
+            int devnull = open("/dev/null", O_WRONLY);
+            if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
+            execlp("xdg-open", "xdg-open", path, (char *)NULL);
+#endif
+        } else {
+            const char *editor = getenv("EDITOR");
+            if (!editor) editor = "vim";
+            char cmd[256];
+            snprintf(cmd, sizeof(cmd), "%s \"$0\"", editor);
+            execl("/bin/sh", "sh", "-c", cmd, path, (char *)NULL);
+        }
+        _exit(127);
+    }
+    int status;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+}
+
 static void copy_to_clipboard(const char *text) {
 #ifdef __APPLE__
     FILE *pbcopy = popen("pbcopy", "w");
@@ -680,36 +712,10 @@ char *select_run(TreeNode ***trees_ref, int tree_count, char *const *dirs,
                     snap_cursor(&state, files_only);
                     render_picker(&state, &render_ctx, files_only);
                 } else {
-                    /* Open file: use system handler for binary, EDITOR for
-                     * text. The path is bound as $0 so its characters are
-                     * data, never shell syntax (interpolating it into the
-                     * command line was an injection vector: a quote in a
-                     * filename escaped the quoting). */
-                    char cmd[PATH_MAX + 64];
-
                     printf("\r\033[K\n");
                     term_disable_raw();
 
-                    if (should_open_externally(current->entry.path)) {
-#ifdef PLATFORM_MACOS
-                        snprintf(cmd, sizeof(cmd), "open \"$0\"");
-#else
-                        snprintf(cmd, sizeof(cmd), "xdg-open \"$0\" 2>/dev/null");
-#endif
-                    } else {
-                        const char *editor = getenv("EDITOR");
-                        if (!editor) editor = "vim";
-                        snprintf(cmd, sizeof(cmd), "%s \"$0\"", editor);
-                    }
-                    pid_t pid = fork();
-                    if (pid == 0) {
-                        execl("/bin/sh", "sh", "-c", cmd,
-                              current->entry.path, (char *)NULL);
-                        _exit(127);
-                    } else if (pid > 0) {
-                        int status;
-                        while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
-                    }
+                    open_selected(current->entry.path);
 
                     /* Restore original stdout */
                     if (saved_stdout_fd >= 0) {
