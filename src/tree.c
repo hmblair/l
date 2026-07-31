@@ -391,65 +391,75 @@ static void compute_dir_stats_frontier(FileEntry *fe, const ComputeOpts *c) {
     if (c->file_counts) fe->file_count = stats.file_count;
 }
 
-/* Sum a materialized directory's stats from its (final) children, mirroring
- * the scanner's accounting exactly: allocated blocks, symlinks count as
- * files (macOS also adds the link's own blocks; Linux does not — matching
- * scan_impl's platform split), opaque children contribute size but excluded
- * counts (-1), and devices/sockets/fifos are not counted. */
-static void dir_stats_from_children(TreeNode *dir, const ComputeOpts *c) {
-    off_t size = dir->entry.alloc_size;
-    long count = 0;
-
-    for (size_t i = 0; i < dir->child_count; i++) {
-        const FileEntry *fe = &dir->children[i].entry;
-        switch (fe->type) {
-            case FTYPE_SYMLINK:
-            case FTYPE_SYMLINK_DIR:
-            case FTYPE_SYMLINK_EXEC:
-            case FTYPE_SYMLINK_DEVICE:
-            case FTYPE_SYMLINK_SOCKET:
-            case FTYPE_SYMLINK_FIFO:
-            case FTYPE_SYMLINK_BROKEN:
+/* One entry's contribution to its parent directory's totals, mirroring the
+ * scanner's accounting exactly: allocated blocks, symlinks count as files
+ * (macOS also adds the link's own blocks; Linux does not — matching
+ * scan_impl's platform split), directories contribute their computed totals
+ * (opaque ones have -1 counts and are excluded), and devices/sockets/fifos
+ * are not counted. */
+static void entry_scan_contribution(const FileEntry *fe, off_t *size, long *count) {
+    switch (fe->type) {
+        case FTYPE_SYMLINK:
+        case FTYPE_SYMLINK_DIR:
+        case FTYPE_SYMLINK_EXEC:
+        case FTYPE_SYMLINK_DEVICE:
+        case FTYPE_SYMLINK_SOCKET:
+        case FTYPE_SYMLINK_FIFO:
+        case FTYPE_SYMLINK_BROKEN:
 #ifdef __APPLE__
-                size += fe->alloc_size;
+            *size += fe->alloc_size;
 #endif
-                count++;
-                break;
-            case FTYPE_DIR:
-                if (fe->size >= 0) size += fe->size;
-                if (fe->file_count >= 0) count += fe->file_count;
-                break;
-            case FTYPE_FILE:
-            case FTYPE_EXEC:
-                size += fe->alloc_size;
-                count++;
-                break;
-            default:
-                break;  /* devices, sockets, fifos: not counted by the scanner */
-        }
+            (*count)++;
+            break;
+        case FTYPE_DIR:
+            if (fe->size >= 0) *size += fe->size;
+            if (fe->file_count >= 0) *count += fe->file_count;
+            break;
+        case FTYPE_FILE:
+        case FTYPE_EXEC:
+            *size += fe->alloc_size;
+            (*count)++;
+            break;
+        default:
+            break;  /* devices, sockets, fifos: not counted by the scanner */
     }
+}
 
-    const char *abs = dir->entry.abs_path ? dir->entry.abs_path : dir->entry.path;
-
-    /* A materialized firmlink endpoint defines the pair's memoized stats the
-     * same way a scanned one does. */
+/* Firmlink accounting for a freshly summed directory total: an endpoint
+ * defines the pair's memoized stats the same way a scanned one does, pairs
+ * whose two endpoints meet at this directory are measured if no walk reached
+ * them (e.g. both children came out of the size cache), and the double count
+ * is subtracted once. in_parallel selects the scanner entry point for the
+ * measurement fallback. */
+static void apply_firmlink_accounting(const char *abs, off_t *size, long *count,
+                                      int in_parallel) {
     int pair = firmlink_lookup_path(abs);
-    if (pair >= 0) firmlink_stats_offer(pair, size, count);
+    if (pair >= 0) firmlink_stats_offer(pair, *size, *count);
 
-    /* This directory may be the one point containing both endpoints of a
-     * pair. Make sure the pair size is known — when both children came out
-     * of the size cache, no walk ever reached an endpoint to memoize it —
-     * then subtract the double count once. */
     for (int i = 0; i < firmlink_count(); i++) {
         off_t ps;
         long pc;
         if (strcmp(firmlink_lca(i), abs) != 0) continue;
         if (!firmlink_stats_get(i, &ps, &pc)) {
-            DirStats ds = get_dir_stats_cached_tasks(firmlink_alias(i));
+            DirStats ds = in_parallel ? get_dir_stats_cached_tasks(firmlink_alias(i))
+                                      : get_dir_stats_cached(firmlink_alias(i));
             if (ds.size >= 0) firmlink_stats_offer(i, ds.size, ds.file_count);
         }
     }
-    firmlink_adjust_dir(abs, &size, &count);
+    firmlink_adjust_dir(abs, size, count);
+}
+
+/* Sum a materialized directory's stats from its (final) children. */
+static void dir_stats_from_children(TreeNode *dir, const ComputeOpts *c) {
+    off_t size = dir->entry.alloc_size;
+    long count = 0;
+
+    for (size_t i = 0; i < dir->child_count; i++) {
+        entry_scan_contribution(&dir->children[i].entry, &size, &count);
+    }
+
+    const char *abs = dir->entry.abs_path ? dir->entry.abs_path : dir->entry.path;
+    apply_firmlink_accounting(abs, &size, &count, 1);
 
     if (c->sizes) dir->entry.size = size;
     if (c->file_counts) dir->entry.file_count = count;
@@ -654,8 +664,11 @@ void tree_expand_node(TreeNode *node, const TreeBuildOpts *opts,
  * Ancestry Tree Building
  * ============================================================================ */
 
-/* Build a single ancestor node (directory only, no children yet) */
+/* Build a single ancestor node (directory only, no children yet). Stats are
+ * not computed here: ancestor totals come from ancestor_compute_stats once
+ * the chain child's total is known. */
 static TreeNode *build_ancestor_node(const char *path, const TreeBuildOpts *opts) {
+    (void)opts;
     TreeNode *node = xmalloc(sizeof(TreeNode));
     memset(node, 0, sizeof(TreeNode));
 
@@ -667,13 +680,60 @@ static TreeNode *build_ancestor_node(const char *path, const TreeBuildOpts *opts
         node->entry.name = "/";
     }
 
-    file_entry_compute(&node->entry, &opts->compute, is_virtual_fs);
-
     if (node_is_directory(node) && path_is_git_root(path)) {
         annotate_git_root(&node->entry);
     }
 
     return node;
+}
+
+/* An ancestry-chain node's totals. Only the chain child is ever materialized
+ * (siblings are not adopted as tree nodes — the -p display shows just the
+ * spine), so bottom-up summing over children can't apply. Instead, scan each
+ * sibling once and reuse the chain child's already-computed total: across
+ * the whole chain every subtree is walked exactly once, where each ancestor
+ * previously re-scanned the entire descendant subtree per level. */
+static void ancestor_compute_stats(TreeNode *node, const TreeNode *chain_child,
+                                   const TreeBuildOpts *opts) {
+    const ComputeOpts *c = &opts->compute;
+    if (!(c->sizes || c->file_counts)) return;
+    if (path_is_virtual_fs(node->entry.path)) return;
+
+    FileList list;
+    file_list_init(&list);
+    if (read_directory(node->entry.path, &list, opts) != 0) {
+        /* Unreadable: same -1 result the whole-subtree scan would produce */
+        file_entry_compute(&node->entry, c, 0);
+        return;
+    }
+
+    off_t size = node->entry.alloc_size;
+    long count = 0;
+    for (size_t i = 0; i < list.count; i++) {
+        FileEntry *fe = &list.entries[i];
+
+        /* The chain child's subtree is already totalled; a symlinked chain
+         * component still contributes as a link, matching the scanner. */
+        if (fe->type == FTYPE_DIR &&
+            strcmp(fe->name, chain_child->entry.name) == 0) {
+            if (chain_child->entry.size >= 0) size += chain_child->entry.size;
+            if (chain_child->entry.file_count >= 0) count += chain_child->entry.file_count;
+            continue;
+        }
+
+        if (fe->type == FTYPE_DIR) {
+            DirStats ds = get_dir_stats_cached(fe->path);
+            fe->size = ds.size;
+            fe->file_count = ds.file_count;
+        }
+        entry_scan_contribution(fe, &size, &count);
+    }
+    file_list_free(&list);
+
+    apply_firmlink_accounting(node->entry.path, &size, &count, 0);
+
+    if (c->sizes) node->entry.size = size;
+    if (c->file_counts) node->entry.file_count = count;
 }
 
 /* Move a heap-allocated node's contents into parent's (single) child slot and
@@ -781,7 +841,9 @@ TreeNode *build_ancestry_tree(const char *path, const TreeBuildOpts *opts,
     /* Build the root node (repo root, home, or /) */
     TreeNode *root = build_ancestor_node(base, opts);
 
-    /* Build the chain of ancestors */
+    /* Build the chain of ancestors, keeping the spine for the stats pass */
+    TreeNode **chain = xmalloc((comp_count + 1) * sizeof(TreeNode *));
+    chain[0] = root;
     TreeNode *current = root;
     for (int i = 0; i < comp_count; i++) {
         TreeNode *child;
@@ -796,8 +858,16 @@ TreeNode *build_ancestry_tree(const char *path, const TreeBuildOpts *opts,
 
         current = tree_node_adopt_single(current, child);
         current->is_ancestor = 1;
+        chain[i + 1] = current;
         free(components[i]);
     }
+
+    /* Ancestor totals, bottom-up from the target (whose stats build_tree
+     * already computed): each level scans only the chain child's siblings. */
+    for (int i = comp_count - 1; i >= 0; i--) {
+        ancestor_compute_stats(chain[i], chain[i + 1], opts);
+    }
+    free(chain);
 
     return root;
 }
