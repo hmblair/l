@@ -793,7 +793,8 @@ cleanup:
         printf("\033[%dA", state.visible_lines);  /* Move back up */
     }
     if (yanked) {
-        printf("%sYanked: %s%s\n", COLOR_GREEN, yanked, COLOR_RESET);
+        /* Label colored, path plain — same style as the error messages */
+        printf("%sYanked:%s %s\n", COLOR_GREEN, COLOR_RESET, yanked);
         free(yanked);
     }
     fflush(stdout);
