@@ -1,12 +1,32 @@
 # l-widget.zsh — Use `l -i` as a Tab-triggered file completion widget
 #
-# Source this file in your .zshrc (after compinit) to replace the default
-# Tab completion menu with an interactive `l -i` picker for file/directory
-# completions. Non-file completions fall back to zsh defaults.
+# Source this file in your .zshrc (after compinit) to replace the default Tab
+# completion with: the interactive `l -i` picker for file/directory
+# completions, and widget-managed listing plus repeat-Tab cycling for
+# everything else.
+#
+# Design: zsh's completion system is used as a read-only oracle. Each new
+# completion runs exactly one capture pass (a zle -C widget with compadd
+# wrapped) to learn the candidate words and whether they are filenames; every
+# behavior after that — picker, insertion, cycling — is driven from the
+# captured list. Control is never handed back to native completion: zle tears
+# down an active completion menu before running any bound non-completion
+# widget (i.e. this one), so re-entering compsys on a repeat Tab restarts its
+# menu at the first match instead of cycling. The one exception is drawing the
+# candidate list, which is stateless display and cannot insert anything while
+# AUTO_MENU is suppressed.
 
-# Global state shared between the completion widget and the zle widget
+# Captured state shared between the completion widget and the zle widget
 typeset -ga _l_captured_candidates=()
 typeset -g  _l_captured_prefix=""
+typeset -gi _l_captured_has_file=0
+
+# Cycle state, armed when multiple non-file candidates are listed; repeat Tabs
+# replace the current word with successive candidates until another key is
+# pressed.
+typeset -ga _l_cycle_cands=()
+typeset -g  _l_cycle_base=""
+typeset -gi _l_cycle_idx=0
 
 # Debug trace: set _L_WIDGET_DEBUG=<file> to append a decision trace (and skip
 # launching the interactive picker). See tools/widget-debug.zsh.
@@ -16,20 +36,37 @@ _l_debug() { [[ -n "$_L_WIDGET_DEBUG" ]] && print -r -- "$@" >> "$_L_WIDGET_DEBU
 _l_capture_complete() {
   _l_captured_candidates=()
   _l_captured_prefix=""
+  _l_captured_has_file=0
 
   # Override compadd to capture candidates
   compadd() {
-    # Extract the compadd prefix (-p). Only scan the option portion: anything
-    # after the '--' separator is a candidate word (e.g. l's own '-p' flag), not
-    # a compadd option, so misreading it would corrupt the inserted text.
-    local _prefix=""
-    local -a _args=("$@")
-    for (( i=1; i<=${#_args}; i++ )); do
-      [[ "${_args[$i]}" == "--" ]] && break
-      if [[ "${_args[$i]}" == "-p" && $i -lt ${#_args} ]]; then
-        _prefix="${_args[$((i+1))]}"
-        break
-      fi
+    # Walk the option portion of the call to extract the hidden prefix (-p)
+    # and whether the matches are filenames (-f, as _path_files passes).
+    # Options may be clustered (-Qf) and an option's argument may be attached
+    # (-Pfoo) or the next word (-J name) — and can itself start with '-'
+    # (e.g. -J -default-), so arguments must be skipped, never scanned for
+    # flag letters. A lone '-' or '--' ends the options; everything after is a
+    # candidate word.
+    local _prefix="" _w _c _rest
+    local -i _has_f=0 _i _j
+    for (( _i=1; _i<=$#; _i++ )); do
+      _w="${argv[$_i]}"
+      [[ "$_w" == "-" || "$_w" == "--" || "$_w" != -* ]] && break
+      for (( _j=2; _j<=${#_w}; _j++ )); do
+        _c="${_w[$_j]}"
+        if [[ "$_c" == "f" ]]; then
+          _has_f=1
+        elif [[ "$_c" == [FPSpsiIWdJVXxrRDOAEMo] ]]; then
+          # Option letter that takes an argument: attached or the next word.
+          _rest="${_w[$((_j+1)),-1]}"
+          if [[ -z "$_rest" ]]; then
+            (( _i++ ))
+            _rest="${argv[$_i]}"
+          fi
+          [[ "$_c" == "p" ]] && _prefix="$_rest"
+          break
+        fi
+      done
     done
     [[ -n "$_prefix" ]] && _l_captured_prefix="$_prefix"
 
@@ -37,7 +74,12 @@ _l_capture_complete() {
     local -a _matches
     builtin compadd -O _matches "$@"
     _l_captured_candidates+=("${_matches[@]}")
-    _l_debug "  compadd${_prefix:+ (prefix=$_prefix)}: ${#_matches} match(es)${_matches:+ -> ${(j:, :)_matches}}"
+    (( _has_f && ${#_matches} )) && _l_captured_has_file=1
+    if [[ -n "$_L_WIDGET_DEBUG" ]]; then
+      local _tag=""
+      (( _has_f )) && _tag=" (file)"
+      _l_debug "  compadd${_prefix:+ (prefix=$_prefix)}${_tag}: ${#_matches} match(es)${_matches:+ -> ${(j:, :)_matches}}"
+    fi
   }
 
   # Run the real completion system
@@ -71,8 +113,40 @@ _l_insert_path() {
   (( _cmd && ! _is_dir )) && LBUFFER+=" "
 }
 
+# Show the candidate list via zsh (display only: AUTO_MENU and MENU_COMPLETE
+# are off for the whole widget pass, so beyond an unambiguous common prefix
+# nothing can be inserted) and arm the cycle state so repeat Tabs step through
+# the candidates. $1 = current word being completed; the rest = candidates.
+_l_list_and_arm() {
+  local current="$1"
+  shift
+  if (( $# > 1 )); then
+    _l_cycle_cands=(${(o)@})
+    _l_cycle_base="${LBUFFER%"$current"}"
+    _l_cycle_idx=0
+  fi
+  zle expand-or-complete
+}
+
 # Main zle widget bound to Tab
 _l_complete() {
+  # Repeat Tab with an armed cycle: swap in the next candidate (wrapping
+  # around) without touching the completion system.
+  if [[ "$LASTWIDGET" == "_l_complete" ]] && (( ${#_l_cycle_cands} )); then
+    (( _l_cycle_idx = _l_cycle_idx % ${#_l_cycle_cands} + 1 ))
+    LBUFFER="${_l_cycle_base}${(q)_l_cycle_cands[$_l_cycle_idx]}"
+    _l_debug "-> cycle $_l_cycle_idx/${#_l_cycle_cands}: LBUFFER=[$LBUFFER]"
+    return
+  fi
+  _l_cycle_cands=()
+
+  # The capture pass below registers a completion attempt with zle, so the
+  # listing pass in _l_list_and_arm would otherwise look like an immediate
+  # second Tab and AUTO_MENU would insert the first match; MENU_COMPLETE would
+  # insert on the first. Keep both off for the whole pass. Repeat Tabs never
+  # reach compsys at all (cycle branch above).
+  setopt localoptions noautomenu nomenucomplete
+
   # Run capture in completion context
   local -a tokens
   tokens=(${(z)LBUFFER})
@@ -116,21 +190,15 @@ _l_complete() {
     current="${tokens[-1]}"
   fi
 
-  # Only take over for filesystem-path completions. If none of the candidates
-  # resolve to a real path (e.g. they're flags, options, or subcommands), defer
-  # to zsh's native completion instead of the l -i picker.
-  if (( ! is_command )); then
-    local _c _p _is_path=0
-    for _c in "${candidates[@]}"; do
-      _p="${_l_captured_prefix}${_c}"
-      _p="${_p/#\~/$HOME}"
-      [[ -e "$_p" || -L "$_p" ]] && { _is_path=1; break; }
-    done
-    if (( ! _is_path )); then
-      _l_debug "-> defer to native (no candidate is a real path)"
-      zle expand-or-complete
-      return
-    fi
+  # Take over only for filesystem completions, i.e. when a captured compadd
+  # call was flagged as adding filenames (-f, as _path_files passes). Testing
+  # whether candidates exist on disk is not a safe substitute: a subcommand or
+  # hostname that coincides with a file in the cwd must not hijack a non-file
+  # completion. Everything else is listed and cycled by the widget.
+  if (( ! is_command && ! _l_captured_has_file )); then
+    _l_debug "-> list + cycle (non-file completion)"
+    _l_list_and_arm "$current" "${candidates[@]}"
+    return
   fi
 
   # Single candidate -- insert directly. The prefix carries any path prefix
@@ -165,10 +233,11 @@ _l_complete() {
     done
   fi
 
-  # If we couldn't resolve any paths, fall back
+  # If no candidate survived path resolution, treat it like a non-file
+  # completion: list once and cycle on repeat Tabs.
   if (( ${#paths} == 0 )); then
-    _l_debug "-> defer to native (no resolved paths)"
-    zle expand-or-complete
+    _l_debug "-> list + cycle (no resolved paths)"
+    _l_list_and_arm "$current" "${candidates[@]}"
     return
   fi
 
