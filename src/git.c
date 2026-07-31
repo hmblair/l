@@ -518,6 +518,22 @@ int git_get_branch_info(const char *repo_path, GitBranchInfo *info) {
     if (info->has_upstream) {
         info->out_of_sync = (strcmp(local_hash, remote_hash) != 0);
         if (info->out_of_sync) {
+#ifdef HAVE_LIBGIT2
+            git_repository *repo = NULL;
+            git_oid local_oid, remote_oid;
+            if (git_repository_open(&repo, repo_path) == 0) {
+                if (git_oid_fromstr(&local_oid, local_hash) == 0 &&
+                    git_oid_fromstr(&remote_oid, remote_hash) == 0) {
+                    size_t ahead = 0, behind = 0;
+                    if (git_graph_ahead_behind(&ahead, &behind, repo,
+                                               &local_oid, &remote_oid) == 0) {
+                        info->ahead = (int)ahead;
+                        info->behind = (int)behind;
+                    }
+                }
+                git_repository_free(repo);
+            }
+#else
             char cmd[PATH_MAX + 128];
             char buf[64];
             snprintf(cmd, sizeof(cmd),
@@ -538,6 +554,7 @@ int git_get_branch_info(const char *repo_path, GitBranchInfo *info) {
                     info->behind = atoi(buf);
                 pclose(fp);
             }
+#endif
         }
     }
 
