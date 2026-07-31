@@ -38,14 +38,29 @@ void format_size(off_t bytes, char *buf, size_t len) {
 }
 
 void format_count(long count, char *buf, size_t len) {
-    if (count >= 1000000) {
-        double m = count / 1000000.0;
-        snprintf(buf, len, m < 10 ? "%.1fM" : "%.0fM", m);
-    } else if (count >= 1000) {
-        double k = count / 1000.0;
-        snprintf(buf, len, k < 10 ? "%.1fK" : "%.0fK", k);
-    } else {
+    const char *units[] = {"", "K", "M", "G"};
+    int unit_idx = 0;
+    double n = (double)count;
+
+    while (n >= 1000 && unit_idx < 3) {
+        n /= 1000;
+        unit_idx++;
+    }
+
+    /* Same rule as format_size: never print four digits. Thresholds sit at
+     * the display-rounding boundaries so %.0f/%.1f can't recreate "1000" or
+     * "10.0". */
+    if (n >= 999.5 && unit_idx < 3) {
+        n /= 1000;
+        unit_idx++;
+    }
+
+    if (unit_idx == 0) {
         snprintf(buf, len, "%ld", count);
+    } else if (n < 9.95) {
+        snprintf(buf, len, "%.1f%s", n, units[unit_idx]);
+    } else {
+        snprintf(buf, len, "%.0f%s", n, units[unit_idx]);
     }
 }
 
