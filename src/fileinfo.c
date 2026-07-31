@@ -1477,24 +1477,28 @@ void fileinfo_compute_git_dir_status(struct FileEntry *fe, GitCache *git) {
 void fileinfo_compute_git_repo_info(struct FileEntry *fe, GitCache *git) {
     if (!fe->is_git_root) return;
 
-    /* Branch and upstream status (annotate_git_root may have filled these at
-     * build time; re-fetch and replace rather than leak) */
-    free(fe->branch);
-    fe->branch = NULL;
-    GitBranchInfo gi;
-    if (git_get_branch_info(fe->path, &gi)) {
-        fe->branch = gi.branch;  /* Takes ownership */
-        fe->has_upstream = gi.has_upstream;
-        fe->out_of_sync = gi.out_of_sync;
-        fe->ahead = gi.ahead;
-        fe->behind = gi.behind;
+    /* Branch, upstream state, hash, tag, and remote were all annotated at
+     * build time (annotate_git_root in tree.c); only what the card adds is
+     * derived here: the tag's distance split and the commit count. */
 
-        /* Get short hash */
-        char hash[64] = "";
-        char ref[128];
-        snprintf(ref, sizeof(ref), "refs/heads/%s", fe->branch);
-        if (git_read_ref(fe->path, ref, hash, sizeof(hash))) {
-            snprintf(fe->short_hash, sizeof(fe->short_hash), "%.7s", hash);
+    /* Split "tag-N-gHASH" (describe output) into tag + distance, in place */
+    if (fe->tag) {
+        char *last_dash = strrchr(fe->tag, '-');
+        if (last_dash && last_dash > fe->tag && last_dash[1] == 'g') {
+            *last_dash = '\0';
+            char *second_last = strrchr(fe->tag, '-');
+            if (second_last && second_last > fe->tag) {
+                char *endptr;
+                long dist = strtol(second_last + 1, &endptr, 10);
+                if (*endptr == '\0' && dist > 0) {
+                    fe->tag_distance = (int)dist;
+                    *second_last = '\0';
+                } else {
+                    *last_dash = '-';  /* not a distance suffix; restore */
+                }
+            } else {
+                *last_dash = '-';
+            }
         }
     }
 
@@ -1509,59 +1513,6 @@ void fileinfo_compute_git_repo_info(struct FileEntry *fe, GitCache *git) {
             long count = atol(buf);
             if (count > 0) {
                 format_count(count, fe->commit_count, sizeof(fe->commit_count));
-            }
-        }
-        pclose(fp);
-    }
-
-    /* Latest tag with distance */
-    snprintf(cmd, sizeof(cmd), "git -C '%s' describe --tags 2>/dev/null", fe->path);
-    fp = popen(cmd, "r");
-    if (fp) {
-        char tag_buf[256];
-        if (fgets(tag_buf, sizeof(tag_buf), fp)) {
-            tag_buf[strcspn(tag_buf, "\n")] = '\0';
-            if (tag_buf[0]) {
-                /* Format: tag-name or tag-name-N-gHASH */
-                /* Find the last two dashes to extract distance */
-                char *last_dash = strrchr(tag_buf, '-');
-                char *second_last = NULL;
-                if (last_dash && last_dash > tag_buf && last_dash[1] == 'g') {
-                    /* Looks like -gHASH suffix, find the distance before it */
-                    *last_dash = '\0';
-                    second_last = strrchr(tag_buf, '-');
-                    if (second_last && second_last > tag_buf) {
-                        char *endptr;
-                        long dist = strtol(second_last + 1, &endptr, 10);
-                        if (*endptr == '\0' && dist > 0) {
-                            /* Valid distance found */
-                            fe->tag_distance = (int)dist;
-                            *second_last = '\0';
-                        } else {
-                            /* Not a valid distance, restore */
-                            *last_dash = '-';
-                        }
-                    } else {
-                        *last_dash = '-';
-                    }
-                }
-                free(fe->tag);
-                fe->tag = xstrdup(tag_buf);
-            }
-        }
-        pclose(fp);
-    }
-
-    /* Remote URL */
-    snprintf(cmd, sizeof(cmd), "git -C '%s' remote get-url origin 2>/dev/null", fe->path);
-    fp = popen(cmd, "r");
-    if (fp) {
-        char remote_buf[512];
-        if (fgets(remote_buf, sizeof(remote_buf), fp)) {
-            remote_buf[strcspn(remote_buf, "\n")] = '\0';
-            if (remote_buf[0]) {
-                free(fe->remote);
-                fe->remote = xstrdup(remote_buf);
             }
         }
         pclose(fp);

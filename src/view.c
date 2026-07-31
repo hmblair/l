@@ -30,15 +30,12 @@ static void col_format_time(const FileEntry *fe, const Icons *icons, char *buf, 
 }
 
 void columns_init(Column *cols) {
-    cols[COL_SIZE].name = "size";
     cols[COL_SIZE].width = 1;
     cols[COL_SIZE].format = col_format_size;
 
-    cols[COL_LINES].name = "lines";
     cols[COL_LINES].width = 1;
     cols[COL_LINES].format = col_format_lines;
 
-    cols[COL_TIME].name = "time";
     cols[COL_TIME].width = 1;
     cols[COL_TIME].format = col_format_time;
 }

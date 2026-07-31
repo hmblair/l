@@ -182,7 +182,7 @@ l --daemon clear     # Clear all cached entries
 ```
 
 Features:
-- Scans from `/` periodically (default: every 30 minutes)
+- Scans from `/` periodically (default: hourly)
 - Caches directories above file threshold (default: 1000+ files)
 - Skips network filesystems automatically
 - Live cache entry count display during scanning

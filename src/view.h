@@ -29,7 +29,6 @@ typedef void (*ColumnFormatter)(const FileEntry *fe, const Icons *icons,
                                 char *buf, size_t len);
 
 typedef struct {
-    const char *name;
     int width;
     ColumnFormatter format;
 } Column;
