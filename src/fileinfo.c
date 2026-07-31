@@ -3,6 +3,7 @@
  */
 
 #include "fileinfo.h"
+#include "format.h"
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <strings.h>
@@ -1473,17 +1474,6 @@ void fileinfo_compute_git_dir_status(struct FileEntry *fe, GitCache *git) {
     fe->has_git_dir_status = 1;
 }
 
-/* Helper to format count with K/M suffixes */
-static void format_count_local(long count, char *buf, size_t len) {
-    if (count >= 1000000) {
-        snprintf(buf, len, "%.1fM", count / 1000000.0);
-    } else if (count >= 1000) {
-        snprintf(buf, len, "%.1fK", count / 1000.0);
-    } else {
-        snprintf(buf, len, "%ld", count);
-    }
-}
-
 void fileinfo_compute_git_repo_info(struct FileEntry *fe, GitCache *git) {
     if (!fe->is_git_root) return;
 
@@ -1518,7 +1508,7 @@ void fileinfo_compute_git_repo_info(struct FileEntry *fe, GitCache *git) {
             buf[strcspn(buf, "\n")] = '\0';
             long count = atol(buf);
             if (count > 0) {
-                format_count_local(count, fe->commit_count, sizeof(fe->commit_count));
+                format_count(count, fe->commit_count, sizeof(fe->commit_count));
             }
         }
         pclose(fp);
