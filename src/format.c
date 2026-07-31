@@ -19,9 +19,18 @@ void format_size(off_t bytes, char *buf, size_t len) {
         unit_idx++;
     }
 
+    /* Never print four digits: 1000-1023 rolls up to 1.0 of the next unit
+     * (still a 1024 divisor, just rounded across the gap). Thresholds sit at
+     * the display-rounding boundaries so %.0f/%.1f can't recreate "1000" or
+     * "10.0". */
+    if (size >= 999.5 && unit_idx < 5) {
+        size /= 1024;
+        unit_idx++;
+    }
+
     if (unit_idx == 0) {
         snprintf(buf, len, "%lld%s", (long long)bytes, units[0]);
-    } else if (size < 10) {
+    } else if (size < 9.95) {
         snprintf(buf, len, "%.1f%s", size, units[unit_idx]);
     } else {
         snprintf(buf, len, "%.0f%s", size, units[unit_idx]);
