@@ -37,21 +37,21 @@ const char *get_file_color(FileType type, int is_ignored, int is_tty, int color_
  * Line Counting and Media Parsing
  * ============================================================================ */
 
-int count_file_lines(const char *path);
-int count_file_words(const char *path);
 int get_image_megapixels(const char *path);
 int get_audio_duration(const char *path);
 int get_pdf_page_count(const char *path);
 
-/* Forward declare FileEntry to avoid circular dependency */
+/* Forward declare to avoid circular dependencies (both defined in tree.h) */
 struct FileEntry;
+struct ComputeOpts;
 
-/* Compute content metadata for a FileEntry.
- * @param fe         The file entry to update
- * @param line_count If true, compute line counts for text files
- * @param media_info If true, parse images/audio/PDF for metadata
- * Sets content_type and line_count fields appropriately. */
-void fileinfo_compute_content(struct FileEntry *fe, int line_count, int media_info);
+/* Compute the content metadata the ComputeOpts ask for: media dimensions/
+ * duration/pages, text line counts, and word counts. A text file is mapped
+ * once; line and word counting are separate passes over the same mapping
+ * (word counting is an order of magnitude slower per byte, so it must not
+ * ride along when only lines are wanted). Sets content_type, line_count,
+ * and word_count. */
+void fileinfo_compute_content(struct FileEntry *fe, const struct ComputeOpts *c);
 
 /* Get human-readable file type name from path (e.g., "C source", "Python")
  * Returns NULL if type cannot be determined */

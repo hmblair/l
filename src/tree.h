@@ -14,7 +14,7 @@
  * Compute Options - Fine-grained control over what metadata to collect
  * ============================================================================ */
 
-typedef struct {
+typedef struct ComputeOpts {
     unsigned int sizes : 1;         /* Compute file/directory sizes */
     unsigned int file_counts : 1;   /* Compute file counts for directories */
     unsigned int line_counts : 1;   /* Compute line counts for text files */
@@ -23,13 +23,15 @@ typedef struct {
     unsigned int git_diff : 1;      /* Compute git diff stats (lines added/removed) */
     unsigned int type_stats : 1;    /* Compute line breakdown by file type (dirs) */
     unsigned int git_repo_info : 1; /* Compute git repo info (branch, tag, remote) */
+    unsigned int word_counts : 1;   /* Compute word counts for text files
+                                     * (displayed only by the summary card) */
 } ComputeOpts;
 
 /* Preset configurations */
-#define COMPUTE_NONE     ((ComputeOpts){0, 0, 0, 0, 0, 0, 0, 0})
-#define COMPUTE_BASIC    ((ComputeOpts){0, 0, 0, 0, 1, 0, 0, 0})  /* git status only */
-#define COMPUTE_LONG     ((ComputeOpts){1, 1, 1, 1, 1, 1, 0, 0})  /* + lines, media, diff */
-#define COMPUTE_SUMMARY  ((ComputeOpts){1, 1, 1, 1, 1, 0, 1, 1})  /* + type_stats, repo_info */
+#define COMPUTE_NONE     ((ComputeOpts){0, 0, 0, 0, 0, 0, 0, 0, 0})
+#define COMPUTE_BASIC    ((ComputeOpts){0, 0, 0, 0, 1, 0, 0, 0, 0})  /* git status only */
+#define COMPUTE_LONG     ((ComputeOpts){1, 1, 1, 1, 1, 1, 0, 0, 0})  /* + lines, media, diff */
+#define COMPUTE_SUMMARY  ((ComputeOpts){1, 1, 1, 1, 1, 0, 1, 1, 1})  /* + type_stats, repo_info, words */
 
 /* ============================================================================
  * File Entry - Represents a single filesystem entry

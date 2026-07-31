@@ -66,7 +66,7 @@ void file_entry_compute(FileEntry *fe, const ComputeOpts *c, int is_virtual_fs) 
         if (c->sizes) fe->size = stats.size;
         if (c->file_counts) fe->file_count = stats.file_count;
     } else if (is_file && (c->line_counts || c->media_info)) {
-        fileinfo_compute_content(fe, c->line_counts, c->media_info);
+        fileinfo_compute_content(fe, c);
     }
 }
 
@@ -530,7 +530,7 @@ static void build_tree_children(TreeNode *parent, int depth,
                            child->entry.type == FTYPE_SYMLINK_EXEC);
             if (is_file) {
                 #pragma omp task firstprivate(child)
-                fileinfo_compute_content(&child->entry, c->line_counts, c->media_info);
+                fileinfo_compute_content(&child->entry, c);
             }
         }
     }

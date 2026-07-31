@@ -1328,11 +1328,90 @@ void type_stats_sort(TypeStats *stats) {
  * Content Metadata Computation
  * ============================================================================ */
 
-void fileinfo_compute_content(struct FileEntry *fe, int do_line_count, int do_media_info) {
+/* ============================================================================
+ * Text Counting
+ * ============================================================================ */
+
+/* Map a candidate text file read-only for counting. Returns 1 on success
+ * (an empty file succeeds with *size 0 and *data NULL), 0 when the file is
+ * binary (by extension or leading NUL bytes) or unreadable. */
+static int map_text_file(const char *path, char **data, size_t *size) {
+    if (has_binary_extension(path)) return 0;
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return 0;
+
+    struct stat st;
+    if (fstat(fd, &st) != 0) {
+        close(fd);
+        return 0;
+    }
+    if (st.st_size == 0) {
+        close(fd);
+        *data = NULL;
+        *size = 0;
+        return 1;
+    }
+
+    size_t sz = (size_t)st.st_size;
+    char *d = mmap(NULL, sz, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (d == MAP_FAILED) return 0;
+
+    madvise(d, sz, MADV_SEQUENTIAL);
+
+    size_t check_len = sz < L_BINARY_CHECK_SIZE ? sz : L_BINARY_CHECK_SIZE;
+    if (memchr(d, '\0', check_len) != NULL) {
+        munmap(d, sz);
+        return 0;
+    }
+
+    *data = d;
+    *size = sz;
+    return 1;
+}
+
+/* Newline count via memchr (typically SIMD-optimized by libc; runs at
+ * memory bandwidth — keep this pass free of per-byte logic) */
+static int count_lines_mapped(const char *data, size_t size) {
+    long count = 0;
+    const char *p = data;
+    const char *end = data + size;
+
+    while (p < end && (p = memchr(p, '\n', end - p)) != NULL) {
+        count++;
+        p++;
+    }
+    return count > INT_MAX ? INT_MAX : (int)count;
+}
+
+/* Word count (whitespace -> non-whitespace transitions); a per-byte state
+ * machine, roughly an order of magnitude slower than the line pass */
+static int count_words_mapped(const char *data, size_t size) {
+    long count = 0;
+    int in_word = 0;
+    const unsigned char *p = (const unsigned char *)data;
+    const unsigned char *end = p + size;
+
+    while (p < end) {
+        unsigned char c = *p++;
+        int is_space = (c == ' ' || c == '\t' || c == '\n' || c == '\r' ||
+                        c == '\v' || c == '\f');
+        if (!is_space && !in_word) {
+            count++;
+            in_word = 1;
+        } else if (is_space) {
+            in_word = 0;
+        }
+    }
+    return count > INT_MAX ? INT_MAX : (int)count;
+}
+
+void fileinfo_compute_content(struct FileEntry *fe, const struct ComputeOpts *c) {
     if (!fe || !fe->path) return;
 
     /* Try media info first if requested */
-    if (do_media_info) {
+    if (c->media_info) {
         int mp = get_image_megapixels(fe->path);
         if (mp >= 0) {
             fe->line_count = mp;
@@ -1355,13 +1434,17 @@ void fileinfo_compute_content(struct FileEntry *fe, int do_line_count, int do_me
         }
     }
 
-    /* Try text line count if requested */
-    if (do_line_count) {
-        int lines = count_file_lines(fe->path);
-        if (lines >= 0) {
-            fe->line_count = lines;
-            fe->word_count = count_file_words(fe->path);
+    /* Text counts: one mapping, one pass per requested count */
+    if (c->line_counts) {
+        char *data;
+        size_t size;
+        if (map_text_file(fe->path, &data, &size)) {
+            fe->line_count = count_lines_mapped(data, size);
+            if (c->word_counts) {
+                fe->word_count = count_words_mapped(data, size);
+            }
             fe->content_type = CONTENT_TEXT;
+            if (data) munmap(data, size);
             return;
         }
     }
@@ -1370,105 +1453,6 @@ void fileinfo_compute_content(struct FileEntry *fe, int do_line_count, int do_me
     fe->line_count = -1;
     fe->word_count = -1;
     fe->content_type = CONTENT_BINARY;
-}
-
-/* ============================================================================
- * Line Counting
- * ============================================================================ */
-
-int count_file_lines(const char *path) {
-    if (has_binary_extension(path)) return -1;
-
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return -1;
-
-    struct stat st;
-    if (fstat(fd, &st) != 0 || st.st_size == 0) {
-        close(fd);
-        return st.st_size == 0 ? 0 : -1;
-    }
-
-    /* For very large files, use mmap for better performance */
-    size_t size = (size_t)st.st_size;
-    char *data = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
-    close(fd);
-
-    if (data == MAP_FAILED) return -1;
-
-    /* Hint to OS about sequential access */
-    madvise(data, size, MADV_SEQUENTIAL);
-
-    /* Check for binary content at start */
-    size_t check_len = size < L_BINARY_CHECK_SIZE ? size : L_BINARY_CHECK_SIZE;
-    if (memchr(data, '\0', check_len) != NULL) {
-        munmap(data, size);
-        return -1;
-    }
-
-    /* Count newlines using memchr (typically SIMD-optimized by libc) */
-    long count = 0;
-    const char *p = data;
-    const char *end = data + size;
-
-    while ((p = memchr(p, '\n', end - p)) != NULL) {
-        count++;
-        p++;
-    }
-
-    munmap(data, size);
-
-    /* Clamp to INT_MAX for return value */
-    return count > INT_MAX ? INT_MAX : (int)count;
-}
-
-int count_file_words(const char *path) {
-    if (has_binary_extension(path)) return -1;
-
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return -1;
-
-    struct stat st;
-    if (fstat(fd, &st) != 0 || st.st_size == 0) {
-        close(fd);
-        return st.st_size == 0 ? 0 : -1;
-    }
-
-    size_t size = (size_t)st.st_size;
-    char *data = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
-    close(fd);
-
-    if (data == MAP_FAILED) return -1;
-
-    madvise(data, size, MADV_SEQUENTIAL);
-
-    /* Check for binary content at start */
-    size_t check_len = size < L_BINARY_CHECK_SIZE ? size : L_BINARY_CHECK_SIZE;
-    if (memchr(data, '\0', check_len) != NULL) {
-        munmap(data, size);
-        return -1;
-    }
-
-    /* Count words (transitions from whitespace to non-whitespace) */
-    long count = 0;
-    int in_word = 0;
-    const unsigned char *p = (const unsigned char *)data;
-    const unsigned char *end = p + size;
-
-    while (p < end) {
-        unsigned char c = *p++;
-        int is_space = (c == ' ' || c == '\t' || c == '\n' || c == '\r' ||
-                        c == '\v' || c == '\f');
-        if (!is_space && !in_word) {
-            count++;
-            in_word = 1;
-        } else if (is_space) {
-            in_word = 0;
-        }
-    }
-
-    munmap(data, size);
-
-    return count > INT_MAX ? INT_MAX : (int)count;
 }
 
 /* ============================================================================

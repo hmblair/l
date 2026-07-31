@@ -609,11 +609,15 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* Auto-enable summary mode for single file arguments */
+    /* Auto-enable summary mode for single file arguments. This is a mode
+     * decision made after the compute options were derived, so it must feed
+     * back into them: the file card displays word counts, which only summary
+     * mode gathers (gated on line_counts so -s stays count-free). */
     if (dir_count == 1) {
         struct stat st;
         if (stat(dirs[0], &st) == 0 && S_ISREG(st.st_mode)) {
             cfg.req.summary_mode = 1;
+            if (cfg.compute.line_counts) cfg.compute.word_counts = 1;
         }
     }
 
