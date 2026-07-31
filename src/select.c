@@ -544,6 +544,7 @@ char *select_run(TreeNode ***trees_ref, int tree_count, char *const *dirs,
     render_picker(&state, &render_ctx, files_only);
 
     char *result = NULL;
+    char *yanked = NULL;   /* confirmation printed after the display is erased */
 
     while (1) {
         /* Exit if the view is empty. Stay while filtering so a query that
@@ -721,9 +722,13 @@ char *select_run(TreeNode ***trees_ref, int tree_count, char *const *dirs,
             case KEY_YANK: {
                 if (!current) break;
                 copy_to_clipboard(current->entry.path);
-                printf("\r\033[K%sYanked: %s%s\n", COLOR_GREEN,
-                       current->entry.path, COLOR_RESET);
-                fflush(stdout);
+                /* Don't print here: the erase logic below assumes the cursor
+                 * still sits on the status line. The confirmation goes out
+                 * after the display is cleared. An empty (non-NULL) result
+                 * means "action completed, nothing to select" — the caller
+                 * prints nothing and exits 0. */
+                yanked = xstrdup(current->entry.path);
+                result = xstrdup("");
                 goto cleanup;
             }
 
@@ -786,6 +791,10 @@ cleanup:
     }
     if (state.visible_lines > 0) {
         printf("\033[%dA", state.visible_lines);  /* Move back up */
+    }
+    if (yanked) {
+        printf("%sYanked: %s%s\n", COLOR_GREEN, yanked, COLOR_RESET);
+        free(yanked);
     }
     fflush(stdout);
     term_disable_raw();

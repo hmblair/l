@@ -653,7 +653,8 @@ int main(int argc, char **argv) {
     if (cfg.req.interactive) {
         char *selected = select_run(&trees, dir_count, dirs, &ctx);
         if (selected) {
-            printf("%s\n", selected);
+            /* Empty = an action (yank) completed without a selection */
+            if (selected[0]) printf("%s\n", selected);
             free(selected);
         } else {
             exit_code = 1;  /* No selection made (quit/ESC) */
