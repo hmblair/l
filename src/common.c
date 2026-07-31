@@ -223,14 +223,15 @@ int path_is_opaque_dir(const char *path) {
 #define L_MAX_FIRMLINKS 64
 
 typedef struct {
+    ino_t ino;
+    /* memoized full stats of the shared content (write-once per run) */
+    off_t size;
+    long file_count;
+    dev_t dev;
+    int have_stats;
     char alias[PATH_MAX];    /* user-visible side, e.g. /Users */
     char target[PATH_MAX];   /* data-volume side */
     char lca[PATH_MAX];      /* deepest directory containing both */
-    dev_t dev;
-    ino_t ino;
-    int have_stats;
-    off_t size;
-    long file_count;
 } FirmlinkPair;
 
 static FirmlinkPair g_firmlinks[L_MAX_FIRMLINKS];
@@ -407,8 +408,8 @@ char *xstrdup(const char *s) {
 /* Simple djb2 hash */
 unsigned int hash_string(const char *str) {
     unsigned int hash = 5381;
-    int c;
-    while ((c = *str++))
+    unsigned char c;
+    while ((c = (unsigned char)*str++))
         hash = ((hash << 5) + hash) + c;
     return hash % L_HASH_SIZE;
 }

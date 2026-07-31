@@ -159,7 +159,24 @@ uninstall:
 clean:
 	rm -f $(SRCDIR)/*.o $(SRCDIR)/*.d $(BINDIR)/l $(BINDIR)/l-cached $(BINDIR)/cl
 
+# Recent clang-tidy enables no checks by default; pick the correctness-
+# oriented families explicitly (style checks excluded on purpose).
+# Suppressed as noise for this codebase:
+#   multi-level-implicit-pointer-conversion  T** through malloc/free/memset
+#                                            is idiomatic C
+#   command-processor, optin.taint           popen/system are how the git
+#                                            fallback, file openers, and
+#                                            clipboard work; call sites
+#                                            shell-escape or bind paths as $0
+#   implicit-widening, unchecked-string-…    st_blocks*512-style arithmetic
+#                                            and atoi on our own/git output
+#   security.ArrayBound                      false-positives on the
+#                                            s[strcspn(s,…)]='\0' idiom and
+#                                            the clamped EMIT cursor
+LINT_CHECKS = clang-diagnostic-*,clang-analyzer-*,bugprone-*,portability-*,-bugprone-easily-swappable-parameters,-bugprone-narrowing-conversions,-bugprone-multi-level-implicit-pointer-conversion,-bugprone-command-processor,-clang-analyzer-optin.taint.GenericTaint,-bugprone-implicit-widening-of-multiplication-result,-bugprone-unchecked-string-to-number-conversion,-clang-analyzer-security.ArrayBound
+
 lint:
-	clang-tidy $(SRCDIR)/*.c -- -I$(SRCDIR) $(CFLAGS) -I/usr/include -I/usr/lib/gcc/aarch64-linux-gnu/13/include -fopenmp
+	clang-tidy --quiet -checks='$(LINT_CHECKS)' --header-filter='$(SRCDIR)/.*' \
+		$(SRCDIR)/*.c -- -I$(SRCDIR) $(CFLAGS)
 
 .PHONY: all install uninstall clean lint

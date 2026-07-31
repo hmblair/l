@@ -100,19 +100,17 @@ const char *get_file_color(FileType type, int is_ignored, int is_tty, int color_
     if (is_ignored && !color_all) return COLOR_GREY;
 
     switch (type) {
-        case FTYPE_DIR:            return COLOR_BLUE;
-        case FTYPE_EXEC:           return COLOR_GREEN;
-        case FTYPE_DEVICE:         return COLOR_YELLOW;
-        case FTYPE_SOCKET:         return COLOR_MAGENTA;
-        case FTYPE_FIFO:           return COLOR_MAGENTA;
-        case FTYPE_SYMLINK:        return COLOR_WHITE;
+        case FTYPE_DIR:
         case FTYPE_SYMLINK_DIR:    return COLOR_BLUE;
+        case FTYPE_EXEC:
         case FTYPE_SYMLINK_EXEC:   return COLOR_GREEN;
+        case FTYPE_DEVICE:
         case FTYPE_SYMLINK_DEVICE: return COLOR_YELLOW;
-        case FTYPE_SYMLINK_SOCKET: return COLOR_MAGENTA;
+        case FTYPE_SOCKET:
+        case FTYPE_FIFO:
+        case FTYPE_SYMLINK_SOCKET:
         case FTYPE_SYMLINK_FIFO:   return COLOR_MAGENTA;
-        case FTYPE_SYMLINK_BROKEN: return COLOR_WHITE;
-        default:                   return COLOR_WHITE;
+        default:                   return COLOR_WHITE;  /* files, symlinks */
     }
 }
 
@@ -804,13 +802,12 @@ static int get_isobmff_duration(const char *path) {
 /* Get audio/video duration from supported formats.
  * Returns duration in seconds, or -1 on failure. */
 int get_audio_duration(const char *path) {
-    int dur;
-    if ((dur = get_wav_duration(path)) >= 0) return dur;
-    if ((dur = get_flac_duration(path)) >= 0) return dur;
-    if ((dur = get_mp3_duration(path)) >= 0) return dur;
-    if ((dur = get_matroska_duration(path)) >= 0) return dur;
-    if ((dur = get_isobmff_duration(path)) >= 0) return dur;
-    return -1;
+    int dur = get_wav_duration(path);
+    if (dur < 0) dur = get_flac_duration(path);
+    if (dur < 0) dur = get_mp3_duration(path);
+    if (dur < 0) dur = get_matroska_duration(path);
+    if (dur < 0) dur = get_isobmff_duration(path);
+    return dur;
 }
 
 static int has_matroska_extension(const char *path) {
@@ -1503,19 +1500,23 @@ void fileinfo_compute_git_repo_info(struct FileEntry *fe, GitCache *git) {
     }
 
     /* Commit count */
-    char cmd[PATH_MAX + 64];
-    snprintf(cmd, sizeof(cmd), "git -C '%s' rev-list --count HEAD 2>/dev/null", fe->path);
-    FILE *fp = popen(cmd, "r");
-    if (fp) {
-        char buf[32];
-        if (fgets(buf, sizeof(buf), fp)) {
-            buf[strcspn(buf, "\n")] = '\0';
-            long count = atol(buf);
-            if (count > 0) {
-                format_count(count, fe->commit_count, sizeof(fe->commit_count));
+    char *escaped = shell_escape(fe->path);
+    if (escaped) {
+        char cmd[L_SHELL_CMD_BUF_SIZE];
+        snprintf(cmd, sizeof(cmd), "git -C '%s' rev-list --count HEAD 2>/dev/null", escaped);
+        free(escaped);
+        FILE *fp = popen(cmd, "r");
+        if (fp) {
+            char buf[32];
+            if (fgets(buf, sizeof(buf), fp)) {
+                buf[strcspn(buf, "\n")] = '\0';
+                long count = atol(buf);
+                if (count > 0) {
+                    format_count(count, fe->commit_count, sizeof(fe->commit_count));
+                }
             }
+            pclose(fp);
         }
-        pclose(fp);
     }
 
     /* Repo status */

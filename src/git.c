@@ -534,26 +534,32 @@ int git_get_branch_info(const char *repo_path, GitBranchInfo *info) {
                 git_repository_free(repo);
             }
 #else
-            char cmd[PATH_MAX + 128];
-            char buf[64];
-            snprintf(cmd, sizeof(cmd),
-                     "git -C '%s' rev-list --count origin/%s..%s 2>/dev/null",
-                     repo_path, branch, branch);
-            FILE *fp = popen(cmd, "r");
-            if (fp) {
-                if (fgets(buf, sizeof(buf), fp))
-                    info->ahead = atoi(buf);
-                pclose(fp);
+            char *esc_path = shell_escape(repo_path);
+            char *esc_branch = shell_escape(branch);
+            if (esc_path && esc_branch) {
+                char cmd[L_SHELL_CMD_BUF_SIZE];
+                char buf[64];
+                snprintf(cmd, sizeof(cmd),
+                         "git -C '%s' rev-list --count 'origin/%s'..'%s' 2>/dev/null",
+                         esc_path, esc_branch, esc_branch);
+                FILE *fp = popen(cmd, "r");
+                if (fp) {
+                    if (fgets(buf, sizeof(buf), fp))
+                        info->ahead = atoi(buf);
+                    pclose(fp);
+                }
+                snprintf(cmd, sizeof(cmd),
+                         "git -C '%s' rev-list --count '%s'..'origin/%s' 2>/dev/null",
+                         esc_path, esc_branch, esc_branch);
+                fp = popen(cmd, "r");
+                if (fp) {
+                    if (fgets(buf, sizeof(buf), fp))
+                        info->behind = atoi(buf);
+                    pclose(fp);
+                }
             }
-            snprintf(cmd, sizeof(cmd),
-                     "git -C '%s' rev-list --count %s..origin/%s 2>/dev/null",
-                     repo_path, branch, branch);
-            fp = popen(cmd, "r");
-            if (fp) {
-                if (fgets(buf, sizeof(buf), fp))
-                    info->behind = atoi(buf);
-                pclose(fp);
-            }
+            free(esc_path);
+            free(esc_branch);
 #endif
         }
     }
@@ -563,8 +569,13 @@ int git_get_branch_info(const char *repo_path, GitBranchInfo *info) {
 
 #ifndef HAVE_LIBGIT2
 char *git_get_latest_tag(const char *repo_path) {
-    char cmd[PATH_MAX + 64];
-    snprintf(cmd, sizeof(cmd), "git -C '%s' describe --tags 2>/dev/null", repo_path);
+    char *escaped = shell_escape(repo_path);
+    if (!escaped) return NULL;
+
+    char cmd[L_SHELL_CMD_BUF_SIZE];
+    snprintf(cmd, sizeof(cmd), "git -C '%s' describe --tags 2>/dev/null", escaped);
+    free(escaped);
+
     FILE *fp = popen(cmd, "r");
     if (!fp) return NULL;
 
@@ -650,10 +661,8 @@ char *git_remote_to_web_url(const char *remote) {
 }
 
 /* ============================================================================
- * Shell Escape (for non-libgit2 fallback)
+ * Shell Escape
  * ============================================================================ */
-
-#ifndef HAVE_LIBGIT2
 
 char *shell_escape(const char *path) {
     /* Count single quotes to determine buffer size */
@@ -687,8 +696,6 @@ char *shell_escape(const char *path) {
     *out = '\0';
     return escaped;
 }
-
-#endif /* !HAVE_LIBGIT2 */
 
 /* ============================================================================
  * Git Repository Functions
@@ -744,6 +751,9 @@ int git_find_root(const char *path, char *root, size_t root_len) {
 static void git_populate_diff_stats_shell(GitCache *cache, const char *repo_path) {
     char cmd[L_SHELL_CMD_BUF_SIZE];
 
+    char *escaped = shell_escape(repo_path);
+    if (!escaped) return;
+
     /* Start from zero so re-populating the same repo doesn't double the counts */
     git_reset_diff_stats(cache, repo_path);
 
@@ -752,7 +762,8 @@ static void git_populate_diff_stats_shell(GitCache *cache, const char *repo_path
              "git -C '%s' diff --numstat 2>/dev/null && "
              "echo '---' && "
              "git -C '%s' diff --cached --numstat 2>/dev/null",
-             repo_path, repo_path);
+             escaped, escaped);
+    free(escaped);
 
     FILE *fp = popen(cmd, "r");
     if (!fp) return;

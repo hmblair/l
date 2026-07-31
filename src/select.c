@@ -14,7 +14,9 @@
 #include <termios.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
+#include <sys/wait.h>
 #include <signal.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
 
@@ -678,7 +680,11 @@ char *select_run(TreeNode ***trees_ref, int tree_count, char *const *dirs,
                     snap_cursor(&state, files_only);
                     render_picker(&state, &render_ctx, files_only);
                 } else {
-                    /* Open file: use system handler for binary, EDITOR for text */
+                    /* Open file: use system handler for binary, EDITOR for
+                     * text. The path is bound as $0 so its characters are
+                     * data, never shell syntax (interpolating it into the
+                     * command line was an injection vector: a quote in a
+                     * filename escaped the quoting). */
                     char cmd[PATH_MAX + 64];
 
                     printf("\r\033[K\n");
@@ -686,19 +692,24 @@ char *select_run(TreeNode ***trees_ref, int tree_count, char *const *dirs,
 
                     if (should_open_externally(current->entry.path)) {
 #ifdef PLATFORM_MACOS
-                        snprintf(cmd, sizeof(cmd), "open \"%s\"",
-                                 current->entry.path);
+                        snprintf(cmd, sizeof(cmd), "open \"$0\"");
 #else
-                        snprintf(cmd, sizeof(cmd), "xdg-open \"%s\" 2>/dev/null",
-                                 current->entry.path);
+                        snprintf(cmd, sizeof(cmd), "xdg-open \"$0\" 2>/dev/null");
 #endif
                     } else {
                         const char *editor = getenv("EDITOR");
                         if (!editor) editor = "vim";
-                        snprintf(cmd, sizeof(cmd), "%s \"%s\"", editor,
-                                 current->entry.path);
+                        snprintf(cmd, sizeof(cmd), "%s \"$0\"", editor);
                     }
-                    if (system(cmd)) { /* ignore */ }
+                    pid_t pid = fork();
+                    if (pid == 0) {
+                        execl("/bin/sh", "sh", "-c", cmd,
+                              current->entry.path, (char *)NULL);
+                        _exit(127);
+                    } else if (pid > 0) {
+                        int status;
+                        while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+                    }
 
                     /* Restore original stdout */
                     if (saved_stdout_fd >= 0) {

@@ -177,13 +177,12 @@ char *git_get_remote_url(const char *repo_path);
 char *git_remote_to_web_url(const char *remote);
 
 /* ============================================================================
- * Shell Escape (for non-libgit2 fallback)
+ * Shell Escape
  * ============================================================================ */
 
-#ifndef HAVE_LIBGIT2
-/* Escape a path for safe use in shell single quotes: ' -> '\''
+/* Escape a string for safe use inside shell single quotes: ' -> '\''
+ * Required for every path or ref that reaches popen/system.
  * Returns: Newly allocated string (caller must free), or NULL on overflow. */
 char *shell_escape(const char *path);
-#endif
 
 #endif /* L_GIT_H */

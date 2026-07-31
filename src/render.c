@@ -589,7 +589,7 @@ void print_summary(TreeNode *node, PrintContext *ctx) {
             if (fe->ahead > 0)
                 ab_pos += snprintf(ahead_behind + ab_pos, sizeof(ahead_behind) - ab_pos, " %s+%d%s", CLR(cfg, COLOR_RED), fe->ahead, RST(cfg));
             if (fe->behind > 0)
-                ab_pos += snprintf(ahead_behind + ab_pos, sizeof(ahead_behind) - ab_pos, " %s-%d%s", CLR(cfg, COLOR_RED), fe->behind, RST(cfg));
+                snprintf(ahead_behind + ab_pos, sizeof(ahead_behind) - ab_pos, " %s-%d%s", CLR(cfg, COLOR_RED), fe->behind, RST(cfg));
             char *web_url = git_remote_to_web_url(fe->remote);
             if (web_url && cfg->disp.is_tty) {
                 card_add(&card, "%s%s%s%s%s%s%s %s%s%s%s %s\033]8;;%s\033\\%s\033]8;;\033\\%s%s",
