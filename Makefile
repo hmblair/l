@@ -11,6 +11,11 @@ CONFIGDIR = $(HOME)/.config/l
 CONFIG_FILE = config.toml
 ZSH_COMPLETIONS = $(PREFIX)/share/zsh/site-functions
 BASH_COMPLETIONS = $(PREFIX)/share/bash-completion/completions
+# Sourced zsh integration (widget, highlighter, history search) — not
+# completion definitions, so not installed to site-functions. When the
+# checkout itself lives at $(PREFIX)/share/l (the dotfiles convention),
+# source and destination coincide and the copy is skipped.
+SHELL_DEST = $(PREFIX)/share/l/shell
 
 # Local build output
 BINDIR = bin
@@ -136,8 +141,14 @@ endif
 	@mkdir -p $(ZSH_COMPLETIONS)
 	install -m 644 completions/_l $(ZSH_COMPLETIONS)/_l
 	install -m 644 completions/_cl $(ZSH_COMPLETIONS)/_cl
-	install -m 644 completions/l-widget.zsh $(ZSH_COMPLETIONS)/l-widget.zsh
-	@echo "Installed zsh completions and widget to $(ZSH_COMPLETIONS)"
+	@echo "Installed zsh completions to $(ZSH_COMPLETIONS)"
+	@mkdir -p $(SHELL_DEST)
+	@if [ "$$(cd shell && pwd -P)" != "$$(cd $(SHELL_DEST) && pwd -P)" ]; then \
+		install -m 644 shell/l-widget.zsh shell/zhl.zsh shell/l-history.zsh $(SHELL_DEST)/; \
+		echo "Installed zsh shell integration to $(SHELL_DEST)"; \
+	else \
+		echo "Shell integration is sourced from the checkout ($(SHELL_DEST))"; \
+	fi
 	@if command -v zsh >/dev/null 2>&1 && ! zsh -ic 'echo "$$fpath"' 2>/dev/null | grep -qF "$(ZSH_COMPLETIONS)"; then \
 		printf "\033[33mWarning:\033[0m $(ZSH_COMPLETIONS) is not in your zsh fpath\n"; \
 		echo "  Add this to your .zshrc: fpath=($(ZSH_COMPLETIONS) \$$fpath)"; \
@@ -152,7 +163,12 @@ uninstall:
 	rm -f $(DESTBINDIR)/l $(DESTBINDIR)/l-cached $(DESTBINDIR)/cl
 	rm -f $(CONFIGDIR)/$(CONFIG_FILE)
 	rmdir $(CONFIGDIR) 2>/dev/null || true
-	rm -f $(ZSH_COMPLETIONS)/_l $(ZSH_COMPLETIONS)/_cl $(ZSH_COMPLETIONS)/l-widget.zsh
+	rm -f $(ZSH_COMPLETIONS)/_l $(ZSH_COMPLETIONS)/_cl
+	rm -f $(ZSH_COMPLETIONS)/l-widget.zsh $(ZSH_COMPLETIONS)/zhl.zsh $(ZSH_COMPLETIONS)/l-history.zsh
+	@if [ -d shell ] && [ -d $(SHELL_DEST) ] && [ "$$(cd shell && pwd -P)" != "$$(cd $(SHELL_DEST) && pwd -P)" ]; then \
+		rm -f $(SHELL_DEST)/l-widget.zsh $(SHELL_DEST)/zhl.zsh $(SHELL_DEST)/l-history.zsh; \
+		rmdir $(SHELL_DEST) 2>/dev/null || true; \
+	fi
 	rm -f $(BASH_COMPLETIONS)/l $(BASH_COMPLETIONS)/cl
 	@echo "Uninstalled l"
 

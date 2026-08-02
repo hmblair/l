@@ -128,7 +128,7 @@ An optional zsh widget rebinds Tab to use `l -i` as an interactive picker for fi
 It is installed but not enabled automatically. Source it from your `.zshrc`, after `compinit`:
 
 ```zsh
-source ~/.local/share/zsh/site-functions/l-widget.zsh
+source ~/.local/share/l/shell/l-widget.zsh
 ```
 
 Completion changes need a shell reload (`exec zsh`) to take effect.

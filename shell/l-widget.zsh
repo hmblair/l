@@ -3,7 +3,9 @@
 # Source this file in your .zshrc (after compinit) to replace the default Tab
 # completion with: the interactive `l -i` picker for file/directory
 # completions, and widget-managed listing plus repeat-Tab cycling for
-# everything else.
+# everything else. When the zhl highlighter is loaded, completion follows
+# cd-chains on the line (`cd build && ./<Tab>` completes from build/) via a
+# temporary chdir, with the prompt frozen so %~ never paints the virtual cwd.
 #
 # Design: zsh's completion system is used as a read-only oracle. Each new
 # completion runs exactly one capture pass (a zle -C widget with compadd
@@ -128,6 +130,20 @@ _l_list_and_arm() {
   zle expand-or-complete
 }
 
+# Restore the original cwd if the completion is running under a virtual one
+# (set below in _l_complete; no-op otherwise). Must run before any
+# reset-prompt so prompt escapes like %~ expand against the real PWD — the
+# always block alone is too late, as it runs after the prompt was redrawn.
+_l_restore_cwd() {
+  if [[ -n "$_l_restore_pwd" ]]; then
+    builtin cd -q -- "$_l_restore_pwd" 2>/dev/null
+    OLDPWD="$_l_saved_oldpwd"
+    PS1="$_l_saved_ps1"
+    RPROMPT="$_l_saved_rprompt"
+    _l_restore_pwd=""
+  fi
+}
+
 # Main zle widget bound to Tab
 _l_complete() {
   # Repeat Tab with an armed cycle: swap in the next candidate (wrapping
@@ -157,6 +173,39 @@ _l_complete() {
     is_command=1
   fi
 
+  # Current word being completed
+  local current=""
+  if [[ "$LBUFFER" != *" " && ${#tokens} -gt 0 ]]; then
+    current="${tokens[-1]}"
+  fi
+
+  # Complete relative to the virtual cwd any cd-chain earlier on the line
+  # establishes (resolved by the zhl highlighter's parser when it is loaded):
+  # in `cd build && ./<Tab>`, candidates must come from build/, not $PWD. The
+  # temporary chdir spans the capture, candidate resolution, and the picker,
+  # and is always undone before the widget returns.
+  local REPLY _l_restore_pwd="" _l_saved_oldpwd="$OLDPWD"
+  local _l_saved_ps1="$PS1" _l_saved_rprompt="${RPROMPT-}"
+  if (( $+functions[_zhl_vcwd] )); then
+    if _zhl_vcwd "${LBUFFER%"$current"}" 2>/dev/null &&
+       [[ "$REPLY" != "$PWD" && -d "$REPLY" ]]; then
+      if builtin cd -q -- "$REPLY" 2>/dev/null; then
+        _l_restore_pwd="$OLDPWD"
+        # Freeze the prompts as literal strings while chdir'd: zle re-expands
+        # prompts on ordinary redisplays, which would paint %~ escapes with
+        # the virtual cwd (including while the picker is open). Literal %
+        # in the expansion is doubled so re-expansion is a no-op.
+        PS1="${${(%%)PS1}//\%/%%}"
+        [[ -n "$RPROMPT" ]] && RPROMPT="${${(%%)RPROMPT}//\%/%%}"
+      fi
+    fi
+    # The parser also reports whether the word under completion is in command
+    # position; unlike the literal first-word check it sees through
+    # separators, so `cd src && ./<Tab>` counts as completing a command.
+    [[ "$_zhl_end_state" == command ]] && is_command=1 || is_command=0
+  fi
+  {
+
   # Capture candidates from zsh's completion system
   # Save terminal cursor position and buffer state since complete-word
   # redraws the line (destroying syntax highlighting)
@@ -184,10 +233,22 @@ _l_complete() {
     return
   fi
 
-  # Current word being completed
-  local current=""
-  if [[ "$LBUFFER" != *" " && ${#tokens} -gt 0 ]]; then
-    current="${tokens[-1]}"
+  # In command position with a path-prefixed word, compsys's all-files
+  # fallback tag gets flattened into the executable/directory tags it ranks
+  # first (the capture cannot see tag priority); keep only candidates that
+  # can run or be descended into, so `cd src && ./<Tab>` offers executables.
+  if (( is_command )) && [[ "$current" == (./|../|/|'~')* ]]; then
+    local -a _runnable
+    local _rc _rp
+    for _rc in "${candidates[@]}"; do
+      _rp="${_l_captured_prefix}${_rc}"
+      _rp="${_rp/#\~/$HOME}"
+      [[ -x "$_rp" ]] && _runnable+=("$_rc")
+    done
+    if (( ${#_runnable} > 0 && ${#_runnable} < ${#candidates} )); then
+      candidates=("${_runnable[@]}")
+      _l_debug "  runnable filter: (${(j: :)candidates})"
+    fi
   fi
 
   # Take over only for filesystem completions, i.e. when a captured compadd
@@ -206,13 +267,18 @@ _l_complete() {
   if (( ${#candidates} == 1 )); then
     _l_insert_path "${_l_captured_prefix}${candidates[1]}" "$current" "$is_command"
     _l_debug "-> single candidate insert: LBUFFER=[$LBUFFER]"
+    _l_restore_cwd
     zle reset-prompt
     return
   fi
 
-  # Multiple candidates -- resolve to full paths for l -i
+  # Multiple candidates -- resolve to full paths for l -i. Bare command names
+  # resolve via $PATH; a path-prefixed command word (./cl) resolves like any
+  # other path so its typed form survives into the buffer.
   local -a paths rels
-  if (( is_command )); then
+  local -i cmd_names=0
+  (( is_command )) && [[ -z "$_l_captured_prefix" ]] && cmd_names=1
+  if (( cmd_names )); then
     # zsh yields command candidates in $PATH/readdir order; sort by name so the
     # picker lists them alphabetically rather than grouped by $PATH directory.
     for c in "${(@o)candidates}"; do
@@ -244,9 +310,10 @@ _l_complete() {
   # After filtering spurious candidates, a single real path should be inserted
   # directly rather than shown in a one-item picker. (Command position keeps the
   # picker, which inserts the basename of the chosen binary.)
-  if (( ! is_command && ${#paths} == 1 )); then
+  if (( ! cmd_names && ${#paths} == 1 )); then
     _l_insert_path "${rels[1]}" "$current" "$is_command"
     _l_debug "-> single filtered path insert: LBUFFER=[$LBUFFER]"
+    _l_restore_cwd
     zle reset-prompt
     return
   fi
@@ -255,6 +322,7 @@ _l_complete() {
   # In debug mode, don't launch the interactive picker (it would block a
   # headless trace); report the paths it would have shown and stop.
   if [[ -n "$_L_WIDGET_DEBUG" ]]; then
+    _l_restore_cwd
     zle reset-prompt
     return
   fi
@@ -266,7 +334,7 @@ _l_complete() {
   # When completing a command, the candidates are binaries on $PATH; don't gray
   # out any that happen to live in a gitignored directory (-c, --color-all).
   local -a _picker_opts=(-i --tty -d0)
-  (( is_command )) && _picker_opts+=(-c)
+  (( cmd_names )) && _picker_opts+=(-c)
   selected=$(l "${_picker_opts[@]}" "${paths[@]}" </dev/tty 2>/dev/tty)
   # Clear everything from cursor to end of screen, then move to prompt line
   print -n "\033[J\033[A\r\033[K" >/dev/tty
@@ -276,7 +344,7 @@ _l_complete() {
       LBUFFER="${LBUFFER%"$current"}"
     fi
     [[ -n "$LBUFFER" && "$LBUFFER" != *" " ]] && LBUFFER+=" "
-    if (( is_command )); then
+    if (( cmd_names )); then
       LBUFFER+="${selected:t} "
     else
       # l -i echoes an absolute path, which may be a file the user descended
@@ -300,10 +368,24 @@ _l_complete() {
       _qsel="${_qsel/#\\~/~}"
       LBUFFER+="$_qsel"
     fi
+    _l_restore_cwd
     zle reset-prompt
   else
+    _l_restore_cwd
     zle reset-prompt
   fi
+
+  } always {
+    # zle re-expands the prompt on ordinary redisplays, so any pass that ran
+    # chdir'd has painted the virtual cwd into a %~ prompt. Paths that end in
+    # reset-prompt restore first (each site calls _l_restore_cwd), leaving
+    # _l_restore_pwd empty here; if it is still set, this path never
+    # re-rendered — restore and repaint the prompt against the real cwd.
+    if [[ -n "$_l_restore_pwd" ]]; then
+      _l_restore_cwd
+      zle reset-prompt
+    fi
+  }
 }
 
 zle -N _l_complete

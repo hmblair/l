@@ -10,7 +10,7 @@
 #   tools/widget-debug.zsh 'l --ver'
 #
 # Spins up a throwaway interactive zsh (via zpty) that sources this repo's
-# completions/l-widget.zsh with _L_WIDGET_DEBUG enabled, types the input
+# shell/l-widget.zsh with _L_WIDGET_DEBUG enabled, types the input
 # followed by Tab, and prints the widget's decision trace: the compadd calls,
 # the captured candidates/prefix, the branch taken, and the resulting buffer.
 # The interactive picker is skipped in debug mode, so it never blocks.
@@ -24,7 +24,7 @@ if [[ -z "$input" ]]; then
 fi
 local cwd="${2:-$PWD}"
 local repo="${0:A:h:h}"
-local widget="$repo/completions/l-widget.zsh"
+local widget="$repo/shell/l-widget.zsh"
 if [[ ! -f "$widget" ]]; then
   print -u2 "widget not found: $widget"
   return 1 2>/dev/null || exit 1
