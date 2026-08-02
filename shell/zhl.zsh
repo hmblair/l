@@ -47,43 +47,103 @@ if (( ! ${+ZHL_STYLES} )); then
 fi
 
 # Statically expand a word to a filesystem path, or fail if that would require
-# running code. Handles simple quoting, leading ~, and plain $var/${var}
-# expansions of set parameters. REPLY = expanded word on success.
+# running code. A single left-to-right scan models zsh quoting: backslash
+# escapes, single- and double-quoted segments, leading ~, and plain $var/${var}
+# expansions of set parameters (values are inserted literally, as zsh does not
+# re-expand them). Anything that needs evaluation — command substitution,
+# unquoted globs, unset or complex parameters, unclosed quotes — fails rather
+# than guessing. REPLY = expanded word on success.
 _zhl_expand() {
   emulate -L zsh
   setopt localoptions extendedglob
-  local w="$1" name
-  local -i i=0
-  # Fully single-quoted: literal, no further expansion applies.
-  if [[ "$w" == \'*\' && "${w[2,-2]}" != *\'* ]]; then
-    REPLY="${w[2,-2]}"
+  local w="$1"
+  # Fast path: no quoting, escapes, or expansions — the word is literal.
+  if [[ "$w" != *[\\\'\"\`\$\*\?\[]* && "$w" != '~'* ]]; then
+    REPLY="$w"
     return 0
   fi
-  [[ "$w" == \"*\" ]] && w="${w[2,-2]}"
-  # Anything that needs evaluation or globbing is opaque.
-  [[ "$w" == *('$('|\`)* ]] && return 1
-  [[ "$w" == *[\*\?]* || "$w" == *\[*\]* ]] && return 1
+  local out='' rest pre name c
+  local -i j=1 n=${#w} dq=0
+  # ~ expands only unquoted at the start of the word.
   if [[ "$w" == '~'* ]]; then
-    if [[ "$w" == '~' ]]; then w="$HOME"
-    elif [[ "$w" == '~/'* ]]; then w="$HOME${w[2,-1]}"
-    else return 1                      # ~user — not resolved statically
+    if [[ "$w" == '~' ]]; then
+      REPLY="$HOME"
+      return 0
+    elif [[ "$w" == '~/'* ]]; then
+      out="$HOME" j=2
+    else
+      return 1                       # ~user, ~+, ~- — not resolved statically
     fi
   fi
-  while [[ "$w" == *'$'* ]]; do
-    (( ++i > 8 )) && return 1          # value re-introduced '$'; give up
-    if [[ "$w" == (#b)*'${'([A-Za-z_][A-Za-z0-9_]#)'}'* ]]; then
-      name="${match[1]}"
-      (( ${+parameters[$name]} )) || return 1
-      w="${w/\$\{$name\}/${(P)name}}"
-    elif [[ "$w" == (#b)*'$'([A-Za-z_][A-Za-z0-9_]#)* ]]; then
-      name="${match[1]}"
-      (( ${+parameters[$name]} )) || return 1
-      w="${w/\$$name/${(P)name}}"
-    else
-      return 1                         # ${...} form we don't model
-    fi
+  while (( j <= n )); do
+    c="${w[j]}"
+    case "$c" in
+      \\)
+        (( j == n )) && return 1     # trailing backslash: word still in progress
+        if (( dq )) && [[ "${w[j+1]}" != [\\\$\`\"$'\n'] ]]; then
+          out+='\'                   # inside "", backslash is otherwise literal
+          (( j++ ))
+        elif [[ "${w[j+1]}" == $'\n' ]]; then
+          (( j += 2 ))               # escaped newline: line continuation
+        else
+          out+="${w[j+1]}"
+          (( j += 2 ))
+        fi ;;
+      \')
+        if (( dq )); then            # literal inside double quotes
+          out+="'"
+          (( j++ ))
+        else                         # copy the quoted segment verbatim
+          rest="${w[j+1,n]}"
+          pre="${rest%%\'*}"
+          [[ "$pre" == "$rest" ]] && return 1   # unclosed quote
+          out+="$pre"
+          (( j += ${#pre} + 2 ))
+        fi ;;
+      \")
+        (( dq = 1 - dq ))
+        (( j++ )) ;;
+      \$)
+        rest="${w[j+1,n]}"
+        if [[ "$rest" == '{'* ]]; then
+          rest="${rest[2,-1]}"
+          name="${(M)rest##[A-Za-z_][A-Za-z0-9_]#}"
+          [[ -n "$name" && "${rest[${#name}+1]}" == '}' ]] || return 1
+          (( ${+parameters[$name]} )) || return 1
+          out+="${(P)name}"
+          (( j += ${#name} + 3 ))
+        else
+          name="${(M)rest##[A-Za-z_][A-Za-z0-9_]#}"
+          if [[ -n "$name" ]]; then
+            (( ${+parameters[$name]} )) || return 1
+            out+="${(P)name}"
+            (( j += ${#name} + 1 ))
+          elif (( j == n )); then
+            out+='$'                 # trailing $ is literal
+            (( j++ ))
+          else
+            return 1                 # $(...), $'...', ${x:-y}, $?, ...
+          fi
+        fi ;;
+      \`)
+        return 1 ;;
+      \*|\?)
+        (( dq )) || return 1         # unquoted glob — needs evaluation
+        out+="$c"
+        (( j++ )) ;;
+      \[)
+        if (( ! dq )) && [[ "${w[j+1,n]}" == *\]* ]]; then
+          return 1                   # unquoted [...] — glob class
+        fi
+        out+='['
+        (( j++ )) ;;
+      *)
+        out+="$c"
+        (( j++ )) ;;
+    esac
   done
-  REPLY="$w"
+  (( dq )) && return 1               # unclosed double quote
+  REPLY="$out"
   return 0
 }
 
