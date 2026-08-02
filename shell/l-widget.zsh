@@ -42,15 +42,17 @@ _l_capture_complete() {
 
   # Override compadd to capture candidates
   compadd() {
-    # Walk the option portion of the call to extract the hidden prefix (-p)
-    # and whether the matches are filenames (-f, as _path_files passes).
+    # Walk the option portion of the call to extract the hidden prefix (-p),
+    # whether the matches are filenames (-f, as _path_files passes), and
+    # whether the caller pre-quoted the words (-Q, also _path_files: words
+    # arrive as `test\ dir`, quoted for buffer insertion, not as filenames).
     # Options may be clustered (-Qf) and an option's argument may be attached
     # (-Pfoo) or the next word (-J name) — and can itself start with '-'
     # (e.g. -J -default-), so arguments must be skipped, never scanned for
     # flag letters. A lone '-' or '--' ends the options; everything after is a
     # candidate word.
     local _prefix="" _w _c _rest
-    local -i _has_f=0 _i _j
+    local -i _has_f=0 _has_q=0 _i _j
     for (( _i=1; _i<=$#; _i++ )); do
       _w="${argv[$_i]}"
       [[ "$_w" == "-" || "$_w" == "--" || "$_w" != -* ]] && break
@@ -58,6 +60,8 @@ _l_capture_complete() {
         _c="${_w[$_j]}"
         if [[ "$_c" == "f" ]]; then
           _has_f=1
+        elif [[ "$_c" == "Q" ]]; then
+          _has_q=1
         elif [[ "$_c" == [FPSpsiIWdJVXxrRDOAEMo] ]]; then
           # Option letter that takes an argument: attached or the next word.
           _rest="${_w[$((_j+1)),-1]}"
@@ -70,11 +74,15 @@ _l_capture_complete() {
         fi
       done
     done
+    # Capture everything in literal (unquoted) form: existence checks and the
+    # picker need real filenames, and insertion re-quotes with ${(q)...}.
+    (( _has_q )) && _prefix="${(Q)_prefix}"
     [[ -n "$_prefix" ]] && _l_captured_prefix="$_prefix"
 
     # Use builtin compadd with -O to capture candidates into an array
     local -a _matches
     builtin compadd -O _matches "$@"
+    (( _has_q )) && _matches=("${(@Q)_matches}")
     _l_captured_candidates+=("${_matches[@]}")
     (( _has_f && ${#_matches} )) && _l_captured_has_file=1
     if [[ -n "$_L_WIDGET_DEBUG" ]]; then
