@@ -437,7 +437,7 @@ int git_read_ref(const char *repo_path, const char *ref_name, char *hash, size_t
     if (!git_resolve_gitdir(repo_path, gitdir, sizeof(gitdir))) return 0;
 
     /* Try loose ref file first */
-    snprintf(ref_path, sizeof(ref_path), "%s/%s", gitdir, ref_name);
+    path_join(ref_path, sizeof(ref_path), gitdir, ref_name);
     FILE *f = fopen(ref_path, "r");
     if (f) {
         if (fgets(hash, hash_len, f)) {
@@ -449,7 +449,7 @@ int git_read_ref(const char *repo_path, const char *ref_name, char *hash, size_t
     }
 
     /* Fall back to packed-refs */
-    snprintf(ref_path, sizeof(ref_path), "%s/packed-refs", gitdir);
+    path_join(ref_path, sizeof(ref_path), gitdir, "packed-refs");
     f = fopen(ref_path, "r");
     if (!f) return 0;
 
@@ -477,7 +477,7 @@ char *git_get_branch(const char *repo_path) {
     char gitdir[PATH_MAX];
     char head_path[PATH_MAX];
     if (!git_resolve_gitdir(repo_path, gitdir, sizeof(gitdir))) return NULL;
-    snprintf(head_path, sizeof(head_path), "%s/HEAD", gitdir);
+    path_join(head_path, sizeof(head_path), gitdir, "HEAD");
 
     FILE *f = fopen(head_path, "r");
     if (!f) return NULL;
@@ -606,7 +606,7 @@ char *git_get_remote_url(const char *repo_path) {
     char gitdir[PATH_MAX];
     char config_path[PATH_MAX];
     if (!git_resolve_gitdir(repo_path, gitdir, sizeof(gitdir))) return NULL;
-    snprintf(config_path, sizeof(config_path), "%s/config", gitdir);
+    path_join(config_path, sizeof(config_path), gitdir, "config");
 
     FILE *f = fopen(config_path, "r");
     if (!f) return NULL;
