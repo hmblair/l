@@ -254,9 +254,10 @@ static void annotate_git_root(FileEntry *fe) {
  * Returns array of repo paths (canonical, for cache keying) to populate
  * (caller must free the array). Sets is_git_repo_root[i] for each entry and
  * annotates each root with its repo info. Repos nested inside another repo
- * (submodules, vendored checkouts) are annotated but not populated. */
-static char **find_git_repo_roots(FileList *list, int in_git_repo,
-                                   int *is_git_repo_root, size_t *out_count) {
+ * (submodules, vendored checkouts) are populated like any other, so their
+ * rows aggregate the changes inside them. */
+static char **find_git_repo_roots(FileList *list, int *is_git_repo_root,
+                                   size_t *out_count) {
     char **git_repos = NULL;
     size_t count = 0;
 
@@ -267,10 +268,8 @@ static char **find_git_repo_roots(FileList *list, int in_git_repo,
             strcmp(fe->name, ".git") != 0 && path_is_git_root(fe->path)) {
             is_git_repo_root[i] = 1;
             annotate_git_root(fe);
-            if (!in_git_repo) {
-                git_repos = xrealloc(git_repos, (count + 1) * sizeof(char *));
-                git_repos[count++] = fe->abs_path ? fe->abs_path : fe->path;
-            }
+            git_repos = xrealloc(git_repos, (count + 1) * sizeof(char *));
+            git_repos[count++] = fe->abs_path ? fe->abs_path : fe->path;
         }
     }
 
@@ -321,7 +320,7 @@ static int *materialize_children(TreeNode *parent, const TreeBuildOpts *opts,
     int *is_git_repo_root = xcalloc(list.count, sizeof(int));
     size_t git_repo_count = 0;
     char **git_repos = opts->compute.git_status
-        ? find_git_repo_roots(&list, in_git_repo, is_git_repo_root, &git_repo_count)
+        ? find_git_repo_roots(&list, is_git_repo_root, &git_repo_count)
         : NULL;
     if (git_repos) {
         /* Tasks, not a nested parallel region: the tree build runs inside one

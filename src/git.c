@@ -797,7 +797,11 @@ void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_
 
     if (git_repository_open(&repo, repo_path) != 0) return;
 
-    /* Match behavior of: git status --porcelain -uall --ignored=matching */
+    /* Match behavior of:
+     *   git status --porcelain -uall --ignored=matching --ignore-submodules=all
+     * Submodule entries are excluded in both builds: a nested repo's changes
+     * are aggregated from its own populate, so the superproject's single
+     * "submodule modified" entry would only double-report them. */
     opts.show = GIT_STATUS_SHOW_INDEX_AND_WORKDIR;
     opts.flags = GIT_STATUS_OPT_INCLUDE_UNTRACKED |
                  GIT_STATUS_OPT_RECURSE_UNTRACKED_DIRS |
@@ -966,7 +970,7 @@ void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_
      * Use --- separator to distinguish the two outputs */
     if (include_diff_stats) {
         snprintf(cmd, sizeof(cmd),
-                 "git -C '%s' status --porcelain -uall --ignored=matching 2>/dev/null && "
+                 "git -C '%s' status --porcelain -uall --ignored=matching --ignore-submodules=all 2>/dev/null && "
                  "echo '---' && "
                  "git -C '%s' diff --numstat 2>/dev/null && "
                  "echo '---' && "
@@ -974,7 +978,7 @@ void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_
                  escaped, escaped, escaped);
     } else {
         snprintf(cmd, sizeof(cmd),
-                 "git -C '%s' status --porcelain -uall --ignored=matching 2>/dev/null", escaped);
+                 "git -C '%s' status --porcelain -uall --ignored=matching --ignore-submodules=all 2>/dev/null", escaped);
     }
 
     FILE *fp = popen(cmd, "r");
