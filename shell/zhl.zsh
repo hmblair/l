@@ -182,8 +182,12 @@ _zhl_spans() {
 
   # state: command = next word is a command; arg = inside a command's args.
   # pending_cd: saw cd/pushd, waiting for its target argument.
+  # cmd_span: reply index of the most recent command-position span, so a
+  # following '()' can retract the judgment (the word names a new function).
+  # vstack_*: virtual cwds saved at '(' — a subshell's cds end at its ')'.
   local state=command tok key p
-  local -i pending_cd=0 pos=1 start tlen is_string
+  local -i pending_cd=0 pos=1 start tlen is_string cmd_span=0
+  local -a vstack_path vstack_known
   local REPLY
 
   for tok in "${tokens[@]}"; do
@@ -206,7 +210,32 @@ _zhl_spans() {
         if (( pending_cd )); then
           _zhl_vcwd_path="$HOME" _zhl_vcwd_known=1 pending_cd=0
         fi
+        cmd_span=0
         state=command
+        continue ;;
+      '(')
+        # Subshell: its cds are confined to it — save the vcwd for the ')'.
+        if (( pending_cd )); then
+          _zhl_vcwd_path="$HOME" _zhl_vcwd_known=1 pending_cd=0
+        fi
+        vstack_path+=("$_zhl_vcwd_path")
+        vstack_known+=("$_zhl_vcwd_known")
+        cmd_span=0
+        state=command
+        continue ;;
+      ')')
+        if (( pending_cd )); then
+          _zhl_vcwd_path="$HOME" _zhl_vcwd_known=1 pending_cd=0
+        fi
+        # Unmatched ')' (a case pattern's closer) has no vcwd to restore.
+        if (( ${#vstack_path} )); then
+          _zhl_vcwd_path="${vstack_path[-1]}"
+          _zhl_vcwd_known="${vstack_known[-1]}"
+          vstack_path[-1]=()
+          vstack_known[-1]=()
+        fi
+        cmd_span=0
+        state=arg
         continue ;;
     esac
 
@@ -221,6 +250,19 @@ _zhl_spans() {
       continue
     fi
 
+    # 'name ()' defines a function: retract the command judgment on the name
+    # (it need not exist) and expect the body next. At command position the
+    # token is an anonymous function — its body follows the same way.
+    if [[ "$tok" == '()' ]]; then
+      if [[ "$state" == arg ]] && (( cmd_span )); then
+        reply[cmd_span]=()
+      fi
+      cmd_span=0
+      pending_cd=0
+      state=command
+      continue
+    fi
+
     # Quoted words get string styling, but still participate in state
     # tracking below (a quoted cd target must update the virtual cwd).
     is_string=0
@@ -231,6 +273,13 @@ _zhl_spans() {
 
     if [[ "$state" == command ]]; then
       if (( is_string )); then
+        cmd_span=0
+        state=arg
+        continue
+      fi
+      # ((...)) arithmetic: not statically evaluated, left unstyled.
+      if [[ "$tok" == '(('* ]]; then
+        cmd_span=0
         state=arg
         continue
       fi
@@ -258,6 +307,7 @@ _zhl_spans() {
           key=command-unknown
         fi
         reply+=("$start $(( start + tlen )) $key")
+        cmd_span=${#reply}
         state=arg
         continue
       fi
@@ -273,6 +323,7 @@ _zhl_spans() {
         esac
         continue
       fi
+      cmd_span=${#reply}
       [[ "$tok" == (cd|pushd) ]] && pending_cd=1
       state=arg
       continue
