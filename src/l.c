@@ -146,7 +146,7 @@ OPT_HANDLER(opt_path)        { (void)val; (void)label; cfg->req.show_ancestry = 
 OPT_HANDLER(opt_expand)      { (void)val; (void)label; cfg->req.expand_all = 1; }
 OPT_HANDLER(opt_color_all)   { (void)val; (void)label; cfg->disp.color_all = 1; }
 OPT_HANDLER(opt_interactive) { (void)val; (void)label; cfg->req.interactive = 1; }
-OPT_HANDLER(opt_git_only)    { (void)val; (void)label; cfg->req.git_only = 1; cfg->req.show_hidden = 1; }
+OPT_HANDLER(opt_git_only)    { (void)val; (void)label; cfg->req.git_only = 1; }
 OPT_HANDLER(opt_hide_ignored){ (void)val; (void)label; cfg->req.hide_gitignored = 1; }
 OPT_HANDLER(opt_sort_size)   { (void)val; (void)label; cfg->req.sort_by = SORT_SIZE; }
 OPT_HANDLER(opt_sort_time)   { (void)val; (void)label; cfg->req.sort_by = SORT_TIME; }
