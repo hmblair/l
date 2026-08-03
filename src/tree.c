@@ -252,25 +252,22 @@ static void annotate_git_root(FileEntry *fe) {
 
 /* Find git repo roots in a file list and mark them.
  * Returns array of repo paths (canonical, for cache keying) to populate
- * (caller must free the array). Sets is_git_repo_root[i] and is_submodule[i]
- * for each entry, and annotates each root with its repo info. */
+ * (caller must free the array). Sets is_git_repo_root[i] for each entry and
+ * annotates each root with its repo info. Repos nested inside another repo
+ * (submodules, vendored checkouts) are annotated but not populated. */
 static char **find_git_repo_roots(FileList *list, int in_git_repo,
-                                   int *is_git_repo_root, int *is_submodule,
-                                   size_t *out_count) {
+                                   int *is_git_repo_root, size_t *out_count) {
     char **git_repos = NULL;
     size_t count = 0;
 
     for (size_t i = 0; i < list->count; i++) {
         is_git_repo_root[i] = 0;
-        is_submodule[i] = 0;
         FileEntry *fe = &list->entries[i];
         if ((fe->type == FTYPE_DIR || fe->type == FTYPE_SYMLINK_DIR) &&
             strcmp(fe->name, ".git") != 0 && path_is_git_root(fe->path)) {
             is_git_repo_root[i] = 1;
             annotate_git_root(fe);
-            if (in_git_repo) {
-                is_submodule[i] = 1;
-            } else {
+            if (!in_git_repo) {
                 git_repos = xrealloc(git_repos, (count + 1) * sizeof(char *));
                 git_repos[count++] = fe->abs_path ? fe->abs_path : fe->path;
             }
@@ -322,10 +319,9 @@ static int *materialize_children(TreeNode *parent, const TreeBuildOpts *opts,
      * the flags so the git-status-off path (find_git_repo_roots skipped) still
      * threads a defined in_git_repo downward. */
     int *is_git_repo_root = xcalloc(list.count, sizeof(int));
-    int *is_submodule = xcalloc(list.count, sizeof(int));
     size_t git_repo_count = 0;
     char **git_repos = opts->compute.git_status
-        ? find_git_repo_roots(&list, in_git_repo, is_git_repo_root, is_submodule, &git_repo_count)
+        ? find_git_repo_roots(&list, in_git_repo, is_git_repo_root, &git_repo_count)
         : NULL;
     if (git_repos) {
         /* Tasks, not a nested parallel region: the tree build runs inside one
@@ -356,8 +352,7 @@ static int *materialize_children(TreeNode *parent, const TreeBuildOpts *opts,
 
         child->entry.is_ignored = parent_is_ignored ||
                                    (child->entry.git_flags & GITF_IGNORED) ||
-                                   path_name_is_opaque(child->entry.name) ||
-                                   is_submodule[i];
+                                   path_name_is_opaque(child->entry.name);
 
         /* Check if directory has .gitignore with "*" (ignores all contents) */
         if (!child->entry.is_ignored && node_is_directory(child)) {
@@ -375,7 +370,6 @@ static int *materialize_children(TreeNode *parent, const TreeBuildOpts *opts,
         }
     }
 
-    free(is_submodule);
     free(list.entries);
     return is_git_repo_root;
 }
@@ -513,7 +507,12 @@ static void build_tree_children(TreeNode *parent, int depth,
              * .cache) is wasteful and their git status is read from the
              * cache by path. */
             int skip_hidden_dir = !opts->show_hidden && child->entry.name[0] == '.';
-            int recurse = !skip_hidden_dir &&
+            /* Repos nested inside this repo (submodules, vendored checkouts)
+             * render as normal entries but their contents are foreign — skip
+             * them alongside gitignored dirs; -e descends into both. */
+            int skip_nested_repo = in_git_repo && is_git_repo_root[i] &&
+                                   opts->skip_gitignored;
+            int recurse = !skip_hidden_dir && !skip_nested_repo &&
                 !should_skip_dir(child->entry.name, child->entry.is_ignored,
                                  opts->skip_gitignored) &&
                 !(opts->skip_fn && opts->skip_fn(&child->entry, opts->skip_ctx));
