@@ -392,13 +392,52 @@ int git_path_in_ignored(GitCache *cache, const char *path, const char *git_root)
  * Git Branch Functions
  * ============================================================================ */
 
+/* Resolve a repo's git directory into out: .git itself when it is a
+ * directory, or the target of a .git gitlink file otherwise (submodules
+ * store a relative "gitdir:" path, resolved here against the repo;
+ * worktrees an absolute one). Returns 1 on success. */
+static int git_resolve_gitdir(const char *repo_path, char *out, size_t out_size) {
+    char git_path[PATH_MAX];
+    snprintf(git_path, sizeof(git_path), "%s/.git", repo_path);
+
+    struct stat st;
+    if (stat(git_path, &st) != 0) return 0;
+    if (S_ISDIR(st.st_mode)) {
+        snprintf(out, out_size, "%s", git_path);
+        return 1;
+    }
+
+    FILE *f = fopen(git_path, "r");
+    if (!f) return 0;
+    char line[PATH_MAX];
+    int ok = 0;
+    if (fgets(line, sizeof(line), f)) {
+        const char *prefix = "gitdir: ";
+        if (strncmp(line, prefix, strlen(prefix)) == 0) {
+            char *gitdir = line + strlen(prefix);
+            gitdir[strcspn(gitdir, "\r\n")] = '\0';
+            if (gitdir[0] == '/') {
+                snprintf(out, out_size, "%s", gitdir);
+            } else {
+                snprintf(out, out_size, "%s/%s", repo_path, gitdir);
+            }
+            ok = gitdir[0] != '\0';
+        }
+    }
+    fclose(f);
+    return ok;
+}
+
 int git_read_ref(const char *repo_path, const char *ref_name, char *hash, size_t hash_len) {
+    char gitdir[PATH_MAX];
     char ref_path[PATH_MAX];
     char line[256];
     hash[0] = '\0';
 
+    if (!git_resolve_gitdir(repo_path, gitdir, sizeof(gitdir))) return 0;
+
     /* Try loose ref file first */
-    snprintf(ref_path, sizeof(ref_path), "%s/.git/%s", repo_path, ref_name);
+    snprintf(ref_path, sizeof(ref_path), "%s/%s", gitdir, ref_name);
     FILE *f = fopen(ref_path, "r");
     if (f) {
         if (fgets(hash, hash_len, f)) {
@@ -410,7 +449,7 @@ int git_read_ref(const char *repo_path, const char *ref_name, char *hash, size_t
     }
 
     /* Fall back to packed-refs */
-    snprintf(ref_path, sizeof(ref_path), "%s/.git/packed-refs", repo_path);
+    snprintf(ref_path, sizeof(ref_path), "%s/packed-refs", gitdir);
     f = fopen(ref_path, "r");
     if (!f) return 0;
 
@@ -435,37 +474,10 @@ int git_read_ref(const char *repo_path, const char *ref_name, char *hash, size_t
 }
 
 char *git_get_branch(const char *repo_path) {
-    char git_path[PATH_MAX];
+    char gitdir[PATH_MAX];
     char head_path[PATH_MAX];
-    snprintf(git_path, sizeof(git_path), "%s/.git", repo_path);
-
-    /* Check if .git is a file (worktree) or directory (normal repo) */
-    struct stat st;
-    if (stat(git_path, &st) != 0) return NULL;
-
-    if (S_ISREG(st.st_mode)) {
-        /* Worktree: .git is a file containing "gitdir: /path/to/git/dir" */
-        FILE *gf = fopen(git_path, "r");
-        if (!gf) return NULL;
-
-        char gitdir_buf[PATH_MAX];
-        char *gitdir = NULL;
-        if (fgets(gitdir_buf, sizeof(gitdir_buf), gf)) {
-            const char *prefix = "gitdir: ";
-            if (strncmp(gitdir_buf, prefix, strlen(prefix)) == 0) {
-                gitdir = gitdir_buf + strlen(prefix);
-                size_t len = strlen(gitdir);
-                if (len > 0 && gitdir[len - 1] == '\n') gitdir[len - 1] = '\0';
-            }
-        }
-        fclose(gf);
-        if (!gitdir) return NULL;
-
-        snprintf(head_path, sizeof(head_path), "%s/HEAD", gitdir);
-    } else {
-        /* Normal repo: .git is a directory */
-        snprintf(head_path, sizeof(head_path), "%s/.git/HEAD", repo_path);
-    }
+    if (!git_resolve_gitdir(repo_path, gitdir, sizeof(gitdir))) return NULL;
+    snprintf(head_path, sizeof(head_path), "%s/HEAD", gitdir);
 
     FILE *f = fopen(head_path, "r");
     if (!f) return NULL;
@@ -591,8 +603,10 @@ char *git_get_latest_tag(const char *repo_path) {
 #endif /* !HAVE_LIBGIT2 */
 
 char *git_get_remote_url(const char *repo_path) {
+    char gitdir[PATH_MAX];
     char config_path[PATH_MAX];
-    snprintf(config_path, sizeof(config_path), "%s/.git/config", repo_path);
+    if (!git_resolve_gitdir(repo_path, gitdir, sizeof(gitdir))) return NULL;
+    snprintf(config_path, sizeof(config_path), "%s/config", gitdir);
 
     FILE *f = fopen(config_path, "r");
     if (!f) return NULL;
