@@ -712,21 +712,28 @@ char *select_run(TreeNode ***trees_ref, int tree_count, char *const *dirs,
                     snap_cursor(&state, files_only);
                     render_picker(&state, &render_ctx, files_only);
                 } else {
+                    /* Open without quitting: hand the terminal to the opener
+                     * (an editor needs it), then take it back and repaint so
+                     * a review pass can move on to the next file. */
                     printf("\r\033[K\n");
+                    fflush(stdout);
                     term_disable_raw();
 
                     open_selected(current->entry.path);
 
-                    /* Restore original stdout */
-                    if (saved_stdout_fd >= 0) {
-                        fflush(stdout);
-                        dup2(saved_stdout_fd, STDOUT_FILENO);
-                        close(saved_stdout_fd);
-                        saved_stdout_fd = -1;
+                    term_enable_raw();
+                    get_terminal_size(&state.term_rows);
+                    render_ctx.term_width = get_terminal_width();
+                    /* The frame is still on screen: altscreen editors restore
+                     * it along with the cursor (one line below the status
+                     * line), and GUI handlers never touched it. Move back
+                     * over it, erase down, and render fresh from the top. */
+                    if (state.visible_lines > 0) {
+                        printf("\033[%dA", state.visible_lines);
                     }
-
-                    view_free(state.view);
-                    return NULL;
+                    printf("\r\033[J");
+                    state.first_render = 1;
+                    render_picker(&state, &render_ctx, files_only);
                 }
                 break;
 

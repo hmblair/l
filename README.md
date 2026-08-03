@@ -107,7 +107,7 @@ Use `-i` to enter interactive selection mode:
 |-----|--------|
 | `j/k` or `↑/↓` | Navigate up/down |
 | `h/l` or `←/→` | Collapse/expand directories |
-| `o` | Open file or toggle directory |
+| `o` | Open file (picker stays open) or toggle directory |
 | `f` | Toggle files-only navigation |
 | `/` | Filter entries by name (type to narrow, `Esc` to cancel) |
 | `r` | Reload the tree from scratch (like reopening the picker; cursor is kept) |
