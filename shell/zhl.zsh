@@ -11,7 +11,10 @@
 # widget uses to complete relative to cd-chains.
 #
 # The parser is static analysis only — it never executes any part of the
-# buffer. It tracks a "virtual cwd" through cd/pushd so that in a chain like
+# buffer. The single outside lookup is read-only: resolved paths are tested
+# against git check-ignore (memoized, one batched fork per unseen parent
+# directory) so gitignored targets render grey, as they do in l.
+# It tracks a "virtual cwd" through cd/pushd so that in a chain like
 # `cd build && ./run`, ./run is validated against build/, not $PWD. Targets it
 # cannot resolve statically (command substitutions, unknown expansions) poison
 # the virtual cwd to "unknown", after which cwd-dependent words are styled as
@@ -41,10 +44,15 @@ if (( ! ${+ZHL_STYLES} )); then
     path             ''
     path-dir         fg=blue
     path-missing     fg=red
+    path-ignored     fg=8
+    path-dir-ignored fg=8
     string           fg=yellow
     comment          fg=8
   )
 fi
+
+# Session-wide memo of git check-ignore results, keyed by absolute path.
+typeset -gA _zhl_ignored
 
 # Statically expand a word to a filesystem path, or fail if that would require
 # running code. A single left-to-right scan models zsh quoting: backslash
@@ -147,6 +155,36 @@ _zhl_expand() {
   return 0
 }
 
+# Grey out gitignored paths: rewrite the path/path-dir spans recorded by
+# _zhl_spans (whose pend_idx/pend_path/reply locals are read via dynamic
+# scope) to their -ignored keys when git reports the target ignored. The one
+# non-static check in the parser: unseen paths cost one read-only git fork
+# per unique parent directory (grouping by parent keeps each query inside a
+# single repo; outside any repo git fails fast and the result caches as
+# not-ignored). Memoized in _zhl_ignored, so a path is asked about once per
+# session. Styling both -ignored keys empty disables the git calls entirely.
+_zhl_mark_ignored() {
+  (( ${#pend_idx} && ${+commands[git]} )) || return 0
+  [[ -n "${ZHL_STYLES[path-ignored]}${ZHL_STYLES[path-dir-ignored]}" ]] || return 0
+  local -A grouped
+  local p d out
+  local -i i
+  for p in "${pend_path[@]}"; do
+    (( ${+_zhl_ignored[$p]} )) || grouped[${p:h}]+="${p}"$'\0'
+  done
+  for d in "${(k)grouped[@]}"; do
+    # -z output echoes each ignored path verbatim, NUL-separated. The
+    # herestring's appended newline reads as one junk relative path; harmless.
+    out="$(command git -C "$d" check-ignore -z --stdin <<< "${grouped[$d]}" 2>/dev/null)"
+    for p in ${(0)grouped[$d]}; do _zhl_ignored[$p]=0; done
+    for p in ${(0)out}; do _zhl_ignored[$p]=1; done
+  done
+  for (( i=1; i <= ${#pend_idx}; i++ )); do
+    (( ${_zhl_ignored[${pend_path[$i]}]} )) && reply[$pend_idx[$i]]+="-ignored"
+  done
+  return 0
+}
+
 # Classify a word in command position via the zsh/parameter tables (no forks).
 _zhl_command_kind() {
   local w="$1"
@@ -185,9 +223,11 @@ _zhl_spans() {
   # cmd_span: reply index of the most recent command-position span, so a
   # following '()' can retract the judgment (the word names a new function).
   # vstack_*: virtual cwds saved at '(' — a subshell's cds end at its ')'.
+  # pend_*: path spans awaiting the gitignore pass (_zhl_mark_ignored), as
+  # parallel arrays of reply index and resolved absolute path.
   local state=command tok key p
   local -i pending_cd=0 pos=1 start tlen is_string cmd_span=0
-  local -a vstack_path vstack_known
+  local -a vstack_path vstack_known pend_idx pend_path
   local REPLY
 
   for tok in "${tokens[@]}"; do
@@ -199,6 +239,7 @@ _zhl_spans() {
       # Style a trailing in-progress string, then stop rather than guess.
       [[ "$tok" == [\'\"]* || "$tok" == '$'\'* ]] && reply+=("$(( pos - 1 )) $len string")
       _zhl_end_state="$state"
+      _zhl_mark_ignored
       return 0
     fi
     start=$(( pos - 1 ))
@@ -242,6 +283,7 @@ _zhl_spans() {
     if [[ "$tok" == '#'* ]]; then
       reply+=("$start $len comment")
       _zhl_end_state="$state"
+      _zhl_mark_ignored
       return 0
     fi
 
@@ -356,7 +398,10 @@ _zhl_spans() {
         p="${p:A}"
         if [[ -d "$p" ]]; then
           _zhl_vcwd_path="$p" _zhl_vcwd_known=1  # the cd will succeed; follow it
-          (( is_string )) || reply+=("$start $(( start + tlen )) path-dir")
+          if (( ! is_string )); then
+            reply+=("$start $(( start + tlen )) path-dir")
+            pend_idx+=(${#reply}) pend_path+=("$p")
+          fi
         else
           # The cd will fail: vcwd is unchanged for `;`-chains, and nothing
           # after runs in `&&`-chains — either way keep the current vcwd.
@@ -382,12 +427,15 @@ _zhl_spans() {
       p="${p:A}"
       if [[ -d "$p" ]]; then
         reply+=("$start $(( start + tlen )) path-dir")
+        pend_idx+=(${#reply}) pend_path+=("$p")
       elif [[ -e "$p" ]]; then
         reply+=("$start $(( start + tlen )) path")
+        pend_idx+=(${#reply}) pend_path+=("$p")
       fi
     fi
   done
   _zhl_end_state="$state"
+  _zhl_mark_ignored
   return 0
 }
 
