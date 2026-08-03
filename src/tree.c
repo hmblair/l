@@ -329,7 +329,7 @@ static int *materialize_children(TreeNode *parent, const TreeBuildOpts *opts,
         for (size_t i = 0; i < git_repo_count; i++) {
             const char *repo = git_repos[i];
             #pragma omp task firstprivate(repo)
-            git_populate_repo(git, repo, opts->compute.git_diff);
+            git_populate_repo(git, repo, opts->compute.git_diff, in_git_repo);
         }
         #pragma omp taskwait
         free(git_repos);
@@ -563,7 +563,7 @@ TreeNode *build_tree(const char *path, const TreeBuildOpts *opts,
     char git_root[PATH_MAX];
     int in_git_repo = git_find_root(abs_path, git_root, sizeof(git_root));
     if (in_git_repo && opts->compute.git_status) {
-        git_populate_repo(git, git_root, opts->compute.git_diff);
+        git_populate_repo(git, git_root, opts->compute.git_diff, 0);
     }
 
     TreeNode *root = xmalloc(sizeof(TreeNode));

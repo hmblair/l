@@ -114,7 +114,11 @@ int git_find_root(const char *path, char *root, size_t root_len);
 
 /* Populate cache with all file statuses from a repository.
  * If include_diff_stats is true, also populate lines added/removed. */
-void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_stats);
+/* nested: the repo was discovered inside another repo's listing — its
+ * populate reports on the superproject's behalf and honors the declared
+ * submodule.<name>.ignore policy (untracked skipped, dirty/all not
+ * populated at all). Pass 0 when the repo is the listing's own root. */
+void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_stats, int nested);
 
 /* Get aggregated git status for all files under a directory (O(1) lookup of
  * the aggregate built at populate time; zero summary if none) */

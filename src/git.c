@@ -428,6 +428,98 @@ static int git_resolve_gitdir(const char *repo_path, char *out, size_t out_size)
     return ok;
 }
 
+/* Superproject reporting policy for a submodule (submodule.<name>.ignore). */
+typedef enum {
+    SUBMODULE_IGNORE_NONE = 0,
+    SUBMODULE_IGNORE_UNTRACKED,
+    SUBMODULE_IGNORE_DIRTY,
+    SUBMODULE_IGNORE_ALL,
+} SubmoduleIgnore;
+
+/* Scan a git-config-style file for [submodule "name"]'s ignore key. Returns 1
+ * and sets *out when present with a recognized value. As in git, a later
+ * occurrence wins within one file. */
+static int config_submodule_ignore(const char *path, const char *name,
+                                   SubmoduleIgnore *out) {
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+
+    const char *pre = "[submodule \"";
+    size_t pre_len = strlen(pre);
+    size_t name_len = strlen(name);
+
+    char line[1024];
+    int in_section = 0, found = 0;
+    while (fgets(line, sizeof(line), f)) {
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '[') {
+            in_section = strncmp(p, pre, pre_len) == 0 &&
+                         strncmp(p + pre_len, name, name_len) == 0 &&
+                         p[pre_len + name_len] == '"' &&
+                         p[pre_len + name_len + 1] == ']';
+            continue;
+        }
+        if (!in_section || strncmp(p, "ignore", 6) != 0) continue;
+        p += 6;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p != '=') continue;
+        p++;
+        while (*p == ' ' || *p == '\t') p++;
+        char *end = p + strlen(p);
+        while (end > p && (end[-1] == '\n' || end[-1] == '\r' ||
+                           end[-1] == ' ' || end[-1] == '\t')) *--end = '\0';
+        if (strcmp(p, "untracked") == 0)  { *out = SUBMODULE_IGNORE_UNTRACKED; found = 1; }
+        else if (strcmp(p, "dirty") == 0) { *out = SUBMODULE_IGNORE_DIRTY;     found = 1; }
+        else if (strcmp(p, "all") == 0)   { *out = SUBMODULE_IGNORE_ALL;       found = 1; }
+        else if (strcmp(p, "none") == 0)  { *out = SUBMODULE_IGNORE_NONE;      found = 1; }
+    }
+    fclose(f);
+    return found;
+}
+
+/* The superproject's declared policy for a submodule checkout. The gitlink
+ * names both parties — it points at <superproject git dir>/modules/<name> —
+ * so read submodule.<name>.ignore from the superproject's config, falling
+ * back to its .gitmodules, matching git's precedence. Plain nested checkouts
+ * (.git is a directory) have no superproject and report NONE. */
+static SubmoduleIgnore submodule_ignore_policy(const char *repo_path) {
+    char git_path[PATH_MAX];
+    path_join(git_path, sizeof(git_path), repo_path, ".git");
+    struct stat st;
+    if (stat(git_path, &st) != 0 || !S_ISREG(st.st_mode))
+        return SUBMODULE_IGNORE_NONE;
+
+    char gitdir[PATH_MAX];
+    if (!git_resolve_gitdir(repo_path, gitdir, sizeof(gitdir)))
+        return SUBMODULE_IGNORE_NONE;
+
+    /* Split at the last "/modules/": the prefix is the superproject's git
+     * dir (nested submodules chain their modules dirs, so the last split is
+     * the immediate superproject), the suffix the submodule name. */
+    char *m = NULL;
+    for (char *q = strstr(gitdir, "/modules/"); q; q = strstr(q + 1, "/modules/"))
+        m = q;
+    if (!m) return SUBMODULE_IGNORE_NONE;
+    *m = '\0';
+    const char *name = m + strlen("/modules/");
+
+    SubmoduleIgnore ign;
+    char file[PATH_MAX];
+    path_join(file, sizeof(file), gitdir, "config");
+    if (config_submodule_ignore(file, name, &ign)) return ign;
+
+    /* .gitmodules lives in the superproject worktree, derivable in the
+     * common case where the git dir is <worktree>/.git. */
+    size_t glen = strlen(gitdir);
+    if (glen > 5 && strcmp(gitdir + glen - 5, "/.git") == 0) {
+        gitdir[glen - 5] = '\0';
+        path_join(file, sizeof(file), gitdir, ".gitmodules");
+        if (config_submodule_ignore(file, name, &ign)) return ign;
+    }
+    return SUBMODULE_IGNORE_NONE;
+}
+
 int git_read_ref(const char *repo_path, const char *ref_name, char *hash, size_t hash_len) {
     char gitdir[PATH_MAX];
     char ref_path[PATH_MAX];
@@ -787,7 +879,18 @@ static void git_populate_diff_stats_shell(GitCache *cache, const char *repo_path
     pclose(fp);
 }
 
-void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_stats) {
+void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_stats, int nested) {
+    /* A nested populate reports on the superproject's behalf, so honor its
+     * declared submodule.<name>.ignore policy the way git status does. */
+    int skip_untracked = 0;
+    if (nested) {
+        switch (submodule_ignore_policy(repo_path)) {
+            case SUBMODULE_IGNORE_ALL:
+            case SUBMODULE_IGNORE_DIRTY:     return;
+            case SUBMODULE_IGNORE_UNTRACKED: skip_untracked = 1; break;
+            case SUBMODULE_IGNORE_NONE:      break;
+        }
+    }
     git_cache_register_root(cache, repo_path);
 
     git_repository *repo = NULL;
@@ -803,10 +906,12 @@ void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_
      * are aggregated from its own populate, so the superproject's single
      * "submodule modified" entry would only double-report them. */
     opts.show = GIT_STATUS_SHOW_INDEX_AND_WORKDIR;
-    opts.flags = GIT_STATUS_OPT_INCLUDE_UNTRACKED |
-                 GIT_STATUS_OPT_RECURSE_UNTRACKED_DIRS |
-                 GIT_STATUS_OPT_INCLUDE_IGNORED |
+    opts.flags = GIT_STATUS_OPT_INCLUDE_IGNORED |
                  GIT_STATUS_OPT_EXCLUDE_SUBMODULES;
+    if (!skip_untracked) {
+        opts.flags |= GIT_STATUS_OPT_INCLUDE_UNTRACKED |
+                      GIT_STATUS_OPT_RECURSE_UNTRACKED_DIRS;
+    }
 
     if (git_status_list_new(&status_list, repo, &opts) != 0) {
         git_repository_free(repo);
@@ -958,7 +1063,18 @@ int git_find_root(const char *path, char *root, size_t root_len) {
     return found;
 }
 
-void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_stats) {
+void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_stats, int nested) {
+    /* A nested populate reports on the superproject's behalf, so honor its
+     * declared submodule.<name>.ignore policy the way git status does. */
+    const char *untracked_opt = "-uall";
+    if (nested) {
+        switch (submodule_ignore_policy(repo_path)) {
+            case SUBMODULE_IGNORE_ALL:
+            case SUBMODULE_IGNORE_DIRTY:     return;
+            case SUBMODULE_IGNORE_UNTRACKED: untracked_opt = "-uno"; break;
+            case SUBMODULE_IGNORE_NONE:      break;
+        }
+    }
     git_cache_register_root(cache, repo_path);
 
     char *escaped = shell_escape(repo_path);
@@ -970,15 +1086,16 @@ void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_
      * Use --- separator to distinguish the two outputs */
     if (include_diff_stats) {
         snprintf(cmd, sizeof(cmd),
-                 "git -C '%s' status --porcelain -uall --ignored=matching --ignore-submodules=all 2>/dev/null && "
+                 "git -C '%s' status --porcelain %s --ignored=matching --ignore-submodules=all 2>/dev/null && "
                  "echo '---' && "
                  "git -C '%s' diff --numstat 2>/dev/null && "
                  "echo '---' && "
                  "git -C '%s' diff --cached --numstat 2>/dev/null",
-                 escaped, escaped, escaped);
+                 escaped, untracked_opt, escaped, escaped);
     } else {
         snprintf(cmd, sizeof(cmd),
-                 "git -C '%s' status --porcelain -uall --ignored=matching --ignore-submodules=all 2>/dev/null", escaped);
+                 "git -C '%s' status --porcelain %s --ignored=matching --ignore-submodules=all 2>/dev/null",
+                 escaped, untracked_opt);
     }
 
     FILE *fp = popen(cmd, "r");
