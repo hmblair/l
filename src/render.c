@@ -231,7 +231,8 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, const PrintCo
         EMIT(line, pos, ENTRY_BUF_SIZE, "%s", git_ind);
     }
 
-    const char *color = (fe->type == FTYPE_DIR && fe->size < 0) ? CLR(ctx->cfg, COLOR_RED) :
+    const char *color = fe->is_ghost ? CLR(ctx->cfg, COLOR_GREY) :
+                        (fe->type == FTYPE_DIR && fe->size < 0) ? CLR(ctx->cfg, COLOR_RED) :
                         get_file_color(fe->type, fe->is_ignored, ctx->cfg->disp.is_tty, ctx->cfg->disp.color_all);
     const char *style = is_hidden ? CLR(ctx->cfg, STYLE_ITALIC) : "";
 

@@ -7,6 +7,7 @@ Enhanced directory listing with tree view, icons, and git integration.
 - Tree view with Unicode box-drawing characters
 - Nerd Font icons for files, directories, and git status
 - Git integration (branch, modified/untracked indicators, diff stats, clickable remote URL)
+- Ghost rows for git-deleted files and directories (greyed entries with their removed line counts)
 - Interactive selection mode with vim-like navigation
 - Background daemon for caching directory sizes
 - Long format with size, line count, and modification time

@@ -26,6 +26,10 @@ static void col_format_lines(const FileEntry *fe, const Icons *icons, char *buf,
 
 static void col_format_time(const FileEntry *fe, const Icons *icons, char *buf, size_t len) {
     (void)icons;
+    if (fe->is_ghost) {
+        snprintf(buf, len, "-");
+        return;
+    }
     format_relative_time(fe->mtime, buf, len);
 }
 

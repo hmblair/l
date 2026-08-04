@@ -1288,6 +1288,9 @@ static void type_stats_from_tree_recursive(TypeStats *stats, const TreeNode *nod
     /* Skip ignored files (.git, gitignored, etc.) */
     if (fe->is_ignored) return;
 
+    /* Ghost entries have no content to attribute */
+    if (fe->is_ghost) return;
+
     /* Process files */
     if (fe->type == FTYPE_FILE || fe->type == FTYPE_EXEC ||
         fe->type == FTYPE_SYMLINK || fe->type == FTYPE_SYMLINK_EXEC) {

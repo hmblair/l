@@ -277,6 +277,97 @@ static char **find_git_repo_roots(FileList *list, int *is_git_repo_root,
     return git_repos;
 }
 
+/* ============================================================================
+ * Ghost Entries - synthesized rows for git-deleted paths
+ * ============================================================================ */
+
+typedef struct {
+    const char *parent;      /* Canonical parent directory */
+    size_t parent_len;
+    char **paths;            /* Deleted descendant paths (owned) */
+    size_t count;
+    size_t cap;
+} GhostCollect;
+
+static void ghost_collect_cb(const char *path, unsigned flags,
+                             int lines_added, int lines_removed, void *ud) {
+    GhostCollect *gc = ud;
+    (void)lines_added; (void)lines_removed;
+    if (!(flags & (GITF_WT_DELETED | GITF_STAGED_DELETED))) return;
+    if (strncmp(path, gc->parent, gc->parent_len) != 0 ||
+        path[gc->parent_len] != '/') return;
+    if (gc->count == gc->cap) {
+        gc->cap = gc->cap ? gc->cap * 2 : 8;
+        gc->paths = xrealloc(gc->paths, gc->cap * sizeof(char *));
+    }
+    gc->paths[gc->count++] = xstrdup(path);
+}
+
+static int file_list_contains_name(const FileList *list, const char *name,
+                                   size_t name_len) {
+    for (size_t i = 0; i < list->count; i++) {
+        if (strncmp(list->entries[i].name, name, name_len) == 0 &&
+            list->entries[i].name[name_len] == '\0') return 1;
+    }
+    return 0;
+}
+
+/* Append a ghost entry. Only identity and type are real; every metadata field
+ * keeps its "not computed" value so the columns render placeholders. */
+static void ghost_entry_add(FileList *list, const char *parent_path,
+                            const char *name, size_t name_len, int is_dir) {
+    FileEntry fe;
+    memset(&fe, 0, sizeof(fe));
+    size_t plen = strlen(parent_path);
+    fe.path = xmalloc(plen + 1 + name_len + 1);
+    memcpy(fe.path, parent_path, plen);
+    fe.path[plen] = '/';
+    memcpy(fe.path + plen + 1, name, name_len);
+    fe.path[plen + 1 + name_len] = '\0';
+    fe.name = fe.path + plen + 1;
+    fe.type = is_dir ? FTYPE_DIR : FTYPE_FILE;
+    fe.is_ghost = 1;
+    fe.size = -1;
+    fe.line_count = -1;
+    fe.word_count = -1;
+    fe.file_count = -1;
+    file_list_add(list, &fe);
+}
+
+/* Inject ghost children for git-deleted paths under parent that the scan
+ * could not see: a deleted file becomes a ghost row, and a fully deleted
+ * directory becomes a ghost directory whose own materialize (the is_ghost
+ * branch there) rebuilds the next level the same way. Runs before canonical
+ * paths are derived and repos discovered, so ghosts flow through the same
+ * annotation pipeline as scanned entries. Deleted paths whose first component
+ * names a scanned entry are skipped — recursion into the real directory
+ * injects them at their own level (a deleted path can also collide with a
+ * recreated file of the same name; the row then shows the live file). */
+static void inject_ghost_children(TreeNode *parent, FileList *list,
+                                  GitCache *git) {
+    const char *pabs = parent->entry.abs_path ? parent->entry.abs_path
+                                              : parent->entry.path;
+    GhostCollect gc = { .parent = pabs, .parent_len = strlen(pabs) };
+    git_cache_foreach_change(git, ghost_collect_cb, &gc);
+
+    for (size_t i = 0; i < gc.count; i++) {
+        const char *rest = gc.paths[i] + gc.parent_len + 1;
+        const char *slash = strchr(rest, '/');
+        size_t name_len = slash ? (size_t)(slash - rest) : strlen(rest);
+        if (!file_list_contains_name(list, rest, name_len)) {
+            ghost_entry_add(list, parent->entry.path, rest, name_len,
+                            slash != NULL);
+        }
+        free(gc.paths[i]);
+    }
+    free(gc.paths);
+
+    /* Keep the read_directory name order with ghosts interleaved. */
+    if (gc.count > 0) {
+        qsort(list->entries, list->count, sizeof(FileEntry), entry_cmp_name);
+    }
+}
+
 /* Materialize parent's immediate children from the filesystem: read the
  * directory, populate any nested git repos it directly contains, and create and
  * git-annotate each child node. One level only — build_tree_children drives the
@@ -290,13 +381,24 @@ static char **find_git_repo_roots(FileList *list, int *is_git_repo_root,
 static int *materialize_children(TreeNode *parent, const TreeBuildOpts *opts,
                                  GitCache *git, int in_git_repo,
                                  int parent_is_ignored) {
-    if (access(parent->entry.path, R_OK) != 0) return NULL;
+    /* A ghost directory has nothing on disk to read: its children are
+     * entirely ghosts, injected from the git cache below. */
+    int ghost_parent = parent->entry.is_ghost;
+    if (!ghost_parent && access(parent->entry.path, R_OK) != 0) return NULL;
     parent->was_expanded = 1;
     parent->ui_expanded = 1;
 
     FileList list;
     file_list_init(&list);
-    if (read_directory(parent->entry.path, &list, opts) != 0 || list.count == 0) {
+    if (!ghost_parent && read_directory(parent->entry.path, &list, opts) != 0) {
+        file_list_free(&list);
+        return NULL;
+    }
+
+    if (opts->compute.git_status) {
+        inject_ghost_children(parent, &list, git);
+    }
+    if (list.count == 0) {
         file_list_free(&list);
         return NULL;
     }
@@ -343,7 +445,8 @@ static int *materialize_children(TreeNode *parent, const TreeBuildOpts *opts,
         memset(child, 0, sizeof(TreeNode));
         child->entry = list.entries[i];
         /* Mark mount boundaries (different filesystem than parent) */
-        child->entry.is_mount_point = (child->entry.dev != parent->entry.dev);
+        child->entry.is_mount_point = !child->entry.is_ghost &&
+                                      (child->entry.dev != parent->entry.dev);
 
         if (opts->compute.git_status) {
             apply_git_status(&child->entry, git, opts->compute.git_diff);
@@ -391,6 +494,7 @@ static void compute_dir_stats_frontier(FileEntry *fe, const ComputeOpts *c) {
  * (opaque ones have -1 counts and are excluded), and devices/sockets/fifos
  * are not counted. */
 static void entry_scan_contribution(const FileEntry *fe, off_t *size, long *count) {
+    if (fe->is_ghost) return;  /* nothing on disk to account for */
     switch (fe->type) {
         case FTYPE_SYMLINK:
         case FTYPE_SYMLINK_DIR:
@@ -461,6 +565,7 @@ static void dir_stats_from_children(TreeNode *dir, const ComputeOpts *c) {
 /* A recursed directory's stats once its subtree is complete: bottom-up sum
  * when it materialized, scanner fallback when it turned out unreadable. */
 static void finalize_dir_stats(TreeNode *dir, const ComputeOpts *c) {
+    if (dir->entry.is_ghost) return;  /* keep the -1 "not computed" defaults */
     if (dir->was_expanded) {
         dir_stats_from_children(dir, c);
     } else {
@@ -490,7 +595,7 @@ static void build_tree_children(TreeNode *parent, int depth,
     if (eager_stats) {
         for (size_t i = 0; i < parent->child_count; i++) {
             TreeNode *child = &parent->children[i];
-            if (!node_is_directory(child)) continue;
+            if (!node_is_directory(child) || child->entry.is_ghost) continue;
             #pragma omp task firstprivate(child)
             compute_dir_stats_frontier(&child->entry, c);
         }
@@ -527,7 +632,7 @@ static void build_tree_children(TreeNode *parent, int depth,
                         finalize_dir_stats(child, c);
                     }
                 }
-            } else if (!eager_stats && want_dir_stats) {
+            } else if (!eager_stats && want_dir_stats && !child->entry.is_ghost) {
                 #pragma omp task firstprivate(child)
                 compute_dir_stats_frontier(&child->entry, c);
             }
@@ -536,7 +641,7 @@ static void build_tree_children(TreeNode *parent, int depth,
                            child->entry.type == FTYPE_EXEC ||
                            child->entry.type == FTYPE_SYMLINK ||
                            child->entry.type == FTYPE_SYMLINK_EXEC);
-            if (is_file) {
+            if (is_file && !child->entry.is_ghost) {
                 #pragma omp task firstprivate(child)
                 fileinfo_compute_content(&child->entry, c);
             }
@@ -651,6 +756,7 @@ void tree_expand_node(TreeNode *node, const TreeBuildOpts *opts,
     if (!is_virtual && (c->sizes || c->file_counts || c->line_counts || c->media_info)) {
         #pragma omp parallel for schedule(dynamic)
         for (size_t i = 0; i < node->child_count; i++) {
+            if (node->children[i].entry.is_ghost) continue;
             file_entry_compute(&node->children[i].entry, c, is_virtual);
         }
     }

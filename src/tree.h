@@ -69,6 +69,12 @@ typedef struct FileEntry {
 
     /* --- Git file status --- */
     int is_ignored;              /* In .gitignore */
+    int is_ghost;                /* Synthesized row for a git-deleted path that
+                                  * no longer exists on disk. Carries no
+                                  * filesystem metadata (size/lines/time render
+                                  * as placeholders) and is excluded from every
+                                  * stats roll-up; git flags and diff stats come
+                                  * from the cache like any scanned entry. */
     int is_git_root;             /* Is a git repository root */
     unsigned git_flags;          /* Normalized status bits (GITF_*) */
     int diff_added;              /* Lines added */
