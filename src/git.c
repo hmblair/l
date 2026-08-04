@@ -867,6 +867,93 @@ static void git_populate_untracked_diff_stats(GitCache *cache, const char *repo_
     free(paths);
 }
 
+int git_base_resolves(const char *repo_path, const char *base) {
+    char *esc_repo = shell_escape(repo_path);
+    char *esc_base = shell_escape(base);
+    int ok = 0;
+    if (esc_repo && esc_base) {
+        char cmd[L_SHELL_CMD_BUF_SIZE];
+        snprintf(cmd, sizeof(cmd),
+                 "git -C '%s' rev-parse --verify --quiet '%s^{commit}' 2>/dev/null",
+                 esc_repo, esc_base);
+        FILE *fp = popen(cmd, "r");
+        if (fp) {
+            char buf[64];
+            ok = fgets(buf, sizeof(buf), fp) != NULL;
+            pclose(fp);
+        }
+    }
+    free(esc_repo);
+    free(esc_base);
+    return ok;
+}
+
+/* Overlay changes relative to a base commit. git status only sees
+ * HEAD-relative state, so anything committed since base would be invisible;
+ * diff --name-status vs base fills those in. Entries the status pass already
+ * added keep their richer two-char code (git_cache_add skips duplicates), so
+ * the overlay only contributes paths that are clean relative to HEAD. */
+static void git_populate_base_changes(GitCache *cache, const char *repo_path, const char *base) {
+    char *esc_repo = shell_escape(repo_path);
+    char *esc_base = shell_escape(base);
+    if (esc_repo && esc_base) {
+        char cmd[L_SHELL_CMD_BUF_SIZE];
+        snprintf(cmd, sizeof(cmd),
+                 "git -C '%s' diff --name-status --ignore-submodules=all '%s' 2>/dev/null",
+                 esc_repo, esc_base);
+        FILE *fp = popen(cmd, "r");
+        if (fp) {
+            char line[PATH_MAX + 16];
+            while (fgets(line, sizeof(line), fp)) {
+                line[strcspn(line, "\r\n")] = '\0';
+                /* Fields are tab-separated; renames and copies list two
+                 * paths — report under the current (last) one. */
+                char *path = strrchr(line, '\t');
+                if (!path || !path[1]) continue;
+                path++;
+                const char *status;
+                switch (line[0]) {
+                    case 'M': status = " M"; break;
+                    case 'A': case 'C': status = "A "; break;
+                    case 'D': status = " D"; break;
+                    case 'R': status = "R "; break;
+                    case 'T': status = " T"; break;
+                    default: continue;
+                }
+                char full_path[PATH_MAX];
+                path_join(full_path, sizeof(full_path), repo_path, path);
+                git_cache_add(cache, full_path, status);
+            }
+            pclose(fp);
+        }
+    }
+    free(esc_repo);
+    free(esc_base);
+}
+
+/* Diff stats against a base commit: one tree-to-worktree numstat covers
+ * committed, staged, and unstaged deltas in a single pass, replacing the
+ * two HEAD-relative passes. */
+static void git_populate_base_diff_stats(GitCache *cache, const char *repo_path, const char *base) {
+    git_reset_diff_stats(cache, repo_path);
+
+    char *esc_repo = shell_escape(repo_path);
+    char *esc_base = shell_escape(base);
+    if (esc_repo && esc_base) {
+        char cmd[L_SHELL_CMD_BUF_SIZE];
+        snprintf(cmd, sizeof(cmd),
+                 "git -C '%s' diff --numstat --ignore-submodules=all '%s' 2>/dev/null",
+                 esc_repo, esc_base);
+        FILE *fp = popen(cmd, "r");
+        if (fp) {
+            git_parse_numstat(fp, cache, repo_path);
+            pclose(fp);
+        }
+    }
+    free(esc_repo);
+    free(esc_base);
+}
+
 #ifdef HAVE_LIBGIT2
 
 /* libgit2 implementation - faster, no fork/exec overhead */
@@ -921,7 +1008,9 @@ static void git_populate_diff_stats_shell(GitCache *cache, const char *repo_path
     pclose(fp);
 }
 
-void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_stats, int nested) {
+void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_stats, int nested, const char *base) {
+    if (nested || (base && !git_base_resolves(repo_path, base))) base = NULL;
+
     /* A nested populate reports on the superproject's behalf, so honor its
      * declared submodule.<name>.ignore policy the way git status does. */
     int skip_untracked = 0;
@@ -1013,9 +1102,12 @@ void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_
     git_status_list_free(status_list);
     git_repository_free(repo);
 
+    if (base) git_populate_base_changes(cache, repo_path, base);
+
     /* Use shell for diff stats (faster than libgit2's patch iteration) */
     if (include_diff_stats) {
-        git_populate_diff_stats_shell(cache, repo_path);
+        if (base) git_populate_base_diff_stats(cache, repo_path, base);
+        else git_populate_diff_stats_shell(cache, repo_path);
         git_populate_untracked_diff_stats(cache, repo_path);
     }
 
@@ -1106,7 +1198,9 @@ int git_find_root(const char *path, char *root, size_t root_len) {
     return found;
 }
 
-void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_stats, int nested) {
+void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_stats, int nested, const char *base) {
+    if (nested || (base && !git_base_resolves(repo_path, base))) base = NULL;
+
     /* A nested populate reports on the superproject's behalf, so honor its
      * declared submodule.<name>.ignore policy the way git status does. */
     const char *untracked_opt = "-uall";
@@ -1126,8 +1220,9 @@ void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_
     char cmd[L_SHELL_CMD_BUF_SIZE];
 
     /* Combine status and diff in one subprocess when diff stats needed:
-     * Use --- separator to distinguish the two outputs */
-    if (include_diff_stats) {
+     * Use --- separator to distinguish the two outputs. Base-relative stats
+     * come from their own pass instead (git_populate_base_diff_stats). */
+    if (include_diff_stats && !base) {
         snprintf(cmd, sizeof(cmd),
                  "git -C '%s' status --porcelain %s --ignored=matching --ignore-submodules=all 2>/dev/null && "
                  "echo '---' && "
@@ -1148,16 +1243,20 @@ void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_
 
         /* If we included diff stats, parse unstaged and staged numstat. Reset
          * first so re-populating the same repo doesn't double the counts. */
-        if (include_diff_stats) {
+        if (include_diff_stats && !base) {
             git_reset_diff_stats(cache, repo_path);
             git_parse_numstat(fp, cache, repo_path);
             git_parse_numstat(fp, cache, repo_path);
-            git_populate_untracked_diff_stats(cache, repo_path);
         }
         pclose(fp);
     }
-
     free(escaped);
+
+    if (base) git_populate_base_changes(cache, repo_path, base);
+    if (include_diff_stats) {
+        if (base) git_populate_base_diff_stats(cache, repo_path, base);
+        git_populate_untracked_diff_stats(cache, repo_path);
+    }
     git_cache_rebuild_aggregates(cache);
 }
 

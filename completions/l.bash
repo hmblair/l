@@ -12,6 +12,10 @@ _l() {
         -f|--filter)
             return 0  # User provides pattern
             ;;
+        -b|--base)
+            COMPREPLY=( $(compgen -W "$(git for-each-ref --format='%(refname:short)' refs/heads refs/tags 2>/dev/null)" -- "$cur") )
+            return 0
+            ;;
         --min-size)
             return 0  # User provides size
             ;;
@@ -21,8 +25,8 @@ _l() {
     if [[ "$cur" == -* ]]; then
         opts="-a -l --long -s --short -t --tree -d --depth -p --path
               -e --expand-all --list --summary --no-icons -c --color-all -m -g
-              -f --filter --min-size --dir-only -i --interactive --tty -S -T -N -r
-              -h --help --version --daemon"
+              -b --base -f --filter --min-size --dir-only -i --interactive --tty
+              -S -T -N -r -h --help --version --daemon"
         COMPREPLY=( $(compgen -W "$opts" -- "$cur") )
         return 0
     fi

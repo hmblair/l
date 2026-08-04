@@ -77,6 +77,7 @@ l [OPTIONS] [FILE ...]
 | `-p, --path` | Show ancestry from `~` (or `/`) to target |
 | `-i, --interactive` | Interactive selection mode |
 | `-m` | Git-changed files, rooted at the repo (errors outside a repo; shows just the repo root when clean) |
+| `-b, --base REF` | Report git changes against REF (branch, tag, or commit) instead of HEAD, including committed differences |
 | `-g` | Hide gitignored files and folders |
 | `-f, --filter PATTERN` | Filter files matching pattern (implies `-at`) |
 | `--min-size SIZE` | Show only entries >= SIZE (e.g., `100M`, `1G`) |
@@ -144,6 +145,7 @@ l                    # Current directory
 l -at                # All files with full tree
 l -al ~/projects     # Long format, hidden files
 l -m                 # Git-changed files, as a tree from the repo root
+l -mb main           # Everything changed since main, committed or not
 l -g                 # Hide gitignored files and folders
 l -f "*.go"          # Filter to Go files
 l -i                 # Interactive selection

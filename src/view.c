@@ -404,6 +404,7 @@ TreeBuildOpts config_to_build_opts(const Config *cfg) {
         .sort_by = cfg->req.sort_by,
         .sort_reverse = cfg->req.sort_reverse,
         .cwd = cfg->env.cwd,
+        .git_base = cfg->req.git_base,
         .compute = cfg->compute,
         .skip_fn = cfg->req.min_size > 0 ? skip_below_min_size : NULL,
         .skip_ctx = (void *)&cfg->req.min_size,

@@ -174,6 +174,7 @@ typedef struct {
     SortMode sort_by;
     int sort_reverse;
     const char *cwd;           /* Current working directory (for relative paths) */
+    const char *git_base;      /* Ref to report git changes against (NULL = HEAD) */
     ComputeOpts compute;       /* What metadata to compute */
     tree_skip_fn skip_fn;      /* Optional: skip recursion predicate */
     void *skip_ctx;            /* Context for skip_fn */

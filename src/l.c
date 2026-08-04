@@ -75,6 +75,8 @@ static void print_usage(void) {
     printf("  --no-icons              Hide file/folder/git icons\n");
     printf("  -c, --color-all         Don't gray out gitignored files\n");
     printf("  -m                      Git-changed files, rooted at the repo (fails outside a repo)\n");
+    printf("  -b, --base REF          Report git changes against REF (branch, tag, or commit)\n");
+    printf("                          instead of HEAD, including committed differences\n");
     printf("  -g                      Hide gitignored files and folders\n");
     printf("  -f, --filter STRING     Show only files/folders matching pattern (glob or substring)\n");
     printf("  --min-size SIZE         Show only entries >= SIZE (e.g., 100M, 1G)\n");
@@ -107,7 +109,8 @@ typedef enum {
     GROUP_DEPTH,    /* -t/--tree, -d/--depth */
     GROUP_FORMAT,   /* -s/--short, -l/--long */
     GROUP_SORT,     /* -S, -T, -N */
-    GROUP_FILTER    /* -f/--filter */
+    GROUP_FILTER,   /* -f/--filter */
+    GROUP_BASE      /* -b/--base */
 } OptGroup;
 
 /* label is the spelling used on the command line ("-d" or "--depth"): it names
@@ -154,6 +157,7 @@ OPT_HANDLER(opt_sort_name)   { (void)val; (void)label; cfg->req.sort_by = SORT_N
 OPT_HANDLER(opt_reverse)     { (void)val; (void)label; cfg->req.sort_reverse = 1; }
 OPT_HANDLER(opt_help)        { (void)cfg; (void)val; (void)label; print_usage(); exit(0); }
 OPT_HANDLER(opt_filter)      { (void)label; cfg->req.grep_pattern = val; }
+OPT_HANDLER(opt_base)        { (void)label; cfg->req.git_base = val; }
 OPT_HANDLER(opt_list)        { (void)val; (void)label; cfg->req.list_mode = 1; }
 OPT_HANDLER(opt_summary)     { (void)val; (void)label; cfg->req.summary_mode = 1;
                                cfg->req.max_depth = L_MAX_DEPTH; cfg->disp.long_format = 1; }
@@ -182,6 +186,7 @@ static const OptSpec OPT_SPECS[] = {
     { 'r', "-r", NULL,          NULL,            0, GROUP_NONE,   opt_reverse },
     { 'h', "-h", "help",        "--help",        0, GROUP_NONE,   opt_help },
     { 'f', "-f", "filter",      "--filter",      1, GROUP_FILTER, opt_filter },
+    { 'b', "-b", "base",        "--base",        1, GROUP_BASE,   opt_base },
     { 0,   NULL, "list",        "--list",        0, GROUP_NONE,   opt_list },
     { 0,   NULL, "summary",     "--summary",     0, GROUP_NONE,   opt_summary },
     { 0,   NULL, "no-icons",    "--no-icons",    0, GROUP_NONE,   opt_no_icons },
@@ -193,7 +198,7 @@ static const OptSpec OPT_SPECS[] = {
 
 /* Track which option of each group has been seen, for conflict messages */
 typedef struct {
-    const char *slots[5];   /* indexed by OptGroup */
+    const char *slots[6];   /* indexed by OptGroup */
 } OptionSet;
 
 static const OptSpec *find_short_opt(char c) {
@@ -539,6 +544,21 @@ int main(int argc, char **argv) {
             return 1;
         }
         cfg.req.show_ancestry = 1;
+    }
+
+    /* --base must name a commit when the target is inside a repo. A listing
+     * spanning multiple repos skips any where the ref is missing
+     * (git_populate_repo re-checks per repo), so this validates only the
+     * primary target's repo. */
+    if (cfg.req.git_base) {
+        char repo_root[PATH_MAX];
+        const char *target = dir_count > 0 ? dirs[0] : ".";
+        if (git_find_root(target, repo_root, sizeof(repo_root)) &&
+            !git_base_resolves(repo_root, cfg.req.git_base)) {
+            fprintf(stderr, "%sError:%s '%s' is not a branch, tag, or commit\n",
+                    CLR(&cfg, COLOR_RED), RST(&cfg), cfg.req.git_base);
+            return 1;
+        }
     }
 
     /* Auto-disable long format on network filesystems */

@@ -35,6 +35,8 @@ typedef struct {
     SortMode sort_by;
     int sort_reverse;
     const char *grep_pattern;
+    const char *git_base;    /* -b: ref to report git changes against instead
+                              * of HEAD (NULL = HEAD) */
     off_t min_size;          /* Minimum size filter (0 = disabled) */
 } Request;
 

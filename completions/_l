@@ -9,6 +9,12 @@ _l_files() {
     _files
 }
 
+_l_git_refs() {
+    local -a refs
+    refs=(${(f)"$(git for-each-ref --format='%(refname:short)' refs/heads refs/tags 2>/dev/null)"})
+    _describe -t refs 'git ref' refs
+}
+
 _l() {
     _arguments -s \
         '-a[Show hidden files]' \
@@ -23,6 +29,7 @@ _l() {
         '--no-icons[Hide file/folder/git icons]' \
         '(-c --color-all)'{-c,--color-all}"[Don't gray out gitignored files]" \
         '-m[Show only git-modified entries at the current depth (implies -a; add -t for full tree)]' \
+        '(-b --base)'{-b,--base}'[Report git changes against ref instead of HEAD]:ref:_l_git_refs' \
         '-g[Hide gitignored files and folders]' \
         '(-f --filter)'{-f,--filter}'[Show only files/folders matching pattern (glob or substring)]:pattern:' \
         '--min-size[Show only entries >= SIZE (e.g., 100M, 1G)]:size:' \

@@ -118,7 +118,14 @@ int git_find_root(const char *path, char *root, size_t root_len);
  * populate reports on the superproject's behalf and honors the declared
  * submodule.<name>.ignore policy (untracked skipped, dirty/all not
  * populated at all). Pass 0 when the repo is the listing's own root. */
-void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_stats, int nested);
+/* base: ref to report changes and diff stats against instead of HEAD (NULL
+ * for normal HEAD-relative reporting). Ignored for nested repos and for
+ * repos where the ref does not resolve (a forest can span repos that do not
+ * share the ref; those keep HEAD-relative reporting). */
+void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_stats, int nested, const char *base);
+
+/* True if base names a commit in repo_path (branch, tag, or hash). */
+int git_base_resolves(const char *repo_path, const char *base);
 
 /* Get aggregated git status for all files under a directory (O(1) lookup of
  * the aggregate built at populate time; zero summary if none) */
