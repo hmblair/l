@@ -1405,6 +1405,15 @@ static int count_words_mapped(const char *data, size_t size) {
     return count > INT_MAX ? INT_MAX : (int)count;
 }
 
+int fileinfo_count_text_lines(const char *path) {
+    char *data;
+    size_t size;
+    if (!map_text_file(path, &data, &size)) return -1;
+    int lines = count_lines_mapped(data, size);
+    if (data) munmap(data, size);
+    return lines;
+}
+
 void fileinfo_compute_content(struct FileEntry *fe, const struct ComputeOpts *c) {
     if (!fe || !fe->path) return;
 

@@ -41,6 +41,10 @@ int get_image_megapixels(const char *path);
 int get_audio_duration(const char *path);
 int get_pdf_page_count(const char *path);
 
+/* Count newline characters in a text file. Returns the count, or -1 when the
+ * file is binary (by extension or leading NUL bytes) or unreadable. */
+int fileinfo_count_text_lines(const char *path);
+
 /* Forward declare to avoid circular dependencies (both defined in tree.h) */
 struct FileEntry;
 struct ComputeOpts;

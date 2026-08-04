@@ -3,6 +3,7 @@
  */
 
 #include "git.h"
+#include "fileinfo.h"
 #include <ctype.h>
 
 #ifdef HAVE_LIBGIT2
@@ -825,6 +826,47 @@ static void git_parse_numstat(FILE *fp, GitCache *cache, const char *repo_path) 
     }
 }
 
+/* Untracked files never appear in numstat output, so a freshly created file —
+ * often the bulk of what changed — would report no line delta. Count each
+ * untracked text file's lines as all-added; binary and unreadable files keep
+ * zero stats, matching numstat's "-" for binaries. Paths are collected under
+ * the cache lock but counted outside it (node paths are stable once
+ * inserted); the stat writes re-take it via git_cache_set_diff. */
+static void git_populate_untracked_diff_stats(GitCache *cache, const char *repo_path) {
+    size_t root_len = strlen(repo_path);
+    int capacity = 64, count = 0;
+    char **paths = xmalloc(capacity * sizeof(*paths));
+
+#ifdef _OPENMP
+    omp_set_lock(&cache->lock);
+#endif
+    for (int i = 0; i < L_HASH_SIZE; i++) {
+        for (GitStatusNode *node = cache->buckets[i]; node; node = node->next) {
+            if (!(node->flags & GITF_UNTRACKED)) continue;
+            if (strncmp(node->path, repo_path, root_len) != 0 ||
+                node->path[root_len] != '/') continue;
+            if (count == capacity) {
+                capacity *= 2;
+                paths = xrealloc(paths, capacity * sizeof(*paths));
+            }
+            paths[count++] = node->path;
+        }
+    }
+#ifdef _OPENMP
+    omp_unset_lock(&cache->lock);
+#endif
+
+    for (int i = 0; i < count; i++) {
+        /* Regular files only: opening a FIFO would block, and an untracked
+         * symlink's content is its target path, not the mapped file. */
+        struct stat st;
+        if (lstat(paths[i], &st) != 0 || !S_ISREG(st.st_mode)) continue;
+        int lines = fileinfo_count_text_lines(paths[i]);
+        if (lines >= 0) git_cache_set_diff(cache, paths[i], lines, 0);
+    }
+    free(paths);
+}
+
 #ifdef HAVE_LIBGIT2
 
 /* libgit2 implementation - faster, no fork/exec overhead */
@@ -974,6 +1016,7 @@ void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_
     /* Use shell for diff stats (faster than libgit2's patch iteration) */
     if (include_diff_stats) {
         git_populate_diff_stats_shell(cache, repo_path);
+        git_populate_untracked_diff_stats(cache, repo_path);
     }
 
     git_cache_rebuild_aggregates(cache);
@@ -1109,6 +1152,7 @@ void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_
             git_reset_diff_stats(cache, repo_path);
             git_parse_numstat(fp, cache, repo_path);
             git_parse_numstat(fp, cache, repo_path);
+            git_populate_untracked_diff_stats(cache, repo_path);
         }
         pclose(fp);
     }
