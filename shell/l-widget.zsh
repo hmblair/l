@@ -18,9 +18,14 @@
 # candidate list, which is stateless display and cannot insert anything while
 # AUTO_MENU is suppressed.
 
-# Captured state shared between the completion widget and the zle widget
+# Captured state shared between the completion widget and the zle widget.
+# Candidates are bare names; two different prefixes turn them back into paths.
+# _l_captured_prefix is the text that must precede a candidate in the buffer,
+# and _l_captured_dir is the directory it must be looked up in on disk. They
+# diverge whenever the typed path is not literally relative to $PWD.
 typeset -ga _l_captured_candidates=()
 typeset -g  _l_captured_prefix=""
+typeset -g  _l_captured_dir=""
 typeset -gi _l_captured_has_file=0
 
 # Cycle state, armed when multiple non-file candidates are listed; repeat Tabs
@@ -38,20 +43,22 @@ _l_debug() { [[ -n "$_L_WIDGET_DEBUG" ]] && print -r -- "$@" >> "$_L_WIDGET_DEBU
 _l_capture_complete() {
   _l_captured_candidates=()
   _l_captured_prefix=""
+  _l_captured_dir=""
   _l_captured_has_file=0
 
   # Override compadd to capture candidates
   compadd() {
     # Walk the option portion of the call to extract the hidden prefix (-p),
-    # whether the matches are filenames (-f, as _path_files passes), and
-    # whether the caller pre-quoted the words (-Q, also _path_files: words
-    # arrive as `test\ dir`, quoted for buffer insertion, not as filenames).
+    # the directory the matches were read from (-W), whether the matches are
+    # filenames (-f, as _path_files passes), and whether the caller pre-quoted
+    # the words (-Q, also _path_files: words arrive as `test\ dir`, quoted for
+    # buffer insertion, not as filenames).
     # Options may be clustered (-Qf) and an option's argument may be attached
     # (-Pfoo) or the next word (-J name) — and can itself start with '-'
     # (e.g. -J -default-), so arguments must be skipped, never scanned for
     # flag letters. A lone '-' or '--' ends the options; everything after is a
     # candidate word.
-    local _prefix="" _w _c _rest
+    local _prefix="" _wdir="" _w _c _rest
     local -i _has_f=0 _has_q=0 _i _j
     for (( _i=1; _i<=$#; _i++ )); do
       _w="${argv[$_i]}"
@@ -69,15 +76,27 @@ _l_capture_complete() {
             (( _i++ ))
             _rest="${argv[$_i]}"
           fi
-          [[ "$_c" == "p" ]] && _prefix="$_rest"
+          case "$_c" in
+            p) _prefix="$_rest" ;;
+            W) _wdir="$_rest" ;;
+          esac
           break
         fi
       done
     done
     # Capture everything in literal (unquoted) form: existence checks and the
     # picker need real filenames, and insertion re-quotes with ${(q)...}.
+    # Only the words and -p follow -Q; IPREFIX is raw command-line text and so
+    # is always unquoted, while -W is a real filename and never quoted.
     (( _has_q )) && _prefix="${(Q)_prefix}"
+    # The buffer prefix is what compadd hides (-p) on top of the part of the
+    # word the completer already accepted (IPREFIX) — _cd, for instance, moves
+    # a leading `../` into IPREFIX and leaves -p empty.
+    _prefix="${(Q)IPREFIX}$_prefix"
     [[ -n "$_prefix" ]] && _l_captured_prefix="$_prefix"
+    # -W may instead name an array parameter (_path_files -W tmpcdpath); only
+    # an actual directory is usable as a lookup root.
+    [[ -n "$_wdir" && -d "$_wdir" ]] && _l_captured_dir="${_wdir%/}/"
 
     # Use builtin compadd with -O to capture candidates into an array
     local -a _matches
@@ -88,7 +107,7 @@ _l_capture_complete() {
     if [[ -n "$_L_WIDGET_DEBUG" ]]; then
       local _tag=""
       (( _has_f )) && _tag=" (file)"
-      _l_debug "  compadd${_prefix:+ (prefix=$_prefix)}${_tag}: ${#_matches} match(es)${_matches:+ -> ${(j:, :)_matches}}"
+      _l_debug "  compadd${_prefix:+ (prefix=$_prefix)}${_wdir:+ (dir=$_wdir)}${_tag}: ${#_matches} match(es)${_matches:+ -> ${(j:, :)_matches}}"
     fi
   }
 
@@ -106,16 +125,25 @@ _l_capture_complete() {
 # Register as a completion widget (runs in completion context)
 zle -C _l_capture complete-word _l_capture_complete
 
+# Resolve a captured candidate to the path it occupies on disk, into $REPLY.
+# Candidates name entries of compadd's -W directory when it gave one, and are
+# relative to the buffer prefix otherwise.
+_l_candidate_path() {
+  REPLY="${_l_captured_dir:-$_l_captured_prefix}$1"
+  REPLY="${REPLY/#\~/$HOME}"
+}
+
 # Insert a completed filesystem path into LBUFFER, replacing the current word.
 # Appends "/" for directories (so completion advances) and a trailing space for
-# runnable non-directory completions in command position. $1 = full path
-# (prefix already applied), $2 = current word to strip, $3 = is_command flag.
+# runnable non-directory completions in command position. $1 = buffer form of
+# the path (prefix already applied), $2 = current word to strip, $3 =
+# is_command flag, $4 = the path's on-disk location.
 _l_insert_path() {
-  local _path="$1" _strip="$2" _cmd="$3"
+  local _path="$1" _strip="$2" _cmd="$3" _disk="$4"
   [[ -n "$_strip" ]] && LBUFFER="${LBUFFER%"$_strip"}"
   [[ -n "$LBUFFER" && "$LBUFFER" != *" " ]] && LBUFFER+=" "
   local _is_dir=0
-  [[ -d "${_path/#\~/$HOME}" ]] && _is_dir=1
+  [[ -d "$_disk" ]] && _is_dir=1
   (( _is_dir )) && _path+="/"
   _path="${(q)_path}"
   _path="${_path/#\\~/~}"
@@ -247,11 +275,10 @@ _l_complete() {
   # can run or be descended into, so `cd src && ./<Tab>` offers executables.
   if (( is_command )) && [[ "$current" == (./|../|/|'~')* ]]; then
     local -a _runnable
-    local _rc _rp
+    local _rc
     for _rc in "${candidates[@]}"; do
-      _rp="${_l_captured_prefix}${_rc}"
-      _rp="${_rp/#\~/$HOME}"
-      [[ -x "$_rp" ]] && _runnable+=("$_rc")
+      _l_candidate_path "$_rc"
+      [[ -x "$REPLY" ]] && _runnable+=("$_rc")
     done
     if (( ${#_runnable} > 0 && ${#_runnable} < ${#candidates} )); then
       candidates=("${_runnable[@]}")
@@ -273,7 +300,8 @@ _l_complete() {
   # Single candidate -- insert directly. The prefix carries any path prefix
   # (e.g. "./" for a runnable script); a bare command name has an empty prefix.
   if (( ${#candidates} == 1 )); then
-    _l_insert_path "${_l_captured_prefix}${candidates[1]}" "$current" "$is_command"
+    _l_candidate_path "${candidates[1]}"
+    _l_insert_path "${_l_captured_prefix}${candidates[1]}" "$current" "$is_command" "$REPLY"
     _l_debug "-> single candidate insert: LBUFFER=[$LBUFFER]"
     _l_restore_cwd
     zle reset-prompt
@@ -301,9 +329,9 @@ _l_complete() {
     # ~-prefixed) to insert: `l -i` echoes an absolute path, so we map its
     # selection back to the matching candidate to preserve the typed form.
     for c in "${candidates[@]}"; do
-      local _full="${_l_captured_prefix}${c}"
-      local _exp="${_full/#\~/$HOME}"
-      [[ -e "$_exp" || -L "$_exp" ]] && { paths+=("$_exp"); rels+=("$_full"); }
+      _l_candidate_path "$c"
+      [[ -e "$REPLY" || -L "$REPLY" ]] &&
+        { paths+=("$REPLY"); rels+=("${_l_captured_prefix}${c}"); }
     done
   fi
 
@@ -319,7 +347,7 @@ _l_complete() {
   # directly rather than shown in a one-item picker. (Command position keeps the
   # picker, which inserts the basename of the chosen binary.)
   if (( ! cmd_names && ${#paths} == 1 )); then
-    _l_insert_path "${rels[1]}" "$current" "$is_command"
+    _l_insert_path "${rels[1]}" "$current" "$is_command" "${paths[1]}"
     _l_debug "-> single filtered path insert: LBUFFER=[$LBUFFER]"
     _l_restore_cwd
     zle reset-prompt
@@ -335,8 +363,6 @@ _l_complete() {
     return
   fi
 
-  # Expand tildes in paths
-  paths=("${paths[@]/#\~/$HOME}")
   print -n "\n" >/dev/tty
   local selected
   # When completing a command, the candidates are binaries on $PATH; don't gray
@@ -371,7 +397,7 @@ _l_complete() {
           break
         fi
       done
-      [[ -d "${_ins/#\~/$HOME}" ]] && _ins+="/"
+      [[ -d "$selected" ]] && _ins+="/"
       local _qsel="${(q)_ins}"
       _qsel="${_qsel/#\\~/~}"
       LBUFFER+="$_qsel"
