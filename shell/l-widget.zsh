@@ -369,7 +369,9 @@ _l_complete() {
   # out any that happen to live in a gitignored directory (-c, --color-all).
   local -a _picker_opts=(-i --tty -d0)
   (( cmd_names )) && _picker_opts+=(-c)
-  selected=$(l "${_picker_opts[@]}" "${paths[@]}" </dev/tty 2>/dev/tty)
+  # `--` is mandatory: a candidate whose name starts with '-' would otherwise
+  # be parsed as an option cluster and `l` would print its usage instead.
+  selected=$(l "${_picker_opts[@]}" -- "${paths[@]}" </dev/tty 2>/dev/tty)
   # Clear everything from cursor to end of screen, then move to prompt line
   print -n "\033[J\033[A\r\033[K" >/dev/tty
 
