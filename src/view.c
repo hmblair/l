@@ -116,28 +116,27 @@ int node_is_visible(const TreeNode *node, const Config *cfg) {
 }
 
 /* A hidden entry (dotfile) is not displayed unless -a is given. This is kept
- * separate from node_is_visible because, in the interactive picker, the content
- * filters above only apply within the initial scan depth, whereas hidden entries
- * stay hidden at every depth. */
+ * separate from node_is_visible because view_build_opts tests the two on their
+ * own when deciding whether filtering left a root with nothing to show. */
 int node_is_hidden(const TreeNode *node, const Config *cfg) {
     if (node->is_ancestor) return 0;
     return !cfg->req.show_hidden && node->entry.name[0] == '.';
 }
 
 /* The single visibility decision shared by both the static view and the
- * interactive picker: an entry is shown iff it isn't hidden (without -a), passes
- * the active content filters (-f/--filter, git-only, ...) when those apply, and
- * matches the interactive '/' query when one is active. The two flags capture
- * the only policy difference between the modes — content filters are depth-gated
- * in the picker, and the live query exists only there — so the actual rule lives
- * in exactly one place. */
+ * interactive picker: an entry is shown iff it isn't hidden (without -a),
+ * passes the active content filters (-f/--filter, git-only, ...), and matches
+ * the interactive '/' query when one is active. Filters apply at every depth
+ * in both modes — a directory opened in the picker shows the same entries the
+ * static listing would draw for it — so the only mode difference left is the
+ * live query, which exists only in the picker. */
 int node_is_shown(const TreeNode *node, const Config *cfg,
-                  int apply_content_filters, int live_filter_active) {
+                  int live_filter_active) {
     /* Ancestry-spine nodes (-p) are the path to the target and always render,
      * bypassing both the hidden and content (git-only, grep, ...) filters. */
     if (node->is_ancestor) return 1;
     if (node_is_hidden(node, cfg)) return 0;
-    if (apply_content_filters && !node_is_visible(node, cfg)) return 0;
+    if (!node_is_visible(node, cfg)) return 0;
     if (live_filter_active && !node->matches_grep) return 0;
     return 1;
 }
@@ -268,15 +267,10 @@ static void view_emit_subtree(View *v, TreeNode *node, int depth,
     if (node->child_count == 0) return;
     if (vo->interactive && !node->ui_expanded) return;  /* collapsed */
 
-    /* Content filters apply only within the initial depth in the picker
-     * (levels the user expanded past the scan depth are always shown);
-     * static mode filters at every depth (filter_depth = INT_MAX). */
-    int filtering = (depth < vo->filter_depth) && is_filtering_active(cfg);
-
     size_t *visible_indices = xmalloc(node->child_count * sizeof(size_t));
     size_t visible_count = 0;
     for (size_t i = 0; i < node->child_count; i++) {
-        if (node_is_shown(&node->children[i], cfg, filtering, vo->live_filter)) {
+        if (node_is_shown(&node->children[i], cfg, vo->live_filter)) {
             visible_indices[visible_count++] = i;
         }
     }
@@ -294,7 +288,7 @@ static void view_emit_subtree(View *v, TreeNode *node, int depth,
 
 View *view_build(TreeNode **trees, int tree_count, const Config *cfg,
                  GitCache *git, const Icons *icons) {
-    ViewOptions vo = { .interactive = 0, .live_filter = 0, .filter_depth = INT_MAX };
+    ViewOptions vo = { .interactive = 0, .live_filter = 0 };
     return view_build_opts(trees, tree_count, cfg, git, icons, &vo);
 }
 
@@ -306,7 +300,7 @@ View *view_build_opts(TreeNode **trees, int tree_count, const Config *cfg,
     v->tree_row_start = xmalloc((tree_count + 1) * sizeof(size_t));
     v->tree_no_matches = xcalloc(tree_count, sizeof(int));
 
-    int filtering = (0 < vo->filter_depth) && is_filtering_active(cfg);
+    int filtering = is_filtering_active(cfg);
 
     for (int t = 0; t < tree_count; t++) {
         v->tree_row_start[t] = v->count;
@@ -344,7 +338,7 @@ View *view_build_opts(TreeNode **trees, int tree_count, const Config *cfg,
              * shown children (each with its subtree). */
             for (size_t j = 0; j < root->child_count; j++) {
                 TreeNode *child = &root->children[j];
-                if (!node_is_shown(child, cfg, filtering, 0)) continue;
+                if (!node_is_shown(child, cfg, 0)) continue;
                 view_emit_subtree(v, child, 0, 0, cfg, vo);
             }
         } else {

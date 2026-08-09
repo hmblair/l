@@ -63,6 +63,13 @@ typedef struct {
     Env env;
 } Config;
 
+/* Turn git-only filtering (-m) on or off, keeping the ancestry it implies in
+ * sync: -m roots the listing at the repo root, which is the ancestry spine
+ * anchored there rather than at ~ (see config_to_build_opts). The interactive
+ * picker toggles this at runtime, so the derivation lives here instead of in
+ * argument parsing. */
+void request_set_git_only(Request *req, int on);
+
 /* Find the directory holding config.toml: next to the binary (development),
  * ~/.config/l (installed), /usr/local/share/l (system-wide), else ".". */
 void resolve_source_dir(const char *argv0, char *src_dir, size_t len);

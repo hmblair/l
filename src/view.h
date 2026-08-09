@@ -56,7 +56,7 @@ int is_filtering_active(const Config *cfg);
 int node_is_visible(const TreeNode *node, const Config *cfg);
 int node_is_hidden(const TreeNode *node, const Config *cfg);
 int node_is_shown(const TreeNode *node, const Config *cfg,
-                  int apply_content_filters, int live_filter_active);
+                  int live_filter_active);
 
 /* ============================================================================
  * View - the flattened set of rows a listing draws
@@ -86,18 +86,13 @@ typedef struct {
     int diff_del_width;
 } View;
 
-/* Mode parameters for view building. Zero-initialized (with filter_depth
- * INT_MAX) means the static listing; the interactive picker sets all three. */
+/* Mode parameters for view building. Zero-initialized means the static
+ * listing; the interactive picker sets both. */
 typedef struct {
     int interactive;    /* gate recursion on node->ui_expanded; no "No
                          * matches." rows, no list-mode root suppression */
     int live_filter;    /* a '/' query is active: matches_grep filters at
                          * every depth, including tree roots */
-    int filter_depth;   /* content filters (-f/-m/--min-size/...) apply only
-                         * to children of nodes at depth < filter_depth;
-                         * INT_MAX for static mode, the initial build depth
-                         * for the picker (interactively expanded levels are
-                         * always shown) */
 } ViewOptions;
 
 /* One traversal + one attribution pass + one width pass, all over the same
@@ -129,8 +124,9 @@ void tree_expand_node_from_config(TreeNode *node, GitCache *git,
 
 /* Build all argument trees into the shared git cache and run the git-only /
  * grep visibility-flag passes — everything main() does between parsing and
- * view_build. The picker's reload key uses the same call, so reloading is
- * identical to re-running l. */
+ * view_build. The picker reloads through the same call, so the data a reload
+ * lands on is what a fresh run would have read (the picker then puts its own
+ * display state back on top). */
 TreeNode **forest_build(char *const *dirs, int dir_count, const Config *cfg,
                         GitCache *git, const Icons *icons);
 void forest_free(TreeNode **trees, int dir_count);

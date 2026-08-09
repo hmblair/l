@@ -543,7 +543,7 @@ int main(int argc, char **argv) {
                     CLR(&cfg, COLOR_RED), RST(&cfg));
             return 1;
         }
-        cfg.req.show_ancestry = 1;
+        request_set_git_only(&cfg.req, 1);
     }
 
     /* --base must name a commit when the target is inside a repo. A listing
@@ -675,7 +675,7 @@ int main(int argc, char **argv) {
 
     int exit_code = 0;
     if (cfg.req.interactive) {
-        char *selected = select_run(&trees, dir_count, dirs, &ctx);
+        char *selected = select_run(&trees, dir_count, dirs, &cfg, &ctx);
         if (selected) {
             /* Empty = an action (yank) completed without a selection */
             if (selected[0]) printf("%s\n", selected);

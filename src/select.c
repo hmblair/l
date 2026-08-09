@@ -4,10 +4,11 @@
  * A cursor over the same View the static listing draws. The tree is a
  * snapshot taken when the picker opens: opening a directory extends the tree
  * from that point (lazy materialization), closing one just collapses the
- * view, and 'r' rebuilds everything from scratch — exactly as if the picker
- * had been closed and reopened, with the cursor put back by path. There is
- * no automatic refresh: the input poll blocks, so an idle picker does no
- * work at all.
+ * view, and 'r' re-reads everything from disk while the display stays put —
+ * the same directories open, the cursor on the same entry, both restored by
+ * path. 'm' runs the same rebuild with -m flipped, which is what lets the
+ * listing come back rooted somewhere else. There is no automatic refresh: the
+ * input poll blocks, so an idle picker does no work at all.
  */
 
 #include "select.h"
@@ -35,6 +36,15 @@ static void term_disable_raw(void) {
         printf("\033[?25h");  /* Show cursor */
         fflush(stdout);
         raw_mode_enabled = 0;
+    }
+}
+
+static void get_terminal_size(int *rows) {
+    struct winsize ws;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
+        *rows = ws.ws_row;
+    } else {
+        *rows = 24;
     }
 }
 
@@ -79,7 +89,8 @@ typedef enum {
     KEY_QUIT,
     KEY_OPEN,
     KEY_YANK,
-    KEY_RELOAD,       /* 'r' — rebuild the whole tree from scratch */
+    KEY_RELOAD,       /* 'r' — re-read the whole tree from disk */
+    KEY_GIT_ONLY,     /* 'm' — toggle git-changed-only filtering */
     KEY_FILTER_FILES,
     KEY_FILTER,       /* '/' — enter interactive filter mode */
     KEY_CHAR,         /* a printable character typed in filter mode */
@@ -154,6 +165,7 @@ static KeyPress term_read_key(int filter_mode, char *out_char) {
     if (c == 'o' || c == 'O') return KEY_OPEN;
     if (c == 'y' || c == 'Y') return KEY_YANK;
     if (c == 'r' || c == 'R') return KEY_RELOAD;
+    if (c == 'm' || c == 'M') return KEY_GIT_ONLY;
     if (c == 'f' || c == 'F') return KEY_FILTER_FILES;
     if (c == '/') return KEY_FILTER;
 
@@ -209,7 +221,6 @@ static void picker_rebuild(SelectState *state, TreeNode **trees, int tree_count,
     ViewOptions vo = {
         .interactive = 1,
         .live_filter = live_filter,
-        .filter_depth = ctx->cfg->req.max_depth,
     };
     state->view = view_build_opts(trees, tree_count, ctx->cfg, ctx->git,
                                   ctx->icons, &vo);
@@ -217,6 +228,18 @@ static void picker_rebuild(SelectState *state, TreeNode **trees, int tree_count,
     ctx->columns = ctx->cfg->disp.long_format ? state->view->cols : NULL;
     ctx->diff_add_width = state->view->diff_add_width;
     ctx->diff_del_width = state->view->diff_del_width;
+}
+
+/* Read a directory's children if the build stopped short of it, and classify
+ * them the way the build pass classifies everything else. Filters apply at
+ * every depth, so what an expansion brings in has to carry the same flags the
+ * filters read — grep flags are refreshed for the whole forest on every
+ * rebuild, leaving the git ones to compute here. Already-materialized
+ * directories are left alone (collapsing keeps children). */
+static void picker_materialize(TreeNode *node, PrintContext *ctx) {
+    if (node->child_count > 0 || node->was_expanded) return;
+    tree_expand_node_from_config(node, ctx->git, ctx->cfg, ctx->icons);
+    if (ctx->cfg->req.git_only) compute_git_status_flags(node, ctx->git);
 }
 
 /* ============================================================================
@@ -234,6 +257,13 @@ static void cursor_to_node(SelectState *state, const TreeNode *node) {
     }
 }
 
+/* The identity a row keeps across a rebuild: the canonical path when one was
+ * precomputed, else the display path. Both sides of a cursor restore use this,
+ * so a rebuild that re-roots the listing (toggling -m) still matches. */
+static const char *node_key(const TreeNode *node) {
+    return node->entry.abs_path ? node->entry.abs_path : node->entry.path;
+}
+
 /* Put the cursor on a path after a reload: exact match, else the deepest
  * visible ancestor, else clamp the current index. */
 static void cursor_to_path(SelectState *state, const char *path) {
@@ -241,7 +271,7 @@ static void cursor_to_path(SelectState *state, const char *path) {
     int best = -1;
     size_t best_len = 0;
     for (int i = 0; i < row_count(state); i++) {
-        const char *row_path = row_node(state, i)->entry.path;
+        const char *row_path = node_key(row_node(state, i));
         size_t len = strlen(row_path);
         if (strcmp(row_path, path) == 0) {
             state->cursor = i;
@@ -299,17 +329,134 @@ static void snap_cursor(SelectState *state, int files_only) {
 }
 
 /* ============================================================================
- * Rendering
+ * Expansion State - what survives a rebuild
  * ============================================================================ */
 
-static void get_terminal_size(int *rows) {
-    struct winsize ws;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
-        *rows = ws.ws_row;
-    } else {
-        *rows = 24;
+/* Which directories are open, keyed by canonical path. A rebuild discards
+ * every node, so the state travels as owned strings. Sized to twice the
+ * directories it records and never inserted into afterwards, so a probe always
+ * lands on a free slot and lookups terminate. */
+typedef struct {
+    char **keys;
+    unsigned char *open;
+    size_t cap;            /* power of two */
+} ExpansionState;
+
+static size_t directory_count(const TreeNode *node) {
+    if (!node_is_directory(node)) return 0;
+    size_t n = 1;
+    for (size_t i = 0; i < node->child_count; i++) {
+        n += directory_count(&node->children[i]);
+    }
+    return n;
+}
+
+static size_t expansion_slot(const ExpansionState *exp, const char *key) {
+    size_t i = hash_string(key) & (exp->cap - 1);
+    while (exp->keys[i] && strcmp(exp->keys[i], key) != 0) {
+        i = (i + 1) & (exp->cap - 1);
+    }
+    return i;
+}
+
+static void expansion_record(ExpansionState *exp, const TreeNode *node) {
+    if (!node_is_directory(node)) return;
+    const char *key = node_key(node);
+    size_t i = expansion_slot(exp, key);
+    if (!exp->keys[i]) exp->keys[i] = xstrdup(key);
+    exp->open[i] = node->ui_expanded ? 1 : 0;
+
+    for (size_t c = 0; c < node->child_count; c++) {
+        expansion_record(exp, &node->children[c]);
     }
 }
+
+static void expansion_capture(ExpansionState *exp, TreeNode *const *trees,
+                              int tree_count) {
+    size_t dirs = 0;
+    for (int t = 0; t < tree_count; t++) dirs += directory_count(trees[t]);
+
+    size_t cap = 16;
+    while (cap < dirs * 2) cap <<= 1;
+    exp->keys = xcalloc(cap, sizeof(char *));
+    exp->open = xcalloc(cap, 1);
+    exp->cap = cap;
+
+    for (int t = 0; t < tree_count; t++) expansion_record(exp, trees[t]);
+}
+
+/* Re-apply the captured state to a freshly built forest, top-down: a directory
+ * that was open is opened (materialized first if this build stopped short of
+ * it, which is what makes its own children reachable below), one that was
+ * closed is closed, and a path the capture never saw keeps whatever the build
+ * chose for it — that last case is how the ancestry spine a re-rooted listing
+ * introduces comes up expanded. State under a directory that comes back closed
+ * is dropped: nothing there is on screen, and materializing it just to
+ * remember it would cost a directory read the listing never asked for. */
+static void expansion_restore(TreeNode *node, const ExpansionState *exp,
+                              PrintContext *ctx) {
+    if (!node_is_directory(node)) return;
+
+    size_t i = expansion_slot(exp, node_key(node));
+    if (exp->keys[i]) {
+        if (exp->open[i]) picker_materialize(node, ctx);
+        node->ui_expanded = exp->open[i];
+    }
+
+    for (size_t c = 0; c < node->child_count; c++) {
+        expansion_restore(&node->children[c], exp, ctx);
+    }
+}
+
+static void expansion_free(ExpansionState *exp) {
+    for (size_t i = 0; i < exp->cap; i++) free(exp->keys[i]);
+    free(exp->keys);
+    free(exp->open);
+}
+
+/* Re-read everything from disk — the same data pass a fresh run makes — while
+ * keeping the state the run itself would not have: which directories are open,
+ * and where the cursor sits (both restored by path, so they survive a listing
+ * that comes back rooted somewhere else). Any live query is cleared.
+ * *trees_ref is replaced with the new forest. */
+static void picker_reload(SelectState *state, TreeNode ***trees_ref,
+                          int tree_count, char *const *dirs,
+                          PrintContext *ctx, int files_only) {
+    TreeNode *current = row_count(state) > 0
+        ? row_node(state, state->cursor) : NULL;
+    char *saved = current ? xstrdup(node_key(current)) : NULL;
+
+    ExpansionState expansion;
+    expansion_capture(&expansion, *trees_ref, tree_count);
+
+    state->filter_mode = 0;
+    state->filter_len = 0;
+    state->filter[0] = '\0';
+
+    view_free(state->view);
+    state->view = NULL;
+    forest_free(*trees_ref, tree_count);
+    git_cache_free(ctx->git);
+    git_cache_init(ctx->git);
+    *trees_ref = forest_build(dirs, tree_count, ctx->cfg, ctx->git, ctx->icons);
+
+    for (int t = 0; t < tree_count; t++) {
+        expansion_restore((*trees_ref)[t], &expansion, ctx);
+    }
+    expansion_free(&expansion);
+
+    picker_rebuild(state, *trees_ref, tree_count, ctx);
+    state->cursor = 0;
+    state->scroll_offset = 0;
+    cursor_to_path(state, saved);
+    free(saved);
+    snap_cursor(state, files_only);
+    get_terminal_size(&state->term_rows);
+}
+
+/* ============================================================================
+ * Rendering
+ * ============================================================================ */
 
 static void render_line(SelectState *state, int index, int is_selected,
                         PrintContext *ctx) {
@@ -338,6 +485,28 @@ static void render_line(SelectState *state, int index, int is_selected,
     line_ctx.selected = is_selected;
 
     print_entry(&row->node->entry, row->depth, row->expanded, &line_ctx);
+}
+
+/* The hint line under the listing. The two toggles name what the key would
+ * switch to, so each reads as the action it performs. */
+static void format_status(const SelectState *state, int count, int files_only,
+                          int git_only, char *buf, size_t len) {
+    if (state->filter_mode) {
+        snprintf(buf, len,
+                 "%s/%s%s   %s%d match%s   [Enter] select  [Esc] cancel%s",
+                 COLOR_CYAN, COLOR_RESET, state->filter,
+                 COLOR_GREY, count, count == 1 ? "" : "es",
+                 COLOR_RESET);
+        return;
+    }
+    snprintf(buf, len,
+             "%s[j/k] %s  [f] %s  [m] %s  [/] filter  [h/l] fold  [o] open  "
+             "[y] yank  [r] reload  [Enter] select  [q] quit%s",
+             COLOR_GREY,
+             files_only ? "files" : "move",
+             files_only ? "all" : "files",
+             git_only ? "all" : "git",
+             COLOR_RESET);
 }
 
 static void render_picker(SelectState *state, PrintContext *ctx, int files_only) {
@@ -373,21 +542,8 @@ static void render_picker(SelectState *state, PrintContext *ctx, int files_only)
      * overflow would repeatedly overwrite the last column instead of
      * truncating cleanly. */
     char status[512];
-    if (state->filter_mode) {
-        snprintf(status, sizeof(status),
-                 "%s/%s%s   %s%d match%s   [Enter] select  [Esc] cancel%s",
-                 COLOR_CYAN, COLOR_RESET, state->filter,
-                 COLOR_GREY, count, count == 1 ? "" : "es",
-                 COLOR_RESET);
-    } else if (files_only) {
-        snprintf(status, sizeof(status),
-                 "%s[j/k] files  [f] all  [/] filter  [h/l] fold  [o] open  [y] yank  [r] reload  [Enter] select  [q] quit%s",
-                 COLOR_GREY, COLOR_RESET);
-    } else {
-        snprintf(status, sizeof(status),
-                 "%s[j/k] move  [f] files  [/] filter  [h/l] fold  [o] open  [y] yank  [r] reload  [Enter] select  [q] quit%s",
-                 COLOR_GREY, COLOR_RESET);
-    }
+    format_status(state, count, files_only, ctx->cfg->req.git_only,
+                  status, sizeof(status));
     printf("\r\033[K");
     if (ctx->term_width > 0 && visible_strlen(status) > ctx->term_width) {
         char *truncated = truncate_visible(status, ctx->term_width);
@@ -525,10 +681,15 @@ static void copy_to_clipboard(const char *text) {
  * Main Selection Loop
  * ============================================================================ */
 
-char *select_run(TreeNode ***trees_ref, int tree_count, char *const *dirs,
-                 PrintContext *ctx) {
-    TreeNode **trees = *trees_ref;
+/* -m only means something inside a repository (the static listing errors out
+ * otherwise), so the toggle is a no-op elsewhere. */
+static int target_in_git_repo(const char *path) {
+    char repo_root[PATH_MAX];
+    return git_find_root(path, repo_root, sizeof(repo_root));
+}
 
+char *select_run(TreeNode ***trees_ref, int tree_count, char *const *dirs,
+                 Config *cfg, PrintContext *ctx) {
     SelectState state;
     memset(&state, 0, sizeof(state));
     state.term_rows = 24;
@@ -546,7 +707,7 @@ char *select_run(TreeNode ***trees_ref, int tree_count, char *const *dirs,
     render_ctx.line_prefix = NULL;
 
     /* Build the initial view */
-    picker_rebuild(&state, trees, tree_count, &render_ctx);
+    picker_rebuild(&state, *trees_ref, tree_count, &render_ctx);
 
     if (row_count(&state) == 0) {
         view_free(state.view);
@@ -621,7 +782,7 @@ char *select_run(TreeNode ***trees_ref, int tree_count, char *const *dirs,
                 /* Collapse current directory */
                 if (current && node_is_directory(current) && current->ui_expanded) {
                     current->ui_expanded = 0;
-                    picker_rebuild(&state, trees, tree_count, &render_ctx);
+                    picker_rebuild(&state, *trees_ref, tree_count, &render_ctx);
                     cursor_to_node(&state, current);
                     snap_cursor(&state, files_only);
                     render_picker(&state, &render_ctx, files_only);
@@ -631,46 +792,32 @@ char *select_run(TreeNode ***trees_ref, int tree_count, char *const *dirs,
             case KEY_RIGHT:
                 /* Expand current directory (materialize children on first open) */
                 if (current && node_is_directory(current) && !current->ui_expanded) {
-                    if (current->child_count == 0 && !current->was_expanded) {
-                        tree_expand_node_from_config(current, render_ctx.git,
-                                                     render_ctx.cfg, render_ctx.icons);
-                    }
+                    picker_materialize(current, &render_ctx);
                     current->ui_expanded = 1;
-                    picker_rebuild(&state, trees, tree_count, &render_ctx);
+                    picker_rebuild(&state, *trees_ref, tree_count, &render_ctx);
                     cursor_to_node(&state, current);
                     snap_cursor(&state, files_only);
                     render_picker(&state, &render_ctx, files_only);
                 }
                 break;
 
-            case KEY_RELOAD: {
-                /* Rebuild everything from scratch — identical to quitting and
-                 * re-running l -i, with the cursor put back by path. Clears
-                 * any live query (a fresh run has none). */
-                char *saved = current ? xstrdup(current->entry.path) : NULL;
-                state.filter_mode = 0;
-                state.filter_len = 0;
-                state.filter[0] = '\0';
-
-                view_free(state.view);
-                state.view = NULL;
-                forest_free(trees, tree_count);
-                git_cache_free(render_ctx.git);
-                git_cache_init(render_ctx.git);
-                trees = forest_build(dirs, tree_count, render_ctx.cfg,
-                                     render_ctx.git, render_ctx.icons);
-                *trees_ref = trees;
-
-                picker_rebuild(&state, trees, tree_count, &render_ctx);
-                state.cursor = 0;
-                state.scroll_offset = 0;
-                cursor_to_path(&state, saved);
-                free(saved);
-                snap_cursor(&state, files_only);
-                get_terminal_size(&state.term_rows);
+            case KEY_RELOAD:
+                picker_reload(&state, trees_ref, tree_count, dirs,
+                              &render_ctx, files_only);
                 render_picker(&state, &render_ctx, files_only);
                 break;
-            }
+
+            case KEY_GIT_ONLY:
+                /* Toggle -m live. The flag also decides where the listing is
+                 * rooted (-m anchors it at the repo root), so the forest is
+                 * rebuilt: pressing 'm' leaves exactly the tree the same
+                 * command with, or without, -m would have produced. */
+                if (!cfg->req.git_only && !target_in_git_repo(dirs[0])) break;
+                request_set_git_only(&cfg->req, !cfg->req.git_only);
+                picker_reload(&state, trees_ref, tree_count, dirs,
+                              &render_ctx, files_only);
+                render_picker(&state, &render_ctx, files_only);
+                break;
 
             case KEY_FILTER_FILES:
                 if (!current) break;
@@ -701,13 +848,10 @@ char *select_run(TreeNode ***trees_ref, int tree_count, char *const *dirs,
                     if (current->ui_expanded) {
                         current->ui_expanded = 0;
                     } else {
-                        if (current->child_count == 0 && !current->was_expanded) {
-                            tree_expand_node_from_config(current, render_ctx.git,
-                                                         render_ctx.cfg, render_ctx.icons);
-                        }
+                        picker_materialize(current, &render_ctx);
                         current->ui_expanded = 1;
                     }
-                    picker_rebuild(&state, trees, tree_count, &render_ctx);
+                    picker_rebuild(&state, *trees_ref, tree_count, &render_ctx);
                     cursor_to_node(&state, current);
                     snap_cursor(&state, files_only);
                     render_picker(&state, &render_ctx, files_only);
@@ -766,7 +910,7 @@ char *select_run(TreeNode ***trees_ref, int tree_count, char *const *dirs,
                 if (state.filter_len < (int)sizeof(state.filter) - 1) {
                     state.filter[state.filter_len++] = typed;
                     state.filter[state.filter_len] = '\0';
-                    picker_rebuild(&state, trees, tree_count, &render_ctx);
+                    picker_rebuild(&state, *trees_ref, tree_count, &render_ctx);
                     state.cursor = 0;
                     state.scroll_offset = 0;
                     render_picker(&state, &render_ctx, files_only);
@@ -776,7 +920,7 @@ char *select_run(TreeNode ***trees_ref, int tree_count, char *const *dirs,
             case KEY_BACKSPACE:
                 if (state.filter_len > 0) {
                     state.filter[--state.filter_len] = '\0';
-                    picker_rebuild(&state, trees, tree_count, &render_ctx);
+                    picker_rebuild(&state, *trees_ref, tree_count, &render_ctx);
                     state.cursor = 0;
                     state.scroll_offset = 0;
                     render_picker(&state, &render_ctx, files_only);
@@ -789,7 +933,7 @@ char *select_run(TreeNode ***trees_ref, int tree_count, char *const *dirs,
                 if (state.filter_len > 0) {
                     state.filter_len = 0;
                     state.filter[0] = '\0';
-                    picker_rebuild(&state, trees, tree_count, &render_ctx);
+                    picker_rebuild(&state, *trees_ref, tree_count, &render_ctx);
                     state.cursor = 0;
                     state.scroll_offset = 0;
                 }

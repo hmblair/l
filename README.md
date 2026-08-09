@@ -111,17 +111,20 @@ Use `-i` to enter interactive selection mode:
 | `h/l` or `←/→` | Collapse/expand directories |
 | `o` | Open file (picker stays open) or toggle directory |
 | `f` | Toggle files-only navigation |
+| `m` | Toggle git-changed-only filtering (as if `-m` were passed; no-op outside a repo) |
 | `/` | Filter entries by name (type to narrow, `Esc` to cancel) |
-| `r` | Reload the tree from scratch (like reopening the picker; cursor is kept) |
+| `r` | Re-read the tree from disk (open directories and cursor are kept) |
 | `Enter` | Print selected path and exit |
 | `y` | Copy path to clipboard |
 | `q` or `Esc` | Quit |
 
 Press `/` to filter the listing by name: type to narrow the entries live (substring match, or a glob if the query contains `*`, `?`, or `[`), use `↑/↓` to move through the matches, `Enter` to select the highlighted one, and `Esc` to clear the filter and return to the full listing. Matching is smart-case, like vim: case-insensitive unless the query contains an uppercase letter.
 
-Text files open in `$EDITOR` (default: `vim`). Binary files (images, PDFs, videos, etc.) open with the system handler (`open` on macOS, `xdg-open` on Linux). Directories can be dynamically expanded beyond the initial depth limit.
+Text files open in `$EDITOR` (default: `vim`). Binary files (images, PDFs, videos, etc.) open with the system handler (`open` on macOS, `xdg-open` on Linux). Directories can be dynamically expanded beyond the initial depth limit; an expanded directory shows the entries the same filters would have left in a static listing of it, so drilling in under `-m` shows changed files, not everything.
 
-The listing is a snapshot from when the picker opened: expanding a directory reads it on first open, and nothing updates automatically while the picker is idle. Press `r` to re-read everything (equivalent to quitting and re-running `l -i`).
+Press `m` to switch between the full listing and the git-changed one without leaving the picker. Because `-m` also decides where the listing is rooted (at the repo root), each press rebuilds the tree, leaving exactly what `l -i` or `l -im` would have shown; the cursor stays on the entry it was on, or on its nearest visible ancestor.
+
+The listing is a snapshot from when the picker opened: expanding a directory reads it on first open, and nothing updates automatically while the picker is idle. Press `r` to re-read everything from disk. The display survives the re-read: the directories you had open stay open (reading them again if the fresh listing stopped short of them) and the cursor stays on the same entry, both matched by path. Only state under a directory you had closed is forgotten, since none of it is on screen.
 
 ### Tab Completion Widget (zsh)
 
