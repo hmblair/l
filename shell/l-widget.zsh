@@ -19,11 +19,15 @@
 # AUTO_MENU is suppressed.
 
 # Captured state shared between the completion widget and the zle widget.
-# Candidates are bare names; two different prefixes turn them back into paths.
-# _l_captured_prefix is the text that must precede a candidate in the buffer,
-# and _l_captured_dir is the directory it must be looked up in on disk. They
-# diverge whenever the typed path is not literally relative to $PWD.
+# Candidates are bare names; three different prefixes turn them back into paths.
+# _l_captured_bufprefix is the command-line text that must precede a candidate
+# in the buffer, _l_captured_prefix is that same prefix as a literal filename,
+# and _l_captured_dir is the directory candidates must be looked up in on disk.
+# The first two diverge whenever the typed prefix is not its own literal value
+# (`$OAK/`, `~/`); the last two diverge whenever the typed path is not literally
+# relative to $PWD.
 typeset -ga _l_captured_candidates=()
+typeset -g  _l_captured_bufprefix=""
 typeset -g  _l_captured_prefix=""
 typeset -g  _l_captured_dir=""
 typeset -gi _l_captured_has_file=0
@@ -42,6 +46,7 @@ _l_debug() { [[ -n "$_L_WIDGET_DEBUG" ]] && print -r -- "$@" >> "$_L_WIDGET_DEBU
 # Completion widget function — runs inside a real completion context
 _l_capture_complete() {
   _l_captured_candidates=()
+  _l_captured_bufprefix=""
   _l_captured_prefix=""
   _l_captured_dir=""
   _l_captured_has_file=0
@@ -84,16 +89,27 @@ _l_capture_complete() {
         fi
       done
     done
-    # Capture everything in literal (unquoted) form: existence checks and the
-    # picker need real filenames, and insertion re-quotes with ${(q)...}.
-    # Only the words and -p follow -Q; IPREFIX is raw command-line text and so
-    # is always unquoted, while -W is a real filename and never quoted.
+    # Candidates and -W are captured in literal (unquoted) form: existence
+    # checks and the picker need real filenames, and insertion quotes them with
+    # ${(q)...}. Only the words and -p follow -Q; IPREFIX is raw command-line
+    # text and so is always unquoted, while -W is a real filename.
+    #
+    # The prefix is kept in both forms, because it is the one captured value
+    # that is not a filename. It is what compadd hides (-p) on top of the part
+    # of the word the completer already accepted (IPREFIX) — _cd, for instance,
+    # moves a leading `../` into IPREFIX and leaves -p empty. Its buffer form
+    # must go back verbatim: a prefix like `$OAK/` or `~/` is command-line
+    # syntax whose meaning quoting destroys, and requoting it would insert a
+    # literal `\$OAK/` that no longer names the directory it was read from.
+    # ${(q)} of an empty string is '', so only a non-empty -p is quoted.
+    local _bufprefix="$IPREFIX"
+    if [[ -n "$_prefix" ]]; then
+      (( _has_q )) && _bufprefix+="$_prefix" || _bufprefix+="${(q)_prefix}"
+    fi
     (( _has_q )) && _prefix="${(Q)_prefix}"
-    # The buffer prefix is what compadd hides (-p) on top of the part of the
-    # word the completer already accepted (IPREFIX) — _cd, for instance, moves
-    # a leading `../` into IPREFIX and leaves -p empty.
     _prefix="${(Q)IPREFIX}$_prefix"
     [[ -n "$_prefix" ]] && _l_captured_prefix="$_prefix"
+    [[ -n "$_bufprefix" ]] && _l_captured_bufprefix="$_bufprefix"
     # -W may instead name an array parameter (_path_files -W tmpcdpath); only
     # an actual directory is usable as a lookup root.
     [[ -n "$_wdir" && -d "$_wdir" ]] && _l_captured_dir="${_wdir%/}/"
@@ -133,21 +149,31 @@ _l_candidate_path() {
   REPLY="${REPLY/#\~/$HOME}"
 }
 
+# Buffer text for a completed path, into $REPLY. $1 is the part below the
+# captured prefix, in literal form: a real filename (possibly several
+# components deep, as descending in the picker produces), so it is quoted,
+# while the prefix is command-line text that goes back exactly as typed. ${(q)}
+# leaves '/' alone, so a multi-component remainder quotes in one pass. A
+# candidate that is itself a named directory keeps its leading tilde.
+_l_buffer_path() {
+  REPLY="${_l_captured_bufprefix}${(q)1}"
+  REPLY="${REPLY/#\\~/~}"
+}
+
 # Insert a completed filesystem path into LBUFFER, replacing the current word.
 # Appends "/" for directories (so completion advances) and a trailing space for
-# runnable non-directory completions in command position. $1 = buffer form of
-# the path (prefix already applied), $2 = current word to strip, $3 =
+# runnable non-directory completions in command position. $1 = the path below
+# the captured prefix, in literal form, $2 = current word to strip, $3 =
 # is_command flag, $4 = the path's on-disk location.
 _l_insert_path() {
-  local _path="$1" _strip="$2" _cmd="$3" _disk="$4"
+  local _rel="$1" _strip="$2" _cmd="$3" _disk="$4"
   [[ -n "$_strip" ]] && LBUFFER="${LBUFFER%"$_strip"}"
   [[ -n "$LBUFFER" && "$LBUFFER" != *" " ]] && LBUFFER+=" "
   local _is_dir=0
   [[ -d "$_disk" ]] && _is_dir=1
-  (( _is_dir )) && _path+="/"
-  _path="${(q)_path}"
-  _path="${_path/#\\~/~}"
-  LBUFFER+="$_path"
+  _l_buffer_path "$_rel"
+  (( _is_dir )) && REPLY+="/"
+  LBUFFER+="$REPLY"
   (( _cmd && ! _is_dir )) && LBUFFER+=" "
 }
 
@@ -301,7 +327,7 @@ _l_complete() {
   # (e.g. "./" for a runnable script); a bare command name has an empty prefix.
   if (( ${#candidates} == 1 )); then
     _l_candidate_path "${candidates[1]}"
-    _l_insert_path "${_l_captured_prefix}${candidates[1]}" "$current" "$is_command" "$REPLY"
+    _l_insert_path "${candidates[1]}" "$current" "$is_command" "$REPLY"
     _l_debug "-> single candidate insert: LBUFFER=[$LBUFFER]"
     _l_restore_cwd
     zle reset-prompt
@@ -325,13 +351,13 @@ _l_complete() {
     # Only include candidates that resolve to a real path. Completion helpers
     # (e.g. _cd's named-directory probe) can inject spurious candidates; a single
     # nonexistent argument would make `l -i` abort entirely, so drop them here.
-    # Keep a parallel `rels` array of the candidate strings (relative or
-    # ~-prefixed) to insert: `l -i` echoes an absolute path, so we map its
-    # selection back to the matching candidate to preserve the typed form.
+    # Keep a parallel `rels` array of the candidate names, the part below the
+    # captured prefix: `l -i` echoes an absolute path, so we map its selection
+    # back to the matching candidate to preserve the typed form.
     for c in "${candidates[@]}"; do
       _l_candidate_path "$c"
       [[ -e "$REPLY" || -L "$REPLY" ]] &&
-        { paths+=("$REPLY"); rels+=("${_l_captured_prefix}${c}"); }
+        { paths+=("$REPLY"); rels+=("$c"); }
     done
   fi
 
@@ -386,23 +412,32 @@ _l_complete() {
       # l -i echoes an absolute path, which may be a file the user descended
       # into from a candidate directory (via 'o'/nested folds). Match the
       # selection against each candidate root as a path prefix and re-attach the
-      # remainder to that candidate's display form, so the inserted text keeps
-      # the relative/~-prefixed form the user typed at any nesting depth.
-      local _ins="${selected/#$HOME/~}" _i _selA="${selected:A}"
+      # remainder to that candidate's name, so the inserted text keeps the
+      # prefix the user typed at any nesting depth.
+      local _rel="" _i _selA="${selected:A}"
+      local -i _matched=0
       for _i in {1..${#paths}}; do
         local _pa="${paths[$_i]:A}"
         if [[ "$_selA" == "$_pa" ]]; then
-          _ins="${rels[$_i]}"
+          _rel="${rels[$_i]}"
+          _matched=1
           break
         elif [[ "$_selA" == "$_pa"/* ]]; then
-          _ins="${rels[$_i]}/${_selA#$_pa/}"
+          _rel="${rels[$_i]}/${_selA#$_pa/}"
+          _matched=1
           break
         fi
       done
-      [[ -d "$selected" ]] && _ins+="/"
-      local _qsel="${(q)_ins}"
-      _qsel="${_qsel/#\\~/~}"
-      LBUFFER+="$_qsel"
+      if (( _matched )); then
+        _l_buffer_path "$_rel"
+      else
+        # The selection lies under no candidate root, so there is no typed
+        # prefix to reattach: insert it as an absolute path, abbreviating $HOME.
+        REPLY="${(q)${selected/#$HOME/~}}"
+        REPLY="${REPLY/#\\~/~}"
+      fi
+      [[ -d "$selected" ]] && REPLY+="/"
+      LBUFFER+="$REPLY"
     fi
     _l_restore_cwd
     zle reset-prompt
