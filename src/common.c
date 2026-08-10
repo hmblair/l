@@ -532,6 +532,61 @@ void daemon_status_get_path(char *buf, size_t len) {
     snprintf(buf, len, "%s/.cache/l/status", home ? home : "/tmp");
 }
 
+#ifdef __linux__
+/* Filesystem type is a property of the device, but the kernel does not cache
+ * statfs() and on a network filesystem it is expensive: Lustre aggregates free
+ * space across every OST, ~80ms per call. The type is memoized by device id so
+ * a recursive walk pays once per filesystem instead of once per directory. */
+#define FS_TYPE_MEMO_MAX 32
+
+typedef struct {
+    dev_t dev;
+    unsigned long type;
+} FsTypeMemo;
+
+static FsTypeMemo g_fs_types[FS_TYPE_MEMO_MAX];
+static int g_fs_type_count = 0;
+static pthread_mutex_t g_fs_type_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static int fs_type_memo_get(dev_t dev, unsigned long *type) {
+    int found = 0;
+    pthread_mutex_lock(&g_fs_type_lock);
+    for (int i = 0; i < g_fs_type_count; i++) {
+        if (g_fs_types[i].dev == dev) {
+            *type = g_fs_types[i].type;
+            found = 1;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_fs_type_lock);
+    return found;
+}
+
+static void fs_type_memo_put(dev_t dev, unsigned long type) {
+    pthread_mutex_lock(&g_fs_type_lock);
+    if (g_fs_type_count < FS_TYPE_MEMO_MAX) {
+        g_fs_types[g_fs_type_count].dev = dev;
+        g_fs_types[g_fs_type_count].type = type;
+        g_fs_type_count++;
+    }
+    pthread_mutex_unlock(&g_fs_type_lock);
+}
+
+/* Two threads may race to resolve the same device; the duplicate statfs is
+ * harmless because the type they store is identical. */
+static int fs_type_for_path(const char *path, unsigned long *type) {
+    struct stat st;
+    if (stat(path, &st) != 0) return 0;
+    if (fs_type_memo_get(st.st_dev, type)) return 1;
+
+    struct statfs sfs;
+    if (statfs(path, &sfs) != 0) return 0;
+    *type = (unsigned long)sfs.f_type;
+    fs_type_memo_put(st.st_dev, *type);
+    return 1;
+}
+#endif
+
 int path_is_network_fs(const char *path) {
 #ifdef __linux__
     /* Network filesystem magic numbers */
@@ -543,9 +598,9 @@ int path_is_network_fs(const char *path) {
     #define CEPH_SUPER_MAGIC    0x00C36400
     #define AFS_SUPER_MAGIC     0x5346414F
 
-    struct statfs st;
-    if (statfs(path, &st) != 0) return 0;
-    switch ((unsigned long)st.f_type) {
+    unsigned long fs_type;
+    if (!fs_type_for_path(path, &fs_type)) return 0;
+    switch (fs_type) {
         case NFS_SUPER_MAGIC:
         case LUSTRE_SUPER_MAGIC:
         case GPFS_SUPER_MAGIC:
@@ -572,9 +627,9 @@ int path_is_virtual_fs(const char *path) {
     #define CGROUP_SUPER_MAGIC  0x27e0eb
     #define CGROUP2_SUPER_MAGIC 0x63677270
 
-    struct statfs st;
-    if (statfs(path, &st) != 0) return 0;
-    switch ((unsigned long)st.f_type) {
+    unsigned long fs_type;
+    if (!fs_type_for_path(path, &fs_type)) return 0;
+    switch (fs_type) {
         case PROC_SUPER_MAGIC:
         case SYSFS_MAGIC:
         case DEVTMPFS_MAGIC:
