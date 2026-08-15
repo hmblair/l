@@ -717,7 +717,10 @@ char *select_run(TreeNode ***trees_ref, int tree_count, char *const *dirs,
     render_ctx.continuation = continuation;
     render_ctx.line_prefix = NULL;
 
-    /* Build the initial view */
+    /* Build the initial view. A listing whose command-line filters leave
+     * nothing to draw selects nothing and never opens the picker; one emptied
+     * by a toggle or a query while it is open stays open, so the key that
+     * emptied it can put the entries back. */
     picker_rebuild(&state, *trees_ref, tree_count, &render_ctx);
 
     if (row_count(&state) == 0) {
@@ -752,10 +755,6 @@ char *select_run(TreeNode ***trees_ref, int tree_count, char *const *dirs,
     char *yanked = NULL;   /* confirmation printed after the display is erased */
 
     while (1) {
-        /* Exit if the view is empty. Stay while filtering so a query that
-         * currently matches nothing can still be edited/cleared. */
-        if (row_count(&state) == 0 && !state.filter_mode) break;
-
         if (sigint_received) goto cleanup;
         int ready = poll_stdin();
         if (sigint_received) goto cleanup;
@@ -906,7 +905,7 @@ char *select_run(TreeNode ***trees_ref, int tree_count, char *const *dirs,
                 break;
 
             case KEY_ENTER:
-                if (!current) break;  /* filtering with no matches: do nothing */
+                if (!current) break;  /* nothing on display: nothing to select */
                 result = xstrdup(current->entry.path);
                 goto cleanup;
 
