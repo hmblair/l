@@ -6,9 +6,9 @@
  * from that point (lazy materialization), closing one just collapses the
  * view, and 'r' re-reads everything from disk while the display stays put —
  * the same directories open, the cursor on the same entry, both restored by
- * path. 'm' runs the same rebuild with -m flipped, which is what lets the
- * listing come back rooted somewhere else. There is no automatic refresh: the
- * input poll blocks, so an idle picker does no work at all.
+ * path. 'm' flips -m and rebuilds the rows from the same tree. There is no
+ * automatic refresh: the input poll blocks, so an idle picker does no work at
+ * all.
  */
 
 #include "select.h"
@@ -259,7 +259,7 @@ static void cursor_to_node(SelectState *state, const TreeNode *node) {
 
 /* The identity a row keeps across a rebuild: the canonical path when one was
  * precomputed, else the display path. Both sides of a cursor restore use this,
- * so a rebuild that re-roots the listing (toggling -m) still matches. */
+ * so a row still matches after the forest is rebuilt from disk. */
 static const char *node_key(const TreeNode *node) {
     return node->entry.abs_path ? node->entry.abs_path : node->entry.path;
 }
@@ -389,10 +389,9 @@ static void expansion_capture(ExpansionState *exp, TreeNode *const *trees,
  * that was open is opened (materialized first if this build stopped short of
  * it, which is what makes its own children reachable below), one that was
  * closed is closed, and a path the capture never saw keeps whatever the build
- * chose for it — that last case is how the ancestry spine a re-rooted listing
- * introduces comes up expanded. State under a directory that comes back closed
- * is dropped: nothing there is on screen, and materializing it just to
- * remember it would cost a directory read the listing never asked for. */
+ * chose for it. State under a directory that comes back closed is dropped:
+ * nothing there is on screen, and materializing it just to remember it would
+ * cost a directory read the listing never asked for. */
 static void expansion_restore(TreeNode *node, const ExpansionState *exp,
                               PrintContext *ctx) {
     if (!node_is_directory(node)) return;
@@ -416,9 +415,9 @@ static void expansion_free(ExpansionState *exp) {
 
 /* Re-read everything from disk — the same data pass a fresh run makes — while
  * keeping the state the run itself would not have: which directories are open,
- * and where the cursor sits (both restored by path, so they survive a listing
- * that comes back rooted somewhere else). Any live query is cleared.
- * *trees_ref is replaced with the new forest. */
+ * and where the cursor sits (both restored by path, so they survive entries
+ * that came and went on disk). Any live query is cleared. *trees_ref is
+ * replaced with the new forest. */
 static void picker_reload(SelectState *state, TreeNode ***trees_ref,
                           int tree_count, char *const *dirs,
                           PrintContext *ctx, int files_only) {
@@ -681,13 +680,6 @@ static void copy_to_clipboard(const char *text) {
  * Main Selection Loop
  * ============================================================================ */
 
-/* -m only means something inside a repository (the static listing errors out
- * otherwise), so the toggle is a no-op elsewhere. */
-static int target_in_git_repo(const char *path) {
-    char repo_root[PATH_MAX];
-    return git_find_root(path, repo_root, sizeof(repo_root));
-}
-
 char *select_run(TreeNode ***trees_ref, int tree_count, char *const *dirs,
                  Config *cfg, PrintContext *ctx) {
     SelectState state;
@@ -807,17 +799,28 @@ char *select_run(TreeNode ***trees_ref, int tree_count, char *const *dirs,
                 render_picker(&state, &render_ctx, files_only);
                 break;
 
-            case KEY_GIT_ONLY:
-                /* Toggle -m live. The flag also decides where the listing is
-                 * rooted (-m anchors it at the repo root), so the forest is
-                 * rebuilt: pressing 'm' leaves exactly the tree the same
-                 * command with, or without, -m would have produced. */
-                if (!cfg->req.git_only && !target_in_git_repo(dirs[0])) break;
-                request_set_git_only(&cfg->req, !cfg->req.git_only);
-                picker_reload(&state, trees_ref, tree_count, dirs,
-                              &render_ctx, files_only);
+            case KEY_GIT_ONLY: {
+                /* Toggle -m live. The flag only filters, so the forest stands:
+                 * the flags the filter reads are refreshed and the rows are
+                 * rebuilt in place, leaving exactly what the same command with,
+                 * or without, -m would have shown. The cursor returns to the
+                 * entry it was on, or to its nearest surviving ancestor. */
+                char *saved = current ? xstrdup(node_key(current)) : NULL;
+                cfg->req.git_only = !cfg->req.git_only;
+                if (cfg->req.git_only) {
+                    for (int t = 0; t < tree_count; t++) {
+                        compute_git_status_flags((*trees_ref)[t], render_ctx.git);
+                    }
+                }
+                picker_rebuild(&state, *trees_ref, tree_count, &render_ctx);
+                state.cursor = 0;
+                state.scroll_offset = 0;
+                cursor_to_path(&state, saved);
+                free(saved);
+                snap_cursor(&state, files_only);
                 render_picker(&state, &render_ctx, files_only);
                 break;
+            }
 
             case KEY_FILTER_FILES:
                 if (!current) break;

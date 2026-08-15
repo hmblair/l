@@ -22,12 +22,9 @@ typedef struct {
     int max_depth;
     int show_hidden;
     int expand_all;
-    int git_only;            /* -m: show only git-changed entries, rooted at repo */
+    int git_only;            /* -m: show only git-changed entries */
     int hide_gitignored;     /* -g: hide entries that are gitignored */
     int show_ancestry;
-    int ancestry_explicit;   /* -p was given explicitly (vs. implied by -m),
-                              * so anchor the ancestry at ~ (or /), not the
-                              * enclosing repo root. */
     int summary_mode;
     int list_mode;
     int interactive;
@@ -62,13 +59,6 @@ typedef struct {
     ComputeOpts compute;
     Env env;
 } Config;
-
-/* Turn git-only filtering (-m) on or off, keeping the ancestry it implies in
- * sync: -m roots the listing at the repo root, which is the ancestry spine
- * anchored there rather than at ~ (see config_to_build_opts). The interactive
- * picker toggles this at runtime, so the derivation lives here instead of in
- * argument parsing. */
-void request_set_git_only(Request *req, int on);
 
 /* Find the directory holding config.toml: next to the binary (development),
  * ~/.config/l (installed), /usr/local/share/l (system-wide), else ".". */

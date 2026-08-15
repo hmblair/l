@@ -871,27 +871,12 @@ TreeNode *build_ancestry_tree(const char *path, const TreeBuildOpts *opts,
         }
     }
 
-    /* Determine base path. With -g, anchor at the enclosing git repo root
-     * (found by walking up from the target); otherwise home if the path is under
-     * it, else /. */
+    /* Determine base path: home if the path is under it, else /. */
     const char *home = getenv("HOME");
     const char *base = "/";
     size_t base_len = 1;
-    char repo_base[PATH_MAX];
 
-    if (opts->ancestry_to_repo) {
-        strncpy(repo_base, abs_path, sizeof(repo_base) - 1);
-        repo_base[sizeof(repo_base) - 1] = '\0';
-        while (!path_is_git_root(repo_base)) {
-            char *slash = strrchr(repo_base, '/');
-            if (!slash || slash == repo_base) { repo_base[0] = '\0'; break; }
-            *slash = '\0';
-        }
-        if (repo_base[0]) {
-            base = repo_base;
-            base_len = strlen(repo_base);
-        }
-    } else if (home && home[0] && strncmp(abs_path, home, strlen(home)) == 0) {
+    if (home && home[0] && strncmp(abs_path, home, strlen(home)) == 0) {
         char after = abs_path[strlen(home)];
         if (after == '\0' || after == '/') {
             base = home;
@@ -990,7 +975,10 @@ int compute_git_status_flags(TreeNode *node, GitCache *git) {
     int result = GITF_IS_CHANGE(node->entry.git_flags);
 
     if (!result && node_is_directory(node)) {
-        GitSummary s = git_get_dir_summary(git, node->entry.path);
+        /* Keyed by the canonical path, as the cache is (see apply_git_status). */
+        const char *abs = node->entry.abs_path ? node->entry.abs_path
+                                               : node->entry.path;
+        GitSummary s = git_get_dir_summary(git, abs);
         result = s.modified || s.untracked || s.staged ||
                  s.deleted || s.staged_deleted;
     }

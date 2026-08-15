@@ -79,7 +79,6 @@ typedef struct {
     int tree_count;
     size_t *tree_row_start;   /* [tree_count + 1]: tree t owns rows
                                * [start[t], start[t+1]) */
-    int *tree_no_matches;     /* [tree_count]: filtering left nothing to show */
 
     Column cols[NUM_COLUMNS];
     int diff_add_width;
@@ -89,8 +88,8 @@ typedef struct {
 /* Mode parameters for view building. Zero-initialized means the static
  * listing; the interactive picker sets both. */
 typedef struct {
-    int interactive;    /* gate recursion on node->ui_expanded; no "No
-                         * matches." rows, no list-mode root suppression */
+    int interactive;    /* gate recursion on node->ui_expanded; no list-mode
+                         * root suppression */
     int live_filter;    /* a '/' query is active: matches_grep filters at
                          * every depth, including tree roots */
 } ViewOptions;
@@ -102,6 +101,10 @@ View *view_build(TreeNode **trees, int tree_count, const Config *cfg,
 View *view_build_opts(TreeNode **trees, int tree_count, const Config *cfg,
                       GitCache *git, const Icons *icons, const ViewOptions *vo);
 void view_free(View *view);
+
+/* Whether one argument's tree drew no rows at all, which is what filtering
+ * everything out of it leaves. */
+int view_tree_is_empty(const View *view, int tree);
 
 /* Bottom-up git attribution: zero every visible directory's view summary,
  * then add each cached change to its nearest visible ancestor within its

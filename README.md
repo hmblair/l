@@ -77,7 +77,7 @@ l [OPTIONS] [FILE ...]
 | `-e, --expand-all` | Expand all directories (ignore skip list) |
 | `-p, --path` | Show ancestry from `~` (or `/`) to target |
 | `-i, --interactive` | Interactive selection mode |
-| `-m` | Git-changed files, rooted at the repo (errors outside a repo; shows just the repo root when clean) |
+| `-m` | Show only git-changed files (no output when the targets hold no changes) |
 | `-b, --base REF` | Report git changes against REF (branch, tag, or commit) instead of HEAD, including committed differences |
 | `-g` | Hide gitignored files and folders |
 | `-f, --filter PATTERN` | Filter files matching pattern (implies `-at`) |
@@ -111,7 +111,7 @@ Use `-i` to enter interactive selection mode:
 | `h/l` or `←/→` | Collapse/expand directories |
 | `o` | Open file (picker stays open) or toggle directory |
 | `f` | Toggle files-only navigation |
-| `m` | Toggle git-changed-only filtering (as if `-m` were passed; no-op outside a repo) |
+| `m` | Toggle git-changed-only filtering (as if `-m` were passed) |
 | `/` | Filter entries by name (type to narrow, `Esc` to cancel) |
 | `r` | Re-read the tree from disk (open directories and cursor are kept) |
 | `Enter` | Print selected path and exit |
@@ -122,7 +122,7 @@ Press `/` to filter the listing by name: type to narrow the entries live (substr
 
 Text files open in `$EDITOR` (default: `vim`). Binary files (images, PDFs, videos, etc.) open with the system handler (`open` on macOS, `xdg-open` on Linux). Directories can be dynamically expanded beyond the initial depth limit; an expanded directory shows the entries the same filters would have left in a static listing of it, so drilling in under `-m` shows changed files, not everything.
 
-Press `m` to switch between the full listing and the git-changed one without leaving the picker. Because `-m` also decides where the listing is rooted (at the repo root), each press rebuilds the tree, leaving exactly what `l -i` or `l -im` would have shown; the cursor stays on the entry it was on, or on its nearest visible ancestor.
+Press `m` to switch between the full listing and the git-changed one without leaving the picker. Each press rebuilds the rows from the same tree, leaving exactly what `l -i` or `l -im` would have shown; the cursor stays on the entry it was on, or on its nearest visible ancestor. A listing that the filter empties completely closes the picker, selecting nothing.
 
 The listing is a snapshot from when the picker opened: expanding a directory reads it on first open, and nothing updates automatically while the picker is idle. Press `r` to re-read everything from disk. The display survives the re-read: the directories you had open stay open (reading them again if the fresh listing stopped short of them) and the cursor stays on the same entry, both matched by path. Only state under a directory you had closed is forgotten, since none of it is on screen.
 
@@ -148,7 +148,7 @@ Completion changes need a shell reload (`exec zsh`) to take effect.
 l                    # Current directory
 l -at                # All files with full tree
 l -al ~/projects     # Long format, hidden files
-l -m                 # Git-changed files, as a tree from the repo root
+l -m                 # Git-changed files under the current directory
 l -mb main           # Everything changed since main, committed or not
 l -g                 # Hide gitignored files and folders
 l -f "*.go"          # Filter to Go files

@@ -74,7 +74,7 @@ static void print_usage(void) {
     printf("  --summary               Show summary info for file/directory\n");
     printf("  --no-icons              Hide file/folder/git icons\n");
     printf("  -c, --color-all         Don't gray out gitignored files\n");
-    printf("  -m                      Git-changed files, rooted at the repo (fails outside a repo)\n");
+    printf("  -m                      Show only git-changed files\n");
     printf("  -b, --base REF          Report git changes against REF (branch, tag, or commit)\n");
     printf("                          instead of HEAD, including committed differences\n");
     printf("  -g                      Hide gitignored files and folders\n");
@@ -145,7 +145,7 @@ OPT_HANDLER(opt_short_fmt)   { (void)val; (void)label; cfg->disp.long_format = 0
 OPT_HANDLER(opt_long_fmt)    { (void)val; (void)label; cfg->disp.long_format = 1; cfg->disp.long_format_explicit = 1; }
 OPT_HANDLER(opt_tree)        { (void)val; (void)label; cfg->req.max_depth = L_MAX_DEPTH; }
 OPT_HANDLER(opt_depth)       { (void)cfg; cfg->req.max_depth = parse_depth(val, label); }
-OPT_HANDLER(opt_path)        { (void)val; (void)label; cfg->req.show_ancestry = 1; cfg->req.ancestry_explicit = 1; }
+OPT_HANDLER(opt_path)        { (void)val; (void)label; cfg->req.show_ancestry = 1; }
 OPT_HANDLER(opt_expand)      { (void)val; (void)label; cfg->req.expand_all = 1; }
 OPT_HANDLER(opt_color_all)   { (void)val; (void)label; cfg->disp.color_all = 1; }
 OPT_HANDLER(opt_interactive) { (void)val; (void)label; cfg->req.interactive = 1; }
@@ -532,20 +532,6 @@ int main(int argc, char **argv) {
     int dir_count;
     parse_args(argc, argv, &cfg, &dirs, &dir_count);
 
-    /* -m requires a git repo: fail outside one, otherwise show the ancestry up
-     * to the repo root (git_only filtering then collapses it to just the repo
-     * root when there are no changes). */
-    if (cfg.req.git_only) {
-        char repo_root[PATH_MAX];
-        const char *target = dir_count > 0 ? dirs[0] : ".";
-        if (!git_find_root(target, repo_root, sizeof(repo_root))) {
-            fprintf(stderr, "%sError:%s not in a git repository\n",
-                    CLR(&cfg, COLOR_RED), RST(&cfg));
-            return 1;
-        }
-        request_set_git_only(&cfg.req, 1);
-    }
-
     /* --base must name a commit when the target is inside a repo. A listing
      * spanning multiple repos skips any where the ref is missing
      * (git_populate_repo re-checks per repo), so this validates only the
@@ -685,10 +671,7 @@ int main(int argc, char **argv) {
         }
     } else if (cfg.req.summary_mode) {
         for (int i = 0; i < dir_count; i++) {
-            if (view->tree_no_matches[i]) {
-                printf("%sNo matches.%s\n", CLR(&cfg, COLOR_RED), RST(&cfg));
-                continue;
-            }
+            if (view_tree_is_empty(view, i)) continue;
             summary_prepare(trees[i], &ctx);
             print_summary(trees[i], &ctx);
         }

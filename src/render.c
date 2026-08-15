@@ -321,15 +321,10 @@ void print_entry(const FileEntry *fe, int depth, int was_expanded, const PrintCo
 }
 
 /* Draw every row of a built View: decode each row's continuation mask into
- * the context's array and print. Trees that filtering emptied print the
- * "No matches." notice instead. */
+ * the context's array and print. A tree that filtering emptied has no rows,
+ * so it prints nothing. */
 void render_view(const View *view, PrintContext *ctx) {
     for (int t = 0; t < view->tree_count; t++) {
-        if (view->tree_no_matches[t]) {
-            printf("%sNo matches.%s\n",
-                   CLR(ctx->cfg, COLOR_RED), RST(ctx->cfg));
-            continue;
-        }
         for (size_t i = view->tree_row_start[t]; i < view->tree_row_start[t + 1]; i++) {
             const ViewRow *row = &view->rows[i];
             for (int d = 0; d < row->depth && d < L_MAX_DEPTH; d++) {

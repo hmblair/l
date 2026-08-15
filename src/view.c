@@ -116,8 +116,8 @@ int node_is_visible(const TreeNode *node, const Config *cfg) {
 }
 
 /* A hidden entry (dotfile) is not displayed unless -a is given. This is kept
- * separate from node_is_visible because view_build_opts tests the two on their
- * own when deciding whether filtering left a root with nothing to show. */
+ * separate from node_is_visible so the two tests can be applied on their own:
+ * the content filters decide what a listing is about, -a only what it hides. */
 int node_is_hidden(const TreeNode *node, const Config *cfg) {
     if (node->is_ancestor) return 0;
     return !cfg->req.show_hidden && node->entry.name[0] == '.';
@@ -139,6 +139,21 @@ int node_is_shown(const TreeNode *node, const Config *cfg,
     if (!node_is_visible(node, cfg)) return 0;
     if (live_filter_active && !node->matches_grep) return 0;
     return 1;
+}
+
+/* Whether one tree root has anything to draw. The interactive '/' query and
+ * the content filters both reach it: it passes on its own (a directory's git
+ * and grep flags roll up its whole subtree, so it passes whenever anything
+ * below it does), or one of its children is shown. */
+static int root_is_shown(const TreeNode *root, const Config *cfg,
+                         int live_filter_active) {
+    if (live_filter_active && !root->matches_grep) return 0;
+    if (!is_filtering_active(cfg)) return 1;
+    if (node_is_visible(root, cfg)) return 1;
+    for (size_t i = 0; i < root->child_count; i++) {
+        if (node_is_shown(&root->children[i], cfg, live_filter_active)) return 1;
+    }
+    return 0;
 }
 
 /* ============================================================================
@@ -298,39 +313,20 @@ View *view_build_opts(TreeNode **trees, int tree_count, const Config *cfg,
     columns_init(v->cols);
     v->tree_count = tree_count;
     v->tree_row_start = xmalloc((tree_count + 1) * sizeof(size_t));
-    v->tree_no_matches = xcalloc(tree_count, sizeof(int));
-
-    int filtering = is_filtering_active(cfg);
 
     for (int t = 0; t < tree_count; t++) {
         v->tree_row_start[t] = v->count;
         TreeNode *root = trees[t];
 
+        /* A root the filters leave with nothing to show draws nothing at all,
+         * not a lone root row: a listing narrowed to entries that aren't there
+         * is empty. The picker then has no rows and exits. */
+        if (!root_is_shown(root, cfg, vo->live_filter)) continue;
+
         if (vo->interactive) {
-            /* The picker draws every root (no "No matches." rows, no list
-             * mode), except roots hidden by an active '/' query. */
-            if (vo->live_filter && !root->matches_grep) continue;
+            /* The picker draws each root itself (no list mode). */
             view_emit_subtree(v, root, 0, 0, cfg, vo);
             continue;
-        }
-
-        /* Filtering that leaves no visible children shows "No matches."
-         * instead of a lone root row. -g/-m still shows the repo root even
-         * when clean, so git-only skips this. */
-        if (filtering && !cfg->req.git_only) {
-            int has_visible = 0;
-            for (size_t j = 0; j < root->child_count; j++) {
-                const TreeNode *child = &root->children[j];
-                if (node_is_hidden(child, cfg)) continue;
-                if (node_is_visible(child, cfg)) {
-                    has_visible = 1;
-                    break;
-                }
-            }
-            if (!has_visible) {
-                v->tree_no_matches[t] = 1;
-                continue;
-            }
         }
 
         if (cfg->req.list_mode && root->entry.type == FTYPE_DIR) {
@@ -381,8 +377,11 @@ void view_free(View *view) {
     if (!view) return;
     free(view->rows);
     free(view->tree_row_start);
-    free(view->tree_no_matches);
     free(view);
+}
+
+int view_tree_is_empty(const View *view, int tree) {
+    return view->tree_row_start[tree] == view->tree_row_start[tree + 1];
 }
 
 /* ============================================================================
@@ -406,7 +405,6 @@ TreeBuildOpts config_to_build_opts(const Config *cfg) {
         .compute = cfg->compute,
         .skip_fn = cfg->req.min_size > 0 ? skip_below_min_size : NULL,
         .skip_ctx = (void *)&cfg->req.min_size,
-        .ancestry_to_repo = cfg->req.git_only && !cfg->req.ancestry_explicit
     };
     return opts;
 }
