@@ -112,6 +112,7 @@ Use `-i` to enter interactive selection mode:
 | `o` | Open file (picker stays open) or toggle directory |
 | `f` | Toggle files-only navigation |
 | `m` | Toggle git-changed-only filtering (as if `-m` were passed) |
+| `g` | Toggle hiding gitignored entries (as if `-g` were passed) |
 | `/` | Filter entries by name (type to narrow, `Esc` to cancel) |
 | `r` | Re-read the tree from disk (open directories and cursor are kept) |
 | `Enter` | Print selected path and exit |
@@ -122,7 +123,7 @@ Press `/` to filter the listing by name: type to narrow the entries live (substr
 
 Text files open in `$EDITOR` (default: `vim`). Binary files (images, PDFs, videos, etc.) open with the system handler (`open` on macOS, `xdg-open` on Linux). Directories can be dynamically expanded beyond the initial depth limit; an expanded directory shows the entries the same filters would have left in a static listing of it, so drilling in under `-m` shows changed files, not everything.
 
-Press `m` to switch between the full listing and the git-changed one without leaving the picker. Each press rebuilds the rows from the same tree, leaving exactly what `l -i` or `l -im` would have shown; the cursor stays on the entry it was on, or on its nearest visible ancestor. A listing that the filter empties completely closes the picker, selecting nothing.
+Press `m` to switch between the full listing and the git-changed one, and `g` to hide or show gitignored entries, without leaving the picker. Each press rebuilds the rows from the same tree, leaving exactly what `l -i`, `l -im`, or `l -ig` would have shown; the cursor stays on the entry it was on, or on its nearest visible ancestor. A listing that a filter empties completely closes the picker, selecting nothing.
 
 The listing is a snapshot from when the picker opened: expanding a directory reads it on first open, and nothing updates automatically while the picker is idle. Press `r` to re-read everything from disk. The display survives the re-read: the directories you had open stay open (reading them again if the fresh listing stopped short of them) and the cursor stays on the same entry, both matched by path. Only state under a directory you had closed is forgotten, since none of it is on screen.
 

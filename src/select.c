@@ -6,9 +6,9 @@
  * from that point (lazy materialization), closing one just collapses the
  * view, and 'r' re-reads everything from disk while the display stays put —
  * the same directories open, the cursor on the same entry, both restored by
- * path. 'm' flips -m and rebuilds the rows from the same tree. There is no
- * automatic refresh: the input poll blocks, so an idle picker does no work at
- * all.
+ * path. 'm' and 'g' flip -m and -g and rebuild the rows from the same tree.
+ * There is no automatic refresh: the input poll blocks, so an idle picker does
+ * no work at all.
  */
 
 #include "select.h"
@@ -91,6 +91,7 @@ typedef enum {
     KEY_YANK,
     KEY_RELOAD,       /* 'r' — re-read the whole tree from disk */
     KEY_GIT_ONLY,     /* 'm' — toggle git-changed-only filtering */
+    KEY_HIDE_IGNORED, /* 'g' — toggle hiding gitignored entries */
     KEY_FILTER_FILES,
     KEY_FILTER,       /* '/' — enter interactive filter mode */
     KEY_CHAR,         /* a printable character typed in filter mode */
@@ -166,6 +167,7 @@ static KeyPress term_read_key(int filter_mode, char *out_char) {
     if (c == 'y' || c == 'Y') return KEY_YANK;
     if (c == 'r' || c == 'R') return KEY_RELOAD;
     if (c == 'm' || c == 'M') return KEY_GIT_ONLY;
+    if (c == 'g' || c == 'G') return KEY_HIDE_IGNORED;
     if (c == 'f' || c == 'F') return KEY_FILTER_FILES;
     if (c == '/') return KEY_FILTER;
 
@@ -413,6 +415,23 @@ static void expansion_free(ExpansionState *exp) {
     free(exp->open);
 }
 
+/* Redraw the rows after a filter toggle ('m', 'g'). Only visibility changed,
+ * so the tree stands as it is and the cursor returns to the entry it was on,
+ * or to that entry's nearest surviving ancestor. */
+static void picker_refilter(SelectState *state, TreeNode **trees,
+                            int tree_count, PrintContext *ctx, int files_only) {
+    TreeNode *current = row_count(state) > 0
+        ? row_node(state, state->cursor) : NULL;
+    char *saved = current ? xstrdup(node_key(current)) : NULL;
+
+    picker_rebuild(state, trees, tree_count, ctx);
+    state->cursor = 0;
+    state->scroll_offset = 0;
+    cursor_to_path(state, saved);
+    free(saved);
+    snap_cursor(state, files_only);
+}
+
 /* Re-read everything from disk — the same data pass a fresh run makes — while
  * keeping the state the run itself would not have: which directories are open,
  * and where the cursor sits (both restored by path, so they survive entries
@@ -486,10 +505,10 @@ static void render_line(SelectState *state, int index, int is_selected,
     print_entry(&row->node->entry, row->depth, row->expanded, &line_ctx);
 }
 
-/* The hint line under the listing. The two toggles name what the key would
- * switch to, so each reads as the action it performs. */
+/* The hint line under the listing. Each toggle names the listing the key
+ * would switch to, so it reads as the action it performs. */
 static void format_status(const SelectState *state, int count, int files_only,
-                          int git_only, char *buf, size_t len) {
+                          const Config *cfg, char *buf, size_t len) {
     if (state->filter_mode) {
         snprintf(buf, len,
                  "%s/%s%s   %s%d match%s   [Enter] select  [Esc] cancel%s",
@@ -499,12 +518,13 @@ static void format_status(const SelectState *state, int count, int files_only,
         return;
     }
     snprintf(buf, len,
-             "%s[j/k] %s  [f] %s  [m] %s  [/] filter  [h/l] fold  [o] open  "
-             "[y] yank  [r] reload  [Enter] select  [q] quit%s",
+             "%s[j/k] %s  [f] %s  [m] %s  [g] %s  [/] filter  [h/l] fold  "
+             "[o] open  [y] yank  [r] reload  [Enter] select  [q] quit%s",
              COLOR_GREY,
              files_only ? "files" : "move",
              files_only ? "all" : "files",
-             git_only ? "all" : "git",
+             cfg->req.git_only ? "all" : "git",
+             cfg->req.hide_gitignored ? "ignored" : "unignored",
              COLOR_RESET);
 }
 
@@ -541,8 +561,7 @@ static void render_picker(SelectState *state, PrintContext *ctx, int files_only)
      * overflow would repeatedly overwrite the last column instead of
      * truncating cleanly. */
     char status[512];
-    format_status(state, count, files_only, ctx->cfg->req.git_only,
-                  status, sizeof(status));
+    format_status(state, count, files_only, ctx->cfg, status, sizeof(status));
     printf("\r\033[K");
     if (ctx->term_width > 0 && visible_strlen(status) > ctx->term_width) {
         char *truncated = truncate_visible(status, ctx->term_width);
@@ -799,28 +818,30 @@ char *select_run(TreeNode ***trees_ref, int tree_count, char *const *dirs,
                 render_picker(&state, &render_ctx, files_only);
                 break;
 
-            case KEY_GIT_ONLY: {
-                /* Toggle -m live. The flag only filters, so the forest stands:
-                 * the flags the filter reads are refreshed and the rows are
-                 * rebuilt in place, leaving exactly what the same command with,
-                 * or without, -m would have shown. The cursor returns to the
-                 * entry it was on, or to its nearest surviving ancestor. */
-                char *saved = current ? xstrdup(node_key(current)) : NULL;
+            case KEY_GIT_ONLY:
+                /* Toggle -m live, leaving exactly what the same command with,
+                 * or without, -m would have shown. The filter reads the git
+                 * status flags, which the build pass only computes when -m was
+                 * given, so they are filled in here on the way on. */
                 cfg->req.git_only = !cfg->req.git_only;
                 if (cfg->req.git_only) {
                     for (int t = 0; t < tree_count; t++) {
                         compute_git_status_flags((*trees_ref)[t], render_ctx.git);
                     }
                 }
-                picker_rebuild(&state, *trees_ref, tree_count, &render_ctx);
-                state.cursor = 0;
-                state.scroll_offset = 0;
-                cursor_to_path(&state, saved);
-                free(saved);
-                snap_cursor(&state, files_only);
+                picker_refilter(&state, *trees_ref, tree_count, &render_ctx,
+                                files_only);
                 render_picker(&state, &render_ctx, files_only);
                 break;
-            }
+
+            case KEY_HIDE_IGNORED:
+                /* Toggle -g live. Every entry carries its own ignored flag from
+                 * the build, so there is nothing to recompute. */
+                cfg->req.hide_gitignored = !cfg->req.hide_gitignored;
+                picker_refilter(&state, *trees_ref, tree_count, &render_ctx,
+                                files_only);
+                render_picker(&state, &render_ctx, files_only);
+                break;
 
             case KEY_FILTER_FILES:
                 if (!current) break;
