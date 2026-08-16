@@ -54,13 +54,27 @@ fi
 # Session-wide memo of git check-ignore results, keyed by absolute path.
 typeset -gA _zhl_ignored
 
-# Statically expand a word to a filesystem path, or fail if that would require
-# running code. A single left-to-right scan models zsh quoting: backslash
-# escapes, single- and double-quoted segments, leading ~, and plain $var/${var}
-# expansions of set parameters (values are inserted literally, as zsh does not
-# re-expand them). Anything that needs evaluation — command substitution,
-# unquoted globs, unset or complex parameters, unclosed quotes — fails rather
-# than guessing. REPLY = expanded word on success.
+# Resolve a parameter name to its value in REPLY. Assignments made earlier in
+# the same buffer (the locvals/locunk locals of _zhl_spans, read via dynamic
+# scope) shadow the live shell, and a name whose in-buffer value cannot be
+# expanded statically fails instead of falling back to the live value.
+_zhl_param() {
+  local name="$1"
+  if (( ${+locunk[$name]} )); then return 1
+  elif (( ${+locvals[$name]} )); then REPLY="${locvals[$name]}"
+  elif (( ${+parameters[$name]} )); then REPLY="${(P)name}"
+  else return 1
+  fi
+  return 0
+}
+
+# Statically expand a word, or fail if that would require running code. A
+# single left-to-right scan models zsh quoting: backslash escapes, single- and
+# double-quoted segments, leading ~, and plain $var/${var} expansions of known
+# parameters (values are inserted literally, as zsh does not re-expand them).
+# Anything that needs evaluation — command substitution, unquoted globs,
+# unknown or complex parameters, unclosed quotes — fails rather than guessing.
+# REPLY = expanded word on success.
 _zhl_expand() {
   emulate -L zsh
   setopt localoptions extendedglob
@@ -117,14 +131,14 @@ _zhl_expand() {
           rest="${rest[2,-1]}"
           name="${(M)rest##[A-Za-z_][A-Za-z0-9_]#}"
           [[ -n "$name" && "${rest[${#name}+1]}" == '}' ]] || return 1
-          (( ${+parameters[$name]} )) || return 1
-          out+="${(P)name}"
+          _zhl_param "$name" || return 1
+          out+="$REPLY"
           (( j += ${#name} + 3 ))
         else
           name="${(M)rest##[A-Za-z_][A-Za-z0-9_]#}"
           if [[ -n "$name" ]]; then
-            (( ${+parameters[$name]} )) || return 1
-            out+="${(P)name}"
+            _zhl_param "$name" || return 1
+            out+="$REPLY"
             (( j += ${#name} + 1 ))
           elif (( j == n )); then
             out+='$'                 # trailing $ is literal
@@ -185,11 +199,27 @@ _zhl_mark_ignored() {
   return 0
 }
 
+# Record a VAR=value word in the parse-local parameter tables (the locvals and
+# locunk locals of _zhl_spans, read via dynamic scope) so later words on the
+# same line see the value the line establishes. Values that need evaluation,
+# and array literals, mark the name unknowable.
+_zhl_record_assignment() {
+  local name="${1%%=*}" value="${1#*=}"
+  unset "locvals[$name]" "locunk[$name]"
+  if [[ "$value" != '('* ]] && _zhl_expand "$value"; then
+    locvals[$name]="$REPLY"
+  else
+    locunk[$name]=1
+  fi
+}
+
 # Classify a word in command position via the zsh/parameter tables (no forks).
+# $2 = 1 marks a word produced by parameter expansion, which zsh does not
+# rescan for aliases or reserved words.
 _zhl_command_kind() {
   local w="$1"
-  if (( ${+aliases[$w]} )); then REPLY=alias
-  elif [[ -n "${reswords[(r)$w]}" ]]; then REPLY=reserved
+  if (( ! $2 && ${+aliases[$w]} )); then REPLY=alias
+  elif (( ! $2 )) && [[ -n "${reswords[(r)$w]}" ]]; then REPLY=reserved
   elif (( ${+builtins[$w]} )); then REPLY=builtin
   elif (( ${+functions[$w]} )); then REPLY=function
   elif (( ${+commands[$w]} )); then REPLY=command
@@ -225,9 +255,11 @@ _zhl_spans() {
   # vstack_*: virtual cwds saved at '(' — a subshell's cds end at its ')'.
   # pend_*: path spans awaiting the gitignore pass (_zhl_mark_ignored), as
   # parallel arrays of reply index and resolved absolute path.
-  local state=command tok key p
-  local -i pending_cd=0 pos=1 start tlen is_string cmd_span=0
+  # locvals/locunk: parameters the buffer itself assigns, read by _zhl_param.
+  local state=command tok key p cword
+  local -i pending_cd=0 pos=1 start tlen is_string cmd_span=0 expanded
   local -a vstack_path vstack_known pend_idx pend_path
+  local -A locvals locunk
   local REPLY
 
   for tok in "${tokens[@]}"; do
@@ -328,6 +360,7 @@ _zhl_spans() {
       # VAR=value prefixes leave the next word in command position.
       if [[ "$tok" == [A-Za-z_][A-Za-z0-9_]#=* ]]; then
         reply+=("$start $(( start + tlen )) assignment")
+        _zhl_record_assignment "$tok"
         continue
       fi
       case "$tok" in
@@ -335,25 +368,38 @@ _zhl_spans() {
           reply+=("$start $(( start + tlen )) precommand")
           continue ;;
       esac
-      if [[ "$tok" == */* ]]; then
+      # The command is whatever the word expands to: `$PROG` names the command
+      # held in PROG, and `~/bin/x` names a path under $HOME.
+      if ! _zhl_expand "$tok"; then
+        reply+=("$start $(( start + tlen )) command-unknown")
+        cmd_span=${#reply}
+        state=arg
+        continue
+      fi
+      cword="$REPLY"
+      # A word that expands to nothing leaves the next word in command position.
+      if [[ -z "$cword" ]]; then
+        cmd_span=0
+        continue
+      fi
+      if [[ "$cword" == */* ]]; then
         # Path to an executable: resolve against the virtual cwd.
-        if [[ "$tok" != /* && "$tok" != '~'* ]] && (( ! _zhl_vcwd_known )); then
+        if [[ "$cword" != /* ]] && (( ! _zhl_vcwd_known )); then
           key=command-unknown
-        elif _zhl_expand "$tok"; then
-          p="$REPLY"
+        else
+          p="$cword"
           [[ "$p" != /* ]] && p="$_zhl_vcwd_path/$p"
           if [[ -x "${p:A}" && ! -d "${p:A}" ]]; then key=command
           else key=command-missing
           fi
-        else
-          key=command-unknown
         fi
         reply+=("$start $(( start + tlen )) $key")
         cmd_span=${#reply}
         state=arg
         continue
       fi
-      _zhl_command_kind "$tok"
+      [[ "$cword" == "$tok" ]] && expanded=0 || expanded=1
+      _zhl_command_kind "$cword" $expanded
       key="$REPLY"
       [[ "$key" == none ]] && key=command-missing
       reply+=("$start $(( start + tlen )) $key")
@@ -366,7 +412,7 @@ _zhl_spans() {
         continue
       fi
       cmd_span=${#reply}
-      [[ "$tok" == (cd|pushd) ]] && pending_cd=1
+      [[ "$cword" == (cd|pushd) ]] && pending_cd=1
       state=arg
       continue
     fi
