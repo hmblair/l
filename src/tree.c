@@ -666,7 +666,7 @@ TreeNode *build_tree(const char *path, const TreeBuildOpts *opts,
     }
 
     char git_root[PATH_MAX];
-    int in_git_repo = git_find_root(abs_path, git_root, sizeof(git_root));
+    int in_git_repo = git_find_root(git, abs_path, git_root, sizeof(git_root));
     if (in_git_repo && opts->compute.git_status) {
         git_populate_repo(git, git_root, opts->compute.git_diff, 0, opts->git_base);
     }
@@ -741,7 +741,7 @@ void tree_expand_node(TreeNode *node, const TreeBuildOpts *opts,
      * and populates any nested repo first seen at this level. */
     char git_root[PATH_MAX];
     int in_git_repo = opts->compute.git_status &&
-                      git_find_root(node->entry.path, git_root, sizeof(git_root));
+                      git_find_root(git, node->entry.path, git_root, sizeof(git_root));
 
     int *is_git_repo_root = materialize_children(node, opts, git, in_git_repo,
                                                  node->entry.is_ignored);
@@ -760,6 +760,10 @@ void tree_expand_node(TreeNode *node, const TreeBuildOpts *opts,
             file_entry_compute(&node->children[i].entry, c, is_virtual);
         }
     }
+
+    /* Roll up any repo materialize_children discovered at this level, so the
+     * rows this expansion adds carry their directory summaries. */
+    git_cache_sync_aggregates(git);
 
     order_children(node, opts);
 }

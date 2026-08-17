@@ -544,7 +544,7 @@ void summary_prepare(TreeNode *node, PrintContext *ctx) {
     char abs_path[PATH_MAX];
     get_realpath(fe->path, abs_path, ctx->cfg);
     char git_root[PATH_MAX];
-    int in_git_repo = git_find_root(abs_path, git_root, sizeof(git_root));
+    int in_git_repo = git_find_root(ctx->git, abs_path, git_root, sizeof(git_root));
 
     if (is_dir && in_git_repo && !fe->has_git_dir_status) {
         fileinfo_compute_git_dir_status(fe, ctx->git);

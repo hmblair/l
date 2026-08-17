@@ -45,9 +45,157 @@ void git_cache_init(GitCache *cache) {
     memset(cache->buckets, 0, sizeof(cache->buckets));
     memset(cache->agg_buckets, 0, sizeof(cache->agg_buckets));
     cache->repo_root_count = 0;
+    cache->populated = NULL;
+    cache->root_lookups = NULL;
+    cache->aggregates_stale = 0;
 #ifdef _OPENMP
     omp_init_lock(&cache->lock);
 #endif
+}
+
+/* Compare two optional strings, treating NULL as a value in its own right. */
+static int str_eq_opt(const char *a, const char *b) {
+    if (!a || !b) return a == b;
+    return strcmp(a, b) == 0;
+}
+
+static int populate_record_matches(const struct GitPopulateRecord *rec,
+                                   const char *repo_path, int include_diff_stats,
+                                   int nested, const char *base) {
+    return rec->include_diff_stats == include_diff_stats &&
+           rec->nested == nested &&
+           strcmp(rec->repo_path, repo_path) == 0 &&
+           str_eq_opt(rec->base, base);
+}
+
+static int git_populate_memo_has(GitCache *cache, const char *repo_path,
+                                 int include_diff_stats, int nested,
+                                 const char *base) {
+#ifdef _OPENMP
+    omp_set_lock(&cache->lock);
+#endif
+    int found = 0;
+    for (struct GitPopulateRecord *rec = cache->populated; rec; rec = rec->next) {
+        if (populate_record_matches(rec, repo_path, include_diff_stats, nested, base)) {
+            found = 1;
+            break;
+        }
+    }
+#ifdef _OPENMP
+    omp_unset_lock(&cache->lock);
+#endif
+    return found;
+}
+
+/* Record a finished populate and mark the roll-ups it invalidated. Recording
+ * after the work (rather than reserving before it) keeps a concurrent populate
+ * of the same repo doing the work twice instead of returning early on a
+ * half-written cache. */
+static void git_populate_memo_add(GitCache *cache, const char *repo_path,
+                                  int include_diff_stats, int nested,
+                                  const char *base) {
+    struct GitPopulateRecord *rec = xmalloc(sizeof(*rec));
+    rec->repo_path = xstrdup(repo_path);
+    rec->base = base ? xstrdup(base) : NULL;
+    rec->include_diff_stats = include_diff_stats;
+    rec->nested = nested;
+
+#ifdef _OPENMP
+    omp_set_lock(&cache->lock);
+#endif
+    rec->next = cache->populated;
+    cache->populated = rec;
+    cache->aggregates_stale = 1;
+#ifdef _OPENMP
+    omp_unset_lock(&cache->lock);
+#endif
+}
+
+/* The directory a repository search starts from: the path itself when it names
+ * a directory, otherwise the parent holding it. Discovery depends on nothing
+ * else about the path, so two paths sharing this key share an answer. Returns 0
+ * when the path cannot be stat'd, leaving the caller to search unmemoized. */
+static int git_root_key(const char *path, char *key, size_t key_len) {
+    struct stat st;
+    if (stat(path, &st) != 0) return 0;
+
+    if (S_ISDIR(st.st_mode)) {
+        if (strlen(path) >= key_len) return 0;
+        strcpy(key, path);
+        return 1;
+    }
+
+    const char *slash = strrchr(path, '/');
+    if (!slash) {  /* a bare name resolves against the working directory */
+        if (key_len < 2) return 0;
+        strcpy(key, ".");
+        return 1;
+    }
+    size_t len = (slash == path) ? 1 : (size_t)(slash - path);  /* keep root "/" */
+    if (len >= key_len) return 0;
+    memcpy(key, path, len);
+    key[len] = '\0';
+    return 1;
+}
+
+/* Look up a memoized search. Returns 1 on a hit, writing the repo root into
+ * root and whether one was found into found. */
+static int git_root_memo_get(GitCache *cache, const char *dir, char *root,
+                             size_t root_len, int *found) {
+#ifdef _OPENMP
+    omp_set_lock(&cache->lock);
+#endif
+    int hit = 0;
+    for (struct GitRootRecord *rec = cache->root_lookups; rec; rec = rec->next) {
+        if (strcmp(rec->dir, dir) != 0) continue;
+        *found = rec->root != NULL;
+        if (rec->root) snprintf(root, root_len, "%s", rec->root);
+        hit = 1;
+        break;
+    }
+#ifdef _OPENMP
+    omp_unset_lock(&cache->lock);
+#endif
+    return hit;
+}
+
+static void git_root_memo_add(GitCache *cache, const char *dir, const char *root) {
+    struct GitRootRecord *rec = xmalloc(sizeof(*rec));
+    rec->dir = xstrdup(dir);
+    rec->root = root ? xstrdup(root) : NULL;
+
+#ifdef _OPENMP
+    omp_set_lock(&cache->lock);
+#endif
+    rec->next = cache->root_lookups;
+    cache->root_lookups = rec;
+#ifdef _OPENMP
+    omp_unset_lock(&cache->lock);
+#endif
+}
+
+static void git_root_memo_free(GitCache *cache) {
+    struct GitRootRecord *rec = cache->root_lookups;
+    while (rec) {
+        struct GitRootRecord *next = rec->next;
+        free(rec->dir);
+        free(rec->root);
+        free(rec);
+        rec = next;
+    }
+    cache->root_lookups = NULL;
+}
+
+static void git_populate_memo_free(GitCache *cache) {
+    struct GitPopulateRecord *rec = cache->populated;
+    while (rec) {
+        struct GitPopulateRecord *next = rec->next;
+        free(rec->repo_path);
+        free(rec->base);
+        free(rec);
+        rec = next;
+    }
+    cache->populated = NULL;
 }
 
 static void git_cache_register_root(GitCache *cache, const char *repo_path) {
@@ -129,6 +277,9 @@ void git_cache_free(GitCache *cache) {
         cache->buckets[i] = NULL;
     }
     git_cache_free_aggregates(cache);
+    git_populate_memo_free(cache);
+    git_root_memo_free(cache);
+    cache->aggregates_stale = 0;
     for (int i = 0; i < cache->repo_root_count; i++) {
         free(cache->repo_roots[i]);
     }
@@ -252,12 +403,33 @@ void git_cache_add_diff(GitCache *cache, const char *path, int added, int remove
 #endif
 }
 
-/* Zero the diff stats of every cached path under repo_path. A single populate
- * accumulates the unstaged and staged numstat passes (git_cache_add_diff), so
- * it must start from zero to stay idempotent: git_populate_repo is invoked more
- * than once against the same repo (lazy expansion in interactive mode, and the
- * periodic git refresh), and without this reset each re-populate would double
- * the line counts. Status needs no such reset — git_cache_add overwrites it. */
+/* True if path belongs to a known repo rooted strictly below repo_path, i.e.
+ * a submodule or nested repo whose entries repo_path's own populate never
+ * reports. Caller holds the lock. */
+static int path_under_nested_root(GitCache *cache, const char *path,
+                                  const char *repo_path) {
+    size_t outer_len = strlen(repo_path);
+    for (int i = 0; i < cache->repo_root_count; i++) {
+        const char *root = cache->repo_roots[i];
+        size_t root_len = strlen(root);
+        if (root_len <= outer_len) continue;
+        if (strncmp(path, root, root_len) == 0 &&
+            (path[root_len] == '/' || path[root_len] == '\0')) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Zero the diff stats of every cached path under repo_path, except those owned
+ * by a nested repo. A single populate accumulates the unstaged and staged
+ * numstat passes (git_cache_add_diff), so it must start from zero to stay
+ * idempotent: git_populate_repo is invoked more than once against the same repo
+ * (lazy expansion in interactive mode, and the periodic git refresh), and
+ * without this reset each re-populate would double the line counts. A nested
+ * repo is exempt because repo_path's numstat excludes submodule contents and so
+ * would leave the zeroed entries at zero. Status needs no such reset —
+ * git_cache_add keeps the first value written for a path. */
 static void git_reset_diff_stats(GitCache *cache, const char *repo_path) {
 #ifdef _OPENMP
     omp_set_lock(&cache->lock);
@@ -266,7 +438,8 @@ static void git_reset_diff_stats(GitCache *cache, const char *repo_path) {
     for (int i = 0; i < L_HASH_SIZE; i++) {
         for (GitStatusNode *node = cache->buckets[i]; node; node = node->next) {
             if (strncmp(node->path, repo_path, root_len) == 0 &&
-                (node->path[root_len] == '/' || node->path[root_len] == '\0')) {
+                (node->path[root_len] == '/' || node->path[root_len] == '\0') &&
+                !path_under_nested_root(cache, node->path, repo_path)) {
                 node->lines_added = 0;
                 node->lines_removed = 0;
             }
@@ -310,9 +483,8 @@ static GitSummary *git_agg_get_or_create(GitCache *cache, const char *dir) {
  * change contributes to all ancestors that lie inside a known repo root
  * (containment is downward-closed, so the walk stops at the first ancestor
  * outside every root — the same scope the old full-cache prefix scan had via
- * its in-repo gate). Called at the end of every git_populate_repo; a global
- * wipe-and-rebuild keeps re-populates and nested repos consistent without
- * ordering concerns. */
+ * its in-repo gate). A global wipe-and-rebuild keeps re-populates and nested
+ * repos consistent without ordering concerns. */
 static void git_cache_rebuild_aggregates(GitCache *cache) {
 #ifdef _OPENMP
     omp_set_lock(&cache->lock);
@@ -345,6 +517,18 @@ static void git_cache_rebuild_aggregates(GitCache *cache) {
 #ifdef _OPENMP
     omp_unset_lock(&cache->lock);
 #endif
+}
+
+void git_cache_sync_aggregates(GitCache *cache) {
+#ifdef _OPENMP
+    omp_set_lock(&cache->lock);
+#endif
+    int stale = cache->aggregates_stale;
+    cache->aggregates_stale = 0;
+#ifdef _OPENMP
+    omp_unset_lock(&cache->lock);
+#endif
+    if (stale) git_cache_rebuild_aggregates(cache);
 }
 
 GitSummary git_get_dir_summary(GitCache *cache, const char *dir_path) {
@@ -958,7 +1142,7 @@ static void git_populate_base_diff_stats(GitCache *cache, const char *repo_path,
 
 /* libgit2 implementation - faster, no fork/exec overhead */
 
-int git_find_root(const char *path, char *root, size_t root_len) {
+static int git_find_root_impl(const char *path, char *root, size_t root_len) {
     git_buf buf = {0};
     if (git_repository_discover(&buf, path, 0, NULL) != 0) {
         return 0;
@@ -1008,7 +1192,7 @@ static void git_populate_diff_stats_shell(GitCache *cache, const char *repo_path
     pclose(fp);
 }
 
-void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_stats, int nested, const char *base) {
+static void git_populate_repo_impl(GitCache *cache, const char *repo_path, int include_diff_stats, int nested, const char *base) {
     if (nested || (base && !git_base_resolves(repo_path, base))) base = NULL;
 
     /* A nested populate reports on the superproject's behalf, so honor its
@@ -1110,8 +1294,6 @@ void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_
         else git_populate_diff_stats_shell(cache, repo_path);
         git_populate_untracked_diff_stats(cache, repo_path);
     }
-
-    git_cache_rebuild_aggregates(cache);
 }
 
 char *git_get_latest_tag(const char *repo_path) {
@@ -1177,7 +1359,7 @@ static void git_parse_status_output(FILE *fp, GitCache *cache, const char *repo_
     }
 }
 
-int git_find_root(const char *path, char *root, size_t root_len) {
+static int git_find_root_impl(const char *path, char *root, size_t root_len) {
     char *escaped = shell_escape(path);
     if (!escaped) return 0;  /* Path too long or malformed */
 
@@ -1198,7 +1380,7 @@ int git_find_root(const char *path, char *root, size_t root_len) {
     return found;
 }
 
-void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_stats, int nested, const char *base) {
+static void git_populate_repo_impl(GitCache *cache, const char *repo_path, int include_diff_stats, int nested, const char *base) {
     if (nested || (base && !git_base_resolves(repo_path, base))) base = NULL;
 
     /* A nested populate reports on the superproject's behalf, so honor its
@@ -1257,7 +1439,26 @@ void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_
         if (base) git_populate_base_diff_stats(cache, repo_path, base);
         git_populate_untracked_diff_stats(cache, repo_path);
     }
-    git_cache_rebuild_aggregates(cache);
 }
 
 #endif /* HAVE_LIBGIT2 */
+
+void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_stats, int nested, const char *base) {
+    if (git_populate_memo_has(cache, repo_path, include_diff_stats, nested, base)) return;
+    git_populate_repo_impl(cache, repo_path, include_diff_stats, nested, base);
+    git_populate_memo_add(cache, repo_path, include_diff_stats, nested, base);
+}
+
+int git_find_root(GitCache *cache, const char *path, char *root, size_t root_len) {
+    char dir[PATH_MAX];
+    if (!cache || !git_root_key(path, dir, sizeof(dir))) {
+        return git_find_root_impl(path, root, root_len);
+    }
+
+    int found;
+    if (git_root_memo_get(cache, dir, root, root_len, &found)) return found;
+
+    found = git_find_root_impl(dir, root, root_len);
+    git_root_memo_add(cache, dir, found ? root : NULL);
+    return found;
+}

@@ -539,7 +539,9 @@ int main(int argc, char **argv) {
     if (cfg.req.git_base) {
         char repo_root[PATH_MAX];
         const char *target = dir_count > 0 ? dirs[0] : ".";
-        if (git_find_root(target, repo_root, sizeof(repo_root)) &&
+        /* No cache to memoize into yet: this validation runs before the
+         * invocation's GitCache exists. */
+        if (git_find_root(NULL, target, repo_root, sizeof(repo_root)) &&
             !git_base_resolves(repo_root, cfg.req.git_base)) {
             fprintf(stderr, "%sError:%s '%s' is not a branch, tag, or commit\n",
                     CLR(&cfg, COLOR_RED), RST(&cfg), cfg.req.git_base);

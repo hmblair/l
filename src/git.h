@@ -50,10 +50,37 @@ typedef struct {
     struct GitDirAggregate *agg_buckets[L_HASH_SIZE];
     char *repo_roots[L_MAX_GIT_ROOTS];
     int repo_root_count;
+    struct GitPopulateRecord *populated;  /* memo of completed populates */
+    struct GitRootRecord *root_lookups;   /* memo of git_find_root results */
+    int aggregates_stale;                 /* a populate has run since the last rebuild */
 #ifdef _OPENMP
     omp_lock_t lock;
 #endif
 } GitCache;
+
+/* One completed git_populate_repo call, recording the repo and the terms it
+ * ran under. A call matching a record is skipped: it would rescan the whole
+ * repo to write back the statuses already in the cache. This is what keeps a
+ * listing of many arguments cheap — git_populate_repo runs once per argument,
+ * and the arguments usually share a single repo. */
+struct GitPopulateRecord {
+    char *repo_path;
+    char *base;                /* NULL when reporting against HEAD */
+    int include_diff_stats;
+    int nested;
+    struct GitPopulateRecord *next;
+};
+
+/* One resolved repository lookup, keyed by the directory the search starts
+ * from. Discovering a repo opens it and parses its config from disk, which
+ * costs far more than the answer is worth repeating: every listing argument
+ * triggers a lookup, and arguments in one directory all resolve to the same
+ * repo. root is NULL when the directory lies outside any repo. */
+struct GitRootRecord {
+    char *dir;
+    char *root;
+    struct GitRootRecord *next;
+};
 
 /* Aggregated git status for all changed files under a directory. Every field is
  * a roll-up over the directory's descendants; the view-summary pipeline (see
@@ -69,10 +96,11 @@ typedef struct {
     int diff_removed;   /* Lines removed across descendants */
 } GitSummary;
 
-/* Per-directory roll-up of every change strictly beneath it, rebuilt from the
- * status nodes at the end of each git_populate_repo (git aggregates walk each
- * changed entry's ancestors up to the outermost enclosing repo root). Makes
- * git_get_dir_summary an O(1) lookup instead of a full-cache prefix scan. */
+/* Per-directory roll-up of every change strictly beneath it, rebuilt by
+ * git_cache_sync_aggregates once a build pass has finished populating (git
+ * aggregates walk each changed entry's ancestors up to the outermost enclosing
+ * repo root). Makes git_get_dir_summary an O(1) lookup instead of a full-cache
+ * prefix scan. */
 struct GitDirAggregate {
     char *path;
     GitSummary sum;
@@ -109,8 +137,9 @@ GitStatusNode *git_cache_get_node(GitCache *cache, const char *path);
  * ============================================================================ */
 
 /* Find enclosing git repo root for a path (if any)
- * Returns 1 if found, 0 otherwise */
-int git_find_root(const char *path, char *root, size_t root_len);
+ * Returns 1 if found, 0 otherwise. Results are memoized in cache, which may be
+ * NULL to look up without one. */
+int git_find_root(GitCache *cache, const char *path, char *root, size_t root_len);
 
 /* Populate cache with all file statuses from a repository.
  * If include_diff_stats is true, also populate lines added/removed. */
@@ -127,8 +156,14 @@ void git_populate_repo(GitCache *cache, const char *repo_path, int include_diff_
 /* True if base names a commit in repo_path (branch, tag, or hash). */
 int git_base_resolves(const char *repo_path, const char *base);
 
+/* Rebuild the per-directory roll-ups if a populate has invalidated them. A
+ * rebuild costs a walk of the whole cache, so it runs once per build pass
+ * rather than once per repo; call it after building and before anything reads
+ * git_get_dir_summary. */
+void git_cache_sync_aggregates(GitCache *cache);
+
 /* Get aggregated git status for all files under a directory (O(1) lookup of
- * the aggregate built at populate time; zero summary if none) */
+ * the aggregate built by git_cache_sync_aggregates; zero summary if none) */
 GitSummary git_get_dir_summary(GitCache *cache, const char *dir_path);
 
 /* Apply normalized status flags to a directory summary (+1 to add, -1 to

@@ -443,6 +443,11 @@ TreeNode **forest_build(char *const *dirs, int dir_count, const Config *cfg,
         }
     }
 
+    /* Every repo the build touched is now populated, so roll the changes up
+     * once. Everything below reads directory summaries (compute_git_status_flags
+     * here, then the view and the renderer), so this has to land first. */
+    git_cache_sync_aggregates(git);
+
     /* Pre-compute visibility flags for filtering */
     if (cfg->req.git_only) {
         for (int i = 0; i < dir_count; i++) {
